@@ -1,0 +1,21 @@
+{
+  "name": "AUDIT-MEMORY",
+  "stage": "standing",
+  "structural_checks": [
+    {
+      "check": "history_available",
+      "command": "bash gatekeeper-cli.sh audit --memory 2>/dev/null | grep -q '\"history_count\"'",
+      "fail_if": "exit_code != 0"
+    },
+    {
+      "check": "ecc_files_found",
+      "command": "ls references/ecc-*.md 2>/dev/null | head -1 | grep -q .",
+      "fail_if": "exit_code != 0"
+    },
+    {
+      "check": "calibration_trend_available",
+      "command": "bash gatekeeper-cli.sh audit --memory 2>/dev/null | grep -q '\"calibration_trend\"'",
+      "fail_if": "exit_code != 0"
+    }
+  ]
+}

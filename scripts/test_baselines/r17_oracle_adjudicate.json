@@ -1,0 +1,224 @@
+{
+ "schema": "r17-oracle/v1",
+ "purpose": "R17 落刀前录制的内联实现黄金样本（stdout 原始字节的 base64 + rc）",
+ "base_commit": "fd0452a",
+ "cli_full_sha256_8": "6026ba68",
+ "cli_full_sha256_8_口径": "\"\\n\".join(splitlines())，不含尾随换行（与 §4.4.1a 同口径）；含尾随换行则为 e905cdcf",
+ "inline_fn_sha256_8": "622d2df2",
+ "coverage_table": "docs/plans/2026-09-21-review-runtime-subplan.md §4.4.1a",
+ "recorded_at_utc": "2026-09-22T09:29:45Z",
+ "note": "时间戳字段（entry.timestamp / O1 无 stdout 时间）为录制时刻快照；parity 臂比对时须按 §4.4.2-2 归一化（含 `--ts` 固定）后比语义 JSON，**不得**逐字节比新跑结果",
+ "cases": [
+  {
+   "id": "O1",
+   "desc": "主路径：全 PASS + sealed 0.30 vs human 0.90 ⟹ div=0.60 ⟹ HUMAN_OVERSCORE；含 checklist/change-items/constraint-level/impact",
+   "argv": [
+    "adjudicate",
+    "--verdicts",
+    "{\"F1\":\"PASS\",\"F2\":\"OK\"}",
+    "--score",
+    "0.9",
+    "--decision",
+    "approve",
+    "--stage",
+    "STAGE_1",
+    "--checklist",
+    "[{\"status\":\"PASS\"},{\"status\":\"FAIL\"}]",
+    "--change-items",
+    "3",
+    "--constraint-level",
+    "c",
+    "--impact",
+    "__IMPACT__"
+   ],
+   "seed": {
+    "r_phase": "R17",
+    "stage": "STAGE_1",
+    "current": {
+     "plan_id": "2026-09-21-review-runtime-subplan",
+     "last_updated": "2026-09-22T00:00:00Z"
+    },
+    "gate_data": {
+     "_sealed_agent_score": {
+      "sealed": true,
+      "score": 0.3,
+      "task_id": "t-1"
+     }
+    },
+    "monitor_scores": {
+     "STAGE_1": {
+      "score": 0.25
+     }
+    },
+    "history": []
+   },
+   "rc": 0,
+   "stdout_b64": "eyJvayI6dHJ1ZSwiZGVjaXNpb24iOiJhcHByb3ZlIiwic2NvcmUiOiIwLjkiLCJ2ZXJkaWN0cyI6eyJGMSI6IlBBU1MiLCJGMiI6Ik9LIn0sInJlY29yZGVkX3RvIjoiL3RtcC9yMTdvcmFjbGUtanVobHFjazMvTzEuaW1wYWN0Lm1kIiwiY3Jvc3NfdmFsaWRhdGlvbiI6eyJtb25pdG9yX3Njb3JlIjogMC4zLCAiZGl2ZXJnZW5jZSI6IDAuNiwgImZsYWciOiAiSFVNQU5fT1ZFUlNDT1JFIn19Cg==",
+   "stdout_sha256": "7603638f7922e5044036b63ef9b2a0b3632527e0594f1b1ce2e116b22abe567e",
+   "stdout_sha256_8": "7603638f",
+   "stderr_sha256_8": "e3b0c442",
+   "state_after_sha256_8": "0f9ff96a",
+   "state_after_size": 821
+  },
+  {
+   "id": "O2",
+   "desc": "R2a 让步门：F2=WARN 无 concessions ⟹ rc1 + JSON 拒绝（F-REV-20 禁静默）",
+   "argv": [
+    "adjudicate",
+    "--verdicts",
+    "{\"F1\":\"PASS\",\"F2\":\"WARN\"}",
+    "--score",
+    "0.5",
+    "--decision",
+    "hold",
+    "--stage",
+    "STAGE_1"
+   ],
+   "seed": {
+    "r_phase": "R17",
+    "stage": "STAGE_1",
+    "current": {
+     "plan_id": "2026-09-21-review-runtime-subplan",
+     "last_updated": "2026-09-22T00:00:00Z"
+    },
+    "gate_data": {
+     "_sealed_agent_score": {
+      "sealed": true,
+      "score": 0.3,
+      "task_id": "t-1"
+     }
+    },
+    "monitor_scores": {
+     "STAGE_1": {
+      "score": 0.25
+     }
+    },
+    "history": []
+   },
+   "rc": 1,
+   "stdout_b64": "eyJvayI6ZmFsc2UsImVycm9yIjoibm9uLVBBU1MgdmVyZGljdHMgcmVxdWlyZSAtLWNvbmNlc3Npb25zIGV4cGxhbmF0aW9uIiwibWlzc2luZyI6WyJGMiJdfQo=",
+   "stdout_sha256": "080fea5809333d42b9e51f2a7329f5982cf170715defe99a8934f411f47a3e91",
+   "stdout_sha256_8": "080fea58",
+   "stderr_sha256_8": "e3b0c442",
+   "state_after_sha256_8": "ca8170c4",
+   "state_after_size": 335
+  },
+  {
+   "id": "O3",
+   "desc": "缺 --verdicts ⟹ 内联 A5 面：rc1 + JSON 信封（对照文件版 rc2 无 JSON）",
+   "argv": [
+    "adjudicate",
+    "--score",
+    "0.5"
+   ],
+   "seed": {
+    "r_phase": "R17",
+    "stage": "STAGE_1",
+    "current": {
+     "plan_id": "2026-09-21-review-runtime-subplan",
+     "last_updated": "2026-09-22T00:00:00Z"
+    },
+    "gate_data": {
+     "_sealed_agent_score": {
+      "sealed": true,
+      "score": 0.3,
+      "task_id": "t-1"
+     }
+    },
+    "monitor_scores": {
+     "STAGE_1": {
+      "score": 0.25
+     }
+    },
+    "history": []
+   },
+   "rc": 1,
+   "stdout_b64": "eyJvayI6ZmFsc2UsImVycm9yIjoiLS12ZXJkaWN0cyBvciAtLXZlcmRpY3RzLWZpbGUgcmVxdWlyZWQifQo=",
+   "stdout_sha256": "6299fc51dc64cdda689bec43ca6f85d8f42772c09d776f4fd7f8b5a4886f924d",
+   "stdout_sha256_8": "6299fc51",
+   "stderr_sha256_8": "e3b0c442",
+   "state_after_sha256_8": "ca8170c4",
+   "state_after_size": 335
+  },
+  {
+   "id": "O4",
+   "desc": "未知 flag ⟹ 内联 A3 面：`*) break` 静默吞（不报错、继续执行 ⟹ rc0）",
+   "argv": [
+    "adjudicate",
+    "--verdicts",
+    "{\"F1\":\"PASS\"}",
+    "--score",
+    "0.5",
+    "--nope",
+    "x"
+   ],
+   "seed": {
+    "r_phase": "R17",
+    "stage": "STAGE_1",
+    "current": {
+     "plan_id": "2026-09-21-review-runtime-subplan",
+     "last_updated": "2026-09-22T00:00:00Z"
+    },
+    "gate_data": {
+     "_sealed_agent_score": {
+      "sealed": true,
+      "score": 0.3,
+      "task_id": "t-1"
+     }
+    },
+    "monitor_scores": {
+     "STAGE_1": {
+      "score": 0.25
+     }
+    },
+    "history": []
+   },
+   "rc": 0,
+   "stdout_b64": "eyJvayI6dHJ1ZSwiZGVjaXNpb24iOiJwZW5kaW5nIiwic2NvcmUiOiIwLjUiLCJ2ZXJkaWN0cyI6eyJGMSI6IlBBU1MifSwicmVjb3JkZWRfdG8iOiIiLCJjcm9zc192YWxpZGF0aW9uIjp7Im1vbml0b3Jfc2NvcmUiOiAwLjMsICJkaXZlcmdlbmNlIjogMC4yfX0K",
+   "stdout_sha256": "a3f9ba96a0678c22caf2e62e2eb80b08a616f5884e40a00679a2216eb994dad7",
+   "stdout_sha256_8": "a3f9ba96",
+   "stderr_sha256_8": "e3b0c442",
+   "state_after_sha256_8": "68ab741d",
+   "state_after_size": 790
+  },
+  {
+   "id": "O5",
+   "desc": "IDLE/DONE 门（A6）：stage=IDLE ⟹ rc1 + JSON",
+   "argv": [
+    "adjudicate",
+    "--verdicts",
+    "{\"F1\":\"PASS\"}",
+    "--score",
+    "0.5"
+   ],
+   "seed": {
+    "r_phase": "R17",
+    "stage": "IDLE",
+    "current": {
+     "plan_id": "2026-09-21-review-runtime-subplan",
+     "last_updated": "2026-09-22T00:00:00Z"
+    },
+    "gate_data": {
+     "_sealed_agent_score": {
+      "sealed": true,
+      "score": 0.3,
+      "task_id": "t-1"
+     }
+    },
+    "monitor_scores": {
+     "STAGE_1": {
+      "score": 0.25
+     }
+    },
+    "history": []
+   },
+   "rc": 1,
+   "stdout_b64": "eyJvayI6ZmFsc2UsImVycm9yIjoiQ2Fubm90IGFkanVkaWNhdGUgaW4gSURMRS9ET05FIHN0YXRlIn0K",
+   "stdout_sha256": "ecaffb122a48fb14b713b7d9ad60ae9851be64fdf73af7d0d212f6b7f73ce07e",
+   "stdout_sha256_8": "ecaffb12",
+   "stderr_sha256_8": "e3b0c442",
+   "state_after_sha256_8": "ea3d8797",
+   "state_after_size": 332
+  }
+ ]
+}

@@ -1,0 +1,13 @@
+{
+  "_comment": "doc-align 契约↔实现集合登记表（单一事实源）。消费方 = scripts/gk_doc_align.py::check_contract_enum_impl_binding。每条实例 = {id, impl, impl_regex, expect[]}：从 impl 源码抽取的**集合**须与 expect **双向相等**（实现多产者未登记 / 契约声明了不存在的产者，均判 FAIL）。治「契约表非全函数 / 实现产者未登记」类漏网（finding ECC-614F297C9792，源自 2026-10-02 计划 §2.3 rc 表 P0-2）。",
+  "version": 1,
+  "instances": [
+    {
+      "id": "rcvcheck-rc3-producers",
+      "desc": "gk_receive_check.py 的 rc=3（不可判）产者集合 —— 对应 2026-10-02 计划 §2.3「不可判」行；DRAFT-16 P0-2 落刀后共 7 产者（原表只覆盖 2 类）",
+      "impl": "scripts/gk_receive_check.py",
+      "impl_regex": "rc=3,\\s*reason=f?\"([A-Za-z_][A-Za-z0-9_]*)",
+      "expect": ["GK_RECEIVE_CHECK", "hook_live_from", "master_sha", "expected_worktrees", "wt_sha", "ancestry", "diff"]
+    }
+  ]
+}

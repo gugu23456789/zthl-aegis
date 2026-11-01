@@ -1,0 +1,63 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      plan:
+        description: "待质询计划路径（plan_lint = 质询前置 pw-sn 安全网；留空跳过）"
+        required: false
+        default: ""
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    name: smoke (syntax / plan-lint / fast tests)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: install test deps
+        run: python -m pip install --upgrade pip pytest pytest-xdist
+      - name: smoke gate
+        env:
+          CI_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: bash scripts/ci_smoke.sh
+
+  plan-gate:
+    # plan_lint 是**计划质询前置 pw-sn 安全网**（针对本轮要质询的那份计划），
+    # 不是仓库级文档 lint ⟹ 不进 push/PR 常规门，只按手填路径触发。
+    name: plan-lint (pw-sn pre-gate)
+    if: github.event_name == 'workflow_dispatch' && inputs.plan != ''
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: plan linter
+        run: python scripts/gk_plan_lint.py "${{ inputs.plan }}"
+
+  full:
+    # 全量回归依赖 WSL/9p 语义、审计密钥与既有失败基线（_accept_baseline.txt 绑定解释器），
+    # 因此只在自托管 runner 上手动触发；普通 PR 不跑。
+    name: full regression (self-hosted WSL)
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: [self-hosted, linux, wsl]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: acceptance suite
+        env:
+          # 解释器可经仓库变量覆盖；**缺省 = `python3`**（公开面不写死个人 venv 路径）。
+          ACCEPT_PY: ${{ vars.ACCEPT_PY || 'python3' }}
+        run: bash scripts/_accept_cli.sh --full

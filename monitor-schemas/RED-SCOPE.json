@@ -1,0 +1,21 @@
+{
+  "name": "RED-SCOPE",
+  "stage": "standing",
+  "structural_checks": [
+    {
+      "check": "self_check_ok",
+      "command": "bash gatekeeper-cli.sh self-check 2>/dev/null | grep -q '\"issues\":0'",
+      "fail_if": "exit_code != 0"
+    },
+    {
+      "check": "state_integrity",
+      "command": "bash gatekeeper-cli.sh state 2>/dev/null | grep -q '\"_checksum\"'",
+      "fail_if": "exit_code != 0"
+    },
+    {
+      "check": "discover_available",
+      "command": "bash gatekeeper-cli.sh discover 2>/dev/null | grep -q '\"ok\":true'",
+      "fail_if": "exit_code != 0"
+    }
+  ]
+}

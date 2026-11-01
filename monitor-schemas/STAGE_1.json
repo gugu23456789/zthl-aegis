@@ -1,0 +1,29 @@
+{
+  "stage": "STAGE_1",
+  "name": "CODE — Implementation",
+  "trigger": "编码开始 / push 前",
+  "requires": [
+    "feature_worktree_exists",
+    "branch_not_main",
+    "guard_edit_called_before_each_edit",
+    "code_compiles_and_ctest_passes",
+    "commit_messages_follow_convention",
+    "ci_trigger_registered",
+    "l4_cross_review_completed"
+  ],
+  "produces": [
+    "committed_code_in_feature_worktree",
+    "ci_yml_push_branches_updated"
+  ],
+  "evidence": [
+    "ctest --output-on-failure 13/13 passed",
+    "git log --oneline -3 shows feat/refactor messages",
+    "rg 'feature/spz-gatekeeper-2.0.2-r' .github/workflows/ci.yml has match"
+  ],
+  "must_not": [
+    "code_in_main_worktree",
+    "gz_spz residuals in STAGE_1 output",
+    "uncommitted changes before push",
+    "hardcoded branch name in ci.yml sed"
+  ]
+}
