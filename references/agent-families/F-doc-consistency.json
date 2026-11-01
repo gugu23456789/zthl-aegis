@@ -1,0 +1,23 @@
+{
+  "family": "F-doc-consistency",
+  "match": {"any": ["doc-consistency", "文档一致性", "归属声明", "编制归属", "D7-A", "声明落文", "整建制并入"]},
+  "tier": 3,
+  "edit_quota": 8,
+  "allowed_paths": [
+    "docs/plans/2026-10-04-audit-bureau-plan.md",
+    "docs/plans/2026-06-09-mpr-standing-plan.md",
+    "references/meta-routing-protocol.md"
+  ],
+  "forbidden_paths": [
+    "scripts/",
+    "gatekeeper-cli.sh",
+    "docs/analysis/",
+    ".gitignore",
+    "references/flywheel-implementation-plan.md",
+    "references/convergence-evaluator.md"
+  ],
+  "narrow_task_template": "修 {anchor}。\n\n**唯一落刀面 = 计划/参考文档**（仅 allowed_paths 白名单内文件）。**禁止**改 `scripts/`、`gatekeeper-cli.sh`、`docs/analysis/`、`.gitignore` 下任何文件 —— 你**只负责落文本**；红先臂与回归由主 agent 跑。\n\n## 目标（三处归属声明落文，措辞须与计划 §1 一致）\n1. `docs/plans/2026-06-09-mpr-standing-plan.md`：在归属/边界小节写明「审计序列（`AUDIT-*` 相位）自 2026-10-26 起**整建制并入审计署**，本计划只保留相位表；审计署正本 = `docs/plans/2026-10-04-audit-bureau-plan.md`」。**不得**把 `AUDIT-*` 相位从本计划删除（删了会让 doc-align 的节点映射变红）。\n2. `references/meta-routing-protocol.md`：在路由表/归属说明处写明同一条归属，并指向审计署正本；**不得**改动 `AUDIT-*` 字面与既有路由键（改字面会让 `gk_audit_docs` 的机检变红）。\n3. `docs/plans/2026-10-04-audit-bureau-plan.md`：仅在 §1 / §23.3 已有 D7-A 条目上补齐「三处声明」的指针，不新增判据、不改 D7-B 范围。\n\n## 硬约束（越界即失败）\n- **禁止**新增/删除任何 `AUDIT-*` 相位名、命令名、`_CMD_REG` 条目。\n- **禁止**改任何代码块或反引号内的命令字面（只写散文声明）。\n- 三处声明必须**逐字一致**（同一句归属 + 同一正本路径），便于 `rg` 机检。\n- 每处只加 1–3 行；**禁止**重排既有章节、禁止改历史记录段。\n\n## 落刀方式 / 你**不需要**做的\n- 用 `edit` 工具落刀；`old_str` 必须**逐字**取自文件（先 `read` 取原文，禁凭记忆）。`used` 传已成功落刀次数（第一刀传 0），`allowed` 传本任务串末尾配额。\n- **不要**跑测试、不要自证；落刀后把每个 `edit` / `guard-edit` 返回值**原样**贴回。\n- 主 agent 的验收命令（你不用跑）：{verify_cmd}\n- ⚠ **判据自检**：若发现三处声明与既有文本**语义冲突**（例如 standing 计划里已写「审计序列独立于审计署」），**不要**自行删除旧句，改为在旧句后加「（2026-10-26 起作废，见审计署正本）」并在报告里点出冲突位置 —— 冲突裁决属 owner，不属你。",
+  "test_first": "scripts/test_gk_doc_align.py（回归闸：三处声明落文后仍须全绿；本案红先口径 = rg 断言「整建制并入」在三处缺席）",
+  "verify_cmd": "bash -c 'cd \"$PWD\" && /opt/spz-py312/bin/python -m pytest scripts/test_gk_doc_align.py -q && rg -q \"整建制并入\" docs/plans/2026-06-09-mpr-standing-plan.md && rg -q \"整建制并入\" references/meta-routing-protocol.md && rg -q \"整建制并入\" docs/plans/2026-10-04-audit-bureau-plan.md'",
+  "affected_tests": ["scripts/test_gk_doc_align.py"]
+}

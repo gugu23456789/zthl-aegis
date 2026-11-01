@@ -1,0 +1,13 @@
+{
+  "family": "F-conv-arc-purged",
+  "match": {"any": ["purged_fids", "ECC-8B7F130A20A2", "conv-arc", "归档感知", "MU_BACKCAST_NEGATIVE", "convergence-samesource"]},
+  "anchor_symbols": ["rates"],
+  "tier": 4,
+  "edit_quota": 4,
+  "allowed_paths": ["scripts/gk_convergence_estimator.py", "references/convergence-evaluator.md"],
+  "forbidden_paths": ["gatekeeper-cli.sh", "scripts/gk_finding.py", "scripts/gk_json_utils.py", "scripts/gk_agent_family.py", "scripts/gk_agent_edit.py", "scripts/pre_tool_hook.py", "docs/", ".gitignore"],
+  "narrow_task_template": "修 {anchor}。**唯一目标文件 = `scripts/gk_convergence_estimator.py`**（另可同步口径文档 `references/convergence-evaluator.md`）。**禁止**改任何测试 / `gatekeeper-cli.sh` / `scripts/gk_finding.py` —— 红先臂由主 agent 写、已证对 HEAD 必红，你**只负责落刀**。\n\n## 设计（权威源 = finding {anchor}，勿另行设计）\n`rates()` 现把 `a_n` 只按 `to ∈ {fixed, closed, rejected}` 计数（离开存量）。但 epoch 事件声明的 `purged_fids`（配额归档 / 代数清除，`gk_finding.epoch(..., purged_fids=[...])`）**零入账** ⟹ μ 反推结构性负值（base 实测 μ0 = −147）。\n\n落刀（定点、最小）：\n1. 在 `rates()` 里，令每个 epoch 事件所声明的 `purged_fids` 计入它**所闭合的那一轮**（= `rounds_of` 切分里该 epoch 之前的那一轮）的 `a` 计数。\n2. 这些 purged fid 必须与 `to ∈ {fixed, closed, rejected}` 的 fid **共用同一去重集**（现 `seen`）⟹ 同一 fid 既 resolve 又 purge **只计一次**（对齐 F-REV-62 去重纪律）。\n3. 向后兼容：journal 无 `purged_fids` 时行为**逐字不变**（既有臂 test_freeze_then_evaluate / test_rounds_split_by_epoch / test_mu_series_backcast_units 须仍绿）。\n4. `references/convergence-evaluator.md` §1 的 `a_n` 定义补一句：a_n = 该轮**离开存量**的 distinct fid（解析 ∪ 归档清除）。\n\n## 你**不需要**做的\n- 红先臂已由主 agent 写好并证红：test_a_counts_epoch_purged_fids 期望 a == [2, 1]；test_a_purged_deduped_with_resolution 期望 a == [2, 1]。你**无需**写/改测试、无需自证。用 `edit` 工具落刀；old_str 必须逐字取自文件（先 read 取原文，禁凭记忆）；used 传已成功落刀次数（第一刀传 0）。落刀后把每个 edit / guard-edit 返回值**原样**贴回。\n- 主 agent 的验收命令（你不用跑）：{verify_cmd}\n- ⚠ **判据自检**：若发现红先臂注释盲或前置未验证，在报告里点出并附一行复现 —— 但**仍须先落刀**。",
+  "test_first": "scripts/test_gk_convergence_estimator.py::test_a_counts_epoch_purged_fids",
+  "verify_cmd": "bash -c 'cd \"$PWD\" && /opt/spz-py312/bin/python -m pytest scripts/test_gk_convergence_estimator.py -q'",
+  "affected_tests": ["scripts/test_gk_convergence_estimator.py"]
+}

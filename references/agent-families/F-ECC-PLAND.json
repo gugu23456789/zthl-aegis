@@ -1,0 +1,20 @@
+{
+  "family": "F-ECC-PLAND",
+  "match": {"any": ["计划↔实现漂移", "计划-实现漂移", "落刀语义过期", "落刀实况", "plan_landing_drift", "check_plan_landing_drift", "ECC-PLAND", "PLAND"]},
+  "anchor_symbols": ["check_plan_landing_drift"],
+  "tier": 4,
+  "edit_quota": 3,
+  "allowed_paths": ["scripts/gk_doc_align.py"],
+  "forbidden_paths": [
+    "docs/", "references/", ".gitignore",
+    "gatekeeper-cli.sh", "scripts/pre_tool_hook.py",
+    "scripts/gk_plan_lint.py", "scripts/gk_task_gate.py", "scripts/gk_narrow_route.py",
+    "scripts/gk_moa_aggregate.py",
+    "scripts/test_gk_doc_align.py", "scripts/test_gk_plan_lint.py",
+    "scripts/test_gk_plan_landing_drift.py"
+  ],
+  "narrow_task_template": "实现 {anchor}（计划落刀漂移检测器）。**唯一目标文件 = `scripts/gk_doc_align.py`**（唯一 allowed_path）。**禁止**改任何测试文件（红先臂由主 agent 写、`test_first` 已证对 HEAD 必红）、`docs/`、`references/`、`gatekeeper-cli.sh`、`scripts/gk_plan_lint.py` —— 你**只负责落刀**。\n\n## 设计（权威源 = `docs/plans/2026-10-04-plan-landing-drift-detector-plan.md` §2，勿另行设计）\n新增 `check_plan_landing_drift(skill_dir)`：解析活跃计划（含 `<!-- META` 的 `docs/plans/*.md`）的 §0.3 落刀点表 + §3 落刀步（`### T<n>` / `**文件**` / `**步骤**`）→ 抽 `file` / `file::symbol` 目标 → 判：`landed_stale`（目标已存在**且**含落刀痕：源码注释引计划 basename/`DRAFT-N`，或该步声明的新符号已定义）/ `suspect`（存在但无落刀痕）/ `ok`（不存在）；跳过 §0.3 中\"值=不改/显式排除\"行。输出 `{check:\"plan_landing_drift\", status, items:[{plan,t_item,target,verdict}], detail}`；含 `landed_stale` ⟹ WARN。并**注册进 `run_all`**。\n\n## 口径变更（同文件，§2.3）\n`check_anchor_existence`：T2（无断言 content_drift）自 drift 面移出 → 新键 `unasserted`；`drifted` 改 = T0+T1；`detail` 改读 T0+T1 口径；**`anchors_total` 计算式一字不动**（比值分子变小即可）。\n\n## ⛔ 不得触碰\n- 任何 `PROTECTED_REGION` 标记。\n- `check_anchor_existence` 的既有键名/语义（除上述 T2 口径变更）。\n- 兄弟族落点：`gatekeeper-cli.sh`、`scripts/pre_tool_hook.py`、`scripts/gk_plan_lint.py`、`scripts/gk_moa_aggregate.py` —— 一字不动。\n\n## 落刀方式 / 你**不需要**做的\n- 用 `edit` 工具落刀；`old_str` 必须**逐字**取自文件（先 `read` 取原文，禁凭记忆）。`used` 传已成功落刀次数（第一刀传 0），`allowed` 传本任务串末尾配额。\n- **红先测试由主 agent 负责**：`test_first` 已给出且已证对 HEAD 必红。你**无需**跑测试、无需自证。落刀后把每个 `edit` / `guard-edit` 返回值**原样**贴回。\n- 主 agent 的验收命令（你不用跑）：{verify_cmd}\n- ⚠ **判据自检**：若发现 `test_first` 存在注释盲或前置未验证，在报告里点出并附一行复现 —— 但**仍须先落刀**。",
+  "test_first": "scripts/test_gk_plan_landing_drift.py::test_landed_stale_is_flagged",
+  "verify_cmd": "bash -c 'cd \"$PWD\" && /opt/spz-py312/bin/python -m pytest scripts/test_gk_plan_landing_drift.py -q'  # cwd=本工作树根（coder 的 worktree）；**禁**写死家目录绝对路径（会触发 foreign_content_guard 白名单误判，见 ECC-8D46F2B1C0A4）",
+  "affected_tests": ["scripts/test_gk_plan_landing_drift.py"]
+}

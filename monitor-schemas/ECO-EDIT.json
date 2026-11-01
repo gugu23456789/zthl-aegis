@@ -1,0 +1,16 @@
+{
+  "name": "ECO-EDIT",
+  "stage": "standing",
+  "structural_checks": [
+    {
+      "check": "guard_edit_works",
+      "command": "bash gatekeeper-cli.sh self-check 2>/dev/null | grep -q '\"guard_edit\":\"ready\"'",
+      "fail_if": "exit_code != 0"
+    },
+    {
+      "check": "pre_tool_check_available",
+      "command": "bash gatekeeper-cli.sh self-check 2>/dev/null | grep -q '\"pre_tool_check\":\"available\"'",
+      "fail_if": "exit_code != 0"
+    }
+  ]
+}

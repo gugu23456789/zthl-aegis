@@ -1,0 +1,133 @@
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# GitNexus analyze 自动回写产物（2026-09-04：AGENTS.md/CLAUDE.md 每次 analyze 重写索引数，
+# .claude/skills/gitnexus-* 由 analyze 平铺迁移 → 生成物不入库，防 status 反复污染）
+AGENTS.md
+CLAUDE.md
+.claude/
+
+# 同一族（2026-09-21 实测补）：references/subagent-context.json{,.sig} 是 `context --update`
+# 与 subagent 重扫的**回写产物**（行号漂移），且**在 gitnexus 索引面内** ⟹ 每次写入即令
+# `gitnexus status` 判「已过期」（判据 = 索引快照 vs 工作树内容，与 commit/分析器身份无关：
+# 实测索引提交=当前提交、两侧分析器身份串逐字节相同、索引内容仅此两件「已修改」）⟹
+# node_guard ctx.baseline_status 恒 `stale` → advance fail-closed。
+# 设计意图早定「不纳入提交」（docs/analysis/2026-09-08-moa-chain-dryrun-assessment.md L70），
+# 但从未落地 ⟹ 上方先例（AGENTS.md/CLAUDE.md）漏修本两件。
+references/subagent-context.json
+references/subagent-context.json.sig
+# 2026-10-30（签名竞态修复配套）：`context --update` 写者独占锁 + 自愈单飞的**运行时锁件**
+# （`_ctx_lock_acquire` → `<ctx>.lock`；自愈 → `<ctx>.heal`）。二者是跨进程互斥载具，
+# 由内核持有、**不得删除也无需入库**（入库等于把某台机器的锁状态提交进仓库）。
+references/subagent-context.json.lock
+references/subagent-context.json.heal
+
+# Keys (NEVER commit private keys)
+# 2026-09-22 R19：`.keys/`（**尾斜杠 = 目录专属**）**不匹配软链** ⟹ R19 的软链单源继承
+# 会落在「未忽略且可被 git add 拾取」的状态（实测 `git check-ignore .keys` rc=1 修前）。
+# 去尾斜杠后同时匹配**目录与软链**；机检断言见 scripts/test_r19_keys_inherit.py::test_keys_gitignore_symlink。
+.keys
+
+# Temp scripts
+*.tmp
+*.log
+amp/
+# AMP 运行落点（zthl/acp/amp.py 默认；2026-10-26 由 ~/.zthl 改为仓内，避免 hook 以 root 启动时漂到 /root）
+.zthl/
+.tmp_*.py
+scripts/_test_*.py
+scripts/_*_test.py
+scripts/_prompt_audit_proxy.py
+scripts/tmp_*
+# R-16 ⑤#a：scripts/_sc.json = 运行态自检/CFG 产物（非 UTF-8，.gitignore 原缺 ⟹ 曾于 2026-06-17 入库），
+# 全仓零读取点 ⟹ 不入库
+scripts/_sc.json
+
+# Subagent 输出（2026-09-18 用户裁定「方案 A」）：
+#   .md  质询报告 = 计划文档的**验收依据**；已核实全仓 10 个 tracked 文档引用该目录 ⟹ **入库**
+#        （否则 09-18 起的计划文档指向的报告链接对 clone 者悬空）
+#   .json 原始产物（含 token 明细与全量轨迹，7.8 MB）及其余运行期产物 ⟹ 不入库
+# 注：排除的是目录**内容**（`/*`）而非目录本身，故 `!…/*.md` 的再包含可生效。
+docs/analysis/subagent/*
+!docs/analysis/subagent/*.md
+
+# Python
+__pycache__/
+*.pyc
+references/ecc-audit-*.md
+docs/plan-backup/
+.gatekeeper.state*
+.gatekeeper.pipeline-archive*
+.gatekeeper.history-archive*
+.gatekeeper.hslsn*
+.gatekeeper.ember*
+.gatekeeper.write-claims*
+.gatekeeper.plan
+.gatekeeper.plan*
+# ↑ 会话级指针（§4.13.5② 会话级句柄，2026-09-25）：`<全局指针>.<sid>`，每会话一份，运行期标记
+# 会话身份出口（§4.13.5 高并发② 使能切片，2026-09-25）：hook 每次 PreToolUse 落本次调用的 sid
+# （单行 sid/epoch/tool/cwd，纯运行时标记，随调用刷新；读者 = CLI 启动块的 GK_SESSION_ID 自解析）
+.gatekeeper.session*
+.gatekeeper.context.json
+.gatekeeper.context.seen
+# H1a（2026-09-28）：降级链断路器缓存（TTL 健康记忆；CLI 每次新进程故需落盘）。
+# 纯运行时派生（键=provider，随失败/成功刷新），非事实源，不入库。
+.gatekeeper.failover.json
+.gatekeeper.failover.json.tmp
+# 写时 shellcheck 的病灶白名单命中缓存（纯运行时派生，键=文件内容哈希；不入库）
+.gatekeeper.shellcheck-cache.json
+# 夜批静默窗运行时标记（内容为「过期时间戳|窗口名」，随窗口生成/消亡 ⟹ 纯运行时状态，非配置）
+.gatekeeper.no-ask
+# 提问挂起 kill 闸运行时台账（待答标记 `<ask_epoch>|<note>` + 结算台账 jsonl；随提问生成/消亡
+# ⟹ 纯运行时状态，非配置。判据单源 = pre_tool_hook._ask_hold_snapshot，消费点 = monitor --local）
+.gatekeeper.ask-hold*
+# R-16 ⑤#7：flock 锁文件，唯一写点 gk_project_register.py、零读取点、不 unlink ⟹ 纯运行时废料
+.gatekeeper.scopes.json.lock
+.vk.json
+__test_*.sh
+
+# 运行期副产物（2026-09-28 整理工作区）：state 归档/备份/外置切片 + block 日志目录 + 一次性恢复脚本。
+# 均**无代码引用、非测试夹具**（实测 `git ls-files` 命中为空）⟹ 与 `.gatekeeper.state*` 同族，不入库。
+# 注：`hook-block/` = pre_tool_hook 的持久化块日志目录（`pre_tool_hook.py:497`），属**取证数据**非配置。
+_state_archive_*.json
+_state_backup_*.json
+_state_task_pipeline_archive_*.json
+hook-block/
+scripts/_recover_*.py
+
+# accept 一键器全量结果戳（ECC-34EEC2BC12D2，2026-09-28）—— 运行期派生（内容=HEAD:基线哈希 / 时间 /
+# 摘要 / 失败集），供**同 worktree** 并发会话复用；随每次 `--full` 刷新 ⟹ 纯运行时状态，非配置。
+# （对应互斥锁落在 /tmp 的机器级锁文件，天然不入仓。）
+scripts/_accept_baseline.txt.stamp
+
+# 可逆垃圾区（U7 约定）：备份 / 过期产物在此暂存，不随包
+.trae/
+
+# 2026-10-31（开源卫生）：脚本备份/临时副本（*.bak-*）不入库
+*.bak-*
+
+# 审计/红队内嵌 LLM 车道的 ECC 落盘（2026-10-31，gk_ecc_sink）：运行期产物（含 token 明细与
+# 全量轨迹，体积随派发增长）⟹ 不入库。权威留存 = `references/ecc-audit-*.md`（审计报告）与
+# `docs/analysis/subagent/*.md`（质询/红队报告）；原始 JSON 可从重跑复现，不需要进仓。
+docs/analysis/audit/
+docs/analysis/red/
+
+# 2026-10-31（开源收尾）：验收解释器**本机私有绑定**（一行路径）。公开 clone 无此文件 ⟹
+# `gk_accept_py.resolve()` 回落 `python3`（单源见 scripts/gk_accept_py.py）。
+scripts/_accept_py.local
+
+# 2026-10-31（开源去标识）：真实卷宗目录的本机值（一行路径）。私有论文仓名**不入公开树**
+# （双盲）；公开 clone 无此文件 ⟹ `gk_doc_align` 回落 `GK_PAPERS_DIR`/空。
+scripts/_papers.local
+
+# 2026-10-31（开源收尾）：MoA 聚合页是**运行期产物**（每次 chain 重写，含本地批指纹/路径），
+# 不是仓库资产 ⟹ 不入库（历史误入库的两份已 `git rm --cached`，文件保留在工作树）。
+moa-chain-*.html

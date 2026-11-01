@@ -1,0 +1,27 @@
+# CRLF prevention -- force LF for all text files
+* text=auto eol=lf
+
+# Python files
+*.py text eol=lf
+
+# Shell scripts
+*.sh text eol=lf
+
+# JSON files
+*.json text eol=lf
+
+# YAML files
+*.yaml text eol=lf
+*.yml text eol=lf
+
+# Markdown files
+*.md text eol=lf
+
+# Binary files (no conversion)
+*.pem binary
+*.key binary
+*.bak binary
+
+# Vendored JS（2026-10-06 S9）：ECharts 5.5.1 min（1 MB，含 CRLF 敏感压缩体）
+# 须标 binary，否则 `* text=auto eol=lf` 会改写行尾 ⟹ 与上游 sha256 不符
+assets/echarts.min.js binary

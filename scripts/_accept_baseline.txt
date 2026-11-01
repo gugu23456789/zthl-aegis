@@ -1,0 +1,5 @@
+# gk-accept 回归基线 v1（勿手改；用 `bash scripts/_accept_cli.sh --snapshot` 重建）
+# runner: /opt/spz-py312/bin/python
+# scope:  subset
+# totals: 3603 passed, 3 xfailed, 21 warnings in 1058.22s (0:17:38)
+

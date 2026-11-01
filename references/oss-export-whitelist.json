@@ -1,0 +1,62 @@
+{
+  "schema": "gk-oss-export-whitelist/1",
+  "what": "开源导出的排除面（单一事实源）：每条 = 谁被排除 + 为什么。消费方 = scripts/oss_scrub.py（is_excluded）；本文件自身随包导出，供第三方审计。",
+  "discipline": "白名单制（默认全拒、显式放行）；新增排除须在本文件写清 reason，禁止只在代码里加常量。",
+  "exclude_prefixes": [
+    {"pattern": ".git/", "reason": "版本库内部对象；公开面走孤儿快照（单 commit、无历史）"},
+    {"pattern": ".keys/", "reason": "私钥/签名材料，永不导出"},
+    {"pattern": "references/gitnexus-skill-ports/", "reason": "PolyForm-Noncommercial 衍生文本，许可不兼容"},
+    {"pattern": "references/skill-ports/", "reason": "第三方技能移植文本，许可未逐项核实"},
+    {"pattern": "references/paper-venues/", "reason": "G3 会议评审口径档案（页数上限/决策权限/评审字段/分轨清单）：公开即把仓库与「在投哪个会议」连起来（双盲禁「投稿事实外泄」）；由 U16 机检臂发现此前漏入包"},
+    {"pattern": "docs/", "reason": "docs 全目录为内部计划/评审/备份，整体不随开源发布"},
+    {"pattern": "amp/", "reason": "仓内遗留 AMP 日志落点（现行落点 = <仓>/.zthl/amp，见 zthl/acp/amp.py）；运行日志含本机时间/工具名，不入公开包"},
+    {"pattern": ".zthl/", "reason": "AMP 观测面落点（LogRecord 六类日志），运行期产物不入公开包"},
+    {"pattern": "node_modules/", "reason": "第三方依赖：体积与许可均不入包"},
+    {"pattern": "__pycache__/", "reason": "字节码缓存"},
+    {"pattern": ".pytest_cache/", "reason": "测试缓存"}
+  ],
+  "exclude_suffixes": [
+    {"pattern": ".lock", "reason": "依赖锁文件（导出面声明依赖但不带锁）"},
+    {"pattern": ".bak", "reason": "备份文件（2026-10-29：原按名排除 `SKILL.md.bak`，该文件已随 OSS 清理删除 ⟹ 改为后缀规则，覆盖一切将来复生的 .bak）"},
+    {"pattern": ".pyc", "reason": "字节码"},
+    {"pattern": ".log", "reason": "运行日志：含本地路径与调试信息"},
+    {"pattern": ".sig", "reason": "签名文件（密钥面）"},
+    {"pattern": ".jsonl.seal", "reason": "封印旁挂文件（治理内部）"},
+    {"pattern": ".protected-edits.jsonl", "reason": "受保护编辑台账（治理内部）"},
+    {"pattern": ".finding-journal.jsonl", "reason": "finding 日志（治理内部）"}
+  ],
+  "exclude_names": [
+    {"pattern": ".gatekeeper.state", "reason": "状态文件：含本地路径与未公开发现"},
+    {"pattern": ".gatekeeper.scopes.json", "reason": "作用域台账（内部路由信息）"},
+    {"pattern": "AGENTS.md", "reason": "gitnexus analyze 回写产物（已 ignore）"},
+    {"pattern": "CLAUDE.md", "reason": "gitnexus analyze 回写产物（已 ignore）"}
+  ],
+  "exclude_globs": [
+    {"pattern": "^\\.gatekeeper\\.state", "reason": "状态文件族（含域化副本与备份）"},
+    {"pattern": "^\\.gatekeeper\\.scopes\\.json$", "reason": "作用域台账"},
+    {"pattern": "^_state_.*\\.json$", "reason": "状态备份副本"},
+    {"pattern": "^moa-chain-.*\\.html$", "reason": "链尾人评页：含真实批次数据"},
+    {"pattern": "(^|/)plan-backup/", "reason": "计划备份目录（references/docs 下同样排除）"},
+    {"pattern": "\\.seal$", "reason": "封印文件"},
+    {"pattern": "^scripts/(test_)?oss_scrub\\.py$", "reason": "导出自证工具：内含反查正则（含作者姓氏形态与预印本平台名），公开即等于泄露词表；仅私仓内部使用"},
+    {"pattern": "^scripts/gk_paper_review(_loader)?\\.py$", "reason": "论文评审插件：含合议准则/稿件路径与预印本指涉，属私仓工具，不进公开核心"},
+    {"pattern": "^scripts/test_gk_paper_review(_loader)?\\.py$", "reason": "同上（测试内含外部论文仓路径与稿件标识）"},
+    {"pattern": "^scripts/(test_)?gk_paper_facts(_trim)?\\.py$", "reason": "论文框架事实清单（稿件章节/术语映射）：方法面指纹，G7b 裁剪后仅存私仓；公开包的 gk_doc_align 在缺该模块时显式 SKIP"},
+    {"pattern": "^scripts/(test_)?gk_paper_spec\\.py$", "reason": "会议档案加载器：与 paper-review 插件同族（引用 references/paper-venues/ 评审口径，该目录已排除），单独放行会留下评审口径与预印本指涉"},
+    {"pattern": "^scripts/test_gk_doc_align\\.py$", "reason": "该测试直接断言 PAPER_FACTS 篇目键（未投会议名）⟹ 随包既泄露稿件篇目又因 gk_paper_facts 已排除而收集失败（2026-11-01 随包扫描发现）"},
+    {"pattern": "^references/agent-families/F-paper-review-.*\\.json$", "reason": "论文评审族模板：含会议准则与稿件落点，不进公开核心"},
+    {"pattern": "^references/(convergence-evaluator|predicate-applicability|sequence-node-safety-net-template)\\.md$", "reason": "未公开稿件的机制正本：公开即提前发表且可反查作者（双盲）"},
+    {"pattern": "^references/predicates\\.json$", "reason": "论文复现谓词矩阵：含稿件侧复现包路径，属未公开稿件资产"},
+    {"pattern": "^scripts/(test_)?gk_phase_[a-z_]+\\.py$", "reason": "相位探针/格式/敏感性/混杂模拟：未公开稿件的实验件（探针设计与臂形态即方法面），随复现包而非公开核心发布"},
+    {"pattern": "^scripts/(test_)?gk_(model_probe|pc_sim)\\.py$", "reason": "模型探针与审稿组定向模拟：论文实验件（注释含稿件正文指涉与私有论文仓路径），不进公开核心"},
+    {"pattern": "^references/ecc-finding-[^/]+\\.md$", "reason": "内部 ECC 审计记录：引用了未公开稿件的 .tex 段落与稿件独创术语，公开即等于泄露方法面"},
+    {"pattern": "^scripts/(test_)?gk_convergence_(evaluator|estimator)\\.py$", "reason": "收敛判据实现：`gk_convergence_evaluator.py` 自述『单一事实源 = references/convergence-evaluator.md』，而该正本已因稿件指纹排除 ⟹ 实现不得单独放行"},
+    {"pattern": "^scripts/test_gk_suba_tiers\\.py$", "reason": "`gk_suba_tiers` 的 tier 证据面测试：硬依赖已闭源的 `gk_convergence_estimator`（`E._tier_rec`/`E.gate`），公开面缺该模块即收集失败"},
+    {"pattern": "^scripts/gk_stride_reprobe\\.py$", "reason": "模型相位重探脚本：硬依赖已闭源的 `gk_model_probe`（论文实验件），属实验面而非公开核心"},
+    {"pattern": "^scripts/test_gk_stride_reprobe\\.py$", "reason": "被测件 `gk_stride_reprobe.py` 已闭源（依赖 gk_model_probe），测试随之退出公开面"},
+    {"pattern": "^scripts/test_(gk_main_repo_guard_scope|gk_xenv_form_residual)\\.py$", "reason": "两者 `_cli_const()` 断言 `MAIN_REPO_WSL/WIN` 为**非空字面量**，而主仓自 ca10113c 起改为**运行时解析**（CLI 头部常量为空串）⟹ 收集期 AssertionError（2026-10-31 公开快照实测 2 errors）；须先改测试走 `gk_main_repo.resolve()` 单源才可回公开面，本批不夹带测试语义改动（登记跟进修）"},
+    {"pattern": "^scripts/summarize_w2a_web_runs\\.py$", "reason": "W2A 实验轮次汇总脚本：属论文实验面（轮次/批号口径），非公开核心"},
+    {"pattern": "^references/flywheel-implementation-plan\\.md$", "reason": "飞轮实施计划（1665 行内部设计源头，含 87 处硬编码行号与未落地的对比表）：owner 2026-10-30 裁定「flywheel 不放出去、也不压缩」⟹ 不进公开核心包，仅私仓留存（`docs/` 侧引用不受影响）"},
+    {"pattern": "^references/(bashpy-problem-taxonomy|e1e4-evaluator-matrix|ecc-analysis-findings|ecc-impact-2026-08-13-key-question|ecc-impact-20260826-plugin-dual-loop|ecc-impact-flywheel|stage-[0-9][^/]*)\\.md$", "reason": "公开面压缩到 20 份以内（owner 2026-10-30）：stage 指南合并为 `stages.md`；bashpy 分类学、E1-E4 规格、ECC 分析/impact 记录（含 flywheel 影响）转入私仓，避免导出面过大与历史行号漂移"}
+  ]
+}

@@ -1,0 +1,21 @@
+{
+  "name": "AUDIT-REPORT",
+  "stage": "standing",
+  "structural_checks": [
+    {
+      "check": "audit_report_available",
+      "command": "bash gatekeeper-cli.sh audit --report --type financial 2>/dev/null | grep -q '\"ok\"'",
+      "fail_if": "exit_code != 0"
+    },
+    {
+      "check": "keys_initialized",
+      "command": "test -f .keys/audit_ed25519.pem",
+      "fail_if": "exit_code != 0"
+    },
+    {
+      "check": "report_file_exists",
+      "command": "ls references/ecc-audit-*.md 2>/dev/null | grep -q .",
+      "fail_if": "exit_code != 0"
+    }
+  ]
+}
