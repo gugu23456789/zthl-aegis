@@ -25,6 +25,15 @@ Mulan Permissive Software License, Version 2 (Mulan PSL v2). The full bilingual 
   with their upstream notices and license copies, in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)
   and [`THIRD_PARTY_LICENSES/`](THIRD_PARTY_LICENSES/).
 
+### Independent Work Statement
+
+This repository is an independent personal work of **Pu Junhan**. The views and technical choices are
+the author's own and do not represent any employer, client, or organization. It was developed without
+using any employer/client proprietary code, confidential information, or resources. Third-party
+dependencies and reference implementations are used under their respective licenses and attributed in
+[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) and [`references/`](references/). This repository is
+not a commercial commitment, legal advice, or authorization to operate any third-party system.
+
 ### What it does
 
 - **Stage gates** — work moves through explicit stages (`discover` → `guard-edit` → `advance`),

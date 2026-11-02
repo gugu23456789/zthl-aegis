@@ -50,7 +50,7 @@ def _x3_metric() -> dict:
 
 
 def _x4_metric() -> dict:
-    # x4 = override 率：上游 v47/v48 已删除 `x4_override()`，改报零事件上界；
+    # x4 = override 率：上游 v47/v48 已删除旧 override 实现，改报零事件上界；
     #   本仓无「机会数」载体 ⟹ 只登记状态，不计算。
     return {"status": "removed_upstream", "value": None, "unit": "rate",
             "note": "removed in upstream v47/v48; zero-event upper bound needs opportunity counts"}

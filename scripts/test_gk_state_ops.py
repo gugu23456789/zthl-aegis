@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 """test_gk_state_ops.py — B10d：reflect / resolve 两处 state 语义写。
 
-⚠ 两站按**旧内联原语义**迁移：裸 `json.dump` 覆盖写，**不持 state_lock、
-不重算 `_checksum`**（与同目录 `update_state` 的有锁增量路径不同）。
-本测试即锁定这一形态，防止后续「顺手改成 update_state」造成行为漂移。
+2026-11-02 起五站统一走 `gk_json_utils` 单源写面：
+  · 已存在 state ⟹ `update_state`（锁内 RMW + 原子替换 + 重算 `_checksum`）；
+  · `crossfull-copy` ⟹ `write_json_file` 原子写副本；
+  · `release-check-record` 缺文件 ⟹ 先原子建空 state。
+本测试锁定新契约（尤其是 `_checksum` 必须重算、写失败必须 fail-loud）。
 """
+import hashlib
 import json
 import os
 import subprocess
@@ -55,6 +58,16 @@ class TestReflectPersist:
         p = _run("reflect-persist", st, "S", "T", env={"REFLECT_GUIDANCE": "x"})
         assert p.returncode != 0 and not Path(st).exists()
 
+    def test_checksum_recomputed(self, tmp_path):
+        """写后 `_checksum` 必须与 gate_data canon 一致（旧裸写会留下过期 checksum）。"""
+        st = self._state(tmp_path, {"gate_data": {}, "_checksum": "deadbeef"})
+        p = _run("reflect-persist", st, "S", "T", env={"REFLECT_GUIDANCE": "{}"})
+        assert p.returncode == 0, p
+        d = json.loads(Path(st).read_text(encoding="utf-8"))
+        gate_dump = json.dumps(d["gate_data"], sort_keys=True, ensure_ascii=True)
+        assert d["_checksum"] == hashlib.sha256(gate_dump.encode()).hexdigest()[:16]
+        assert "_checksum_warning" not in d
+
 
 class TestResolveRecord:
     def _state(self, tmp_path, obj):
@@ -100,6 +113,21 @@ class TestResolveRecord:
         assert _run("resolve-record", str(tmp_path / "no.json"), "G", "fix",
                     rf).returncode != 0
 
+    def test_concurrent_resolve_keeps_all_gates(self, tmp_path):
+        """并发多进程各写不同 gate ⟹ 锁内 RMW 必须全部保留（旧裸写会丢更新）。"""
+        st = self._state(tmp_path, {"human_resolutions": {}})
+        rf = self._reason(tmp_path, "r")
+        gates = ["G1", "G2", "G3", "G4"]
+        ps = [subprocess.Popen([sys.executable, str(CLI), "resolve-record", st,
+                                gate, "fix", rf],
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+              for gate in gates]
+        for p in ps:
+            out, err = p.communicate()
+            assert p.returncode == 0, (out, err)
+        d = json.loads(Path(st).read_text(encoding="utf-8"))
+        assert set(d["human_resolutions"]) == set(gates)
+
 
 class TestCrossfullCopy:
     """B10e：crossfull 隔离副本 state（写副本，父 state 只读由 shell 侧断言保证）。"""
@@ -116,9 +144,11 @@ class TestCrossfullCopy:
         p = _run("crossfull-copy", src, dst, "/wt/x")
         assert p.returncode == 0, p
         d = json.loads(Path(dst).read_text(encoding="utf-8"))
-        assert d["stage"] == "ECO-AUDIT"
+        # 72b95bca（A4 站名归一）已把 standing 副本改到 ECO-VERIFY；旧断言未同步。
+        assert d["stage"] == "ECO-VERIFY"
         assert d["worktree"] == "/wt/x" and d["branch"] == "dryrun/crossfull"
         assert d["gate_data"]["project_type"] == "standing" and d["keep"] == 1
+        assert len(d["_checksum"]) == 16, "副本必须重算 checksum"
         assert Path(dst).read_text(encoding="utf-8").startswith('{\n "'), "indent=1"
 
     def test_non_standing_stage(self, tmp_path):
@@ -134,6 +164,8 @@ class TestCrossfullCopy:
         p = _run("crossfull-copy", str(tmp_path / "no.json"), dst, "/w")
         assert p.returncode == 0, p
         d = json.loads(Path(dst).read_text(encoding="utf-8"))
+        checksum = d.pop("_checksum")
+        assert len(checksum) == 16
         assert d == {"worktree": "/w", "branch": "dryrun/crossfull",
                      "stage": "AUDIT-CROSSR"}
 
@@ -141,18 +173,42 @@ class TestCrossfullCopy:
         src = self._src(tmp_path, raw="{broken")
         dst = str(tmp_path / "dst.json")
         assert _run("crossfull-copy", src, dst, "").returncode == 0
-        assert json.loads(Path(dst).read_text(encoding="utf-8")) == {"stage": "AUDIT-CROSSR"}
+        d = json.loads(Path(dst).read_text(encoding="utf-8"))
+        checksum = d.pop("_checksum")
+        assert len(checksum) == 16
+        assert d == {"stage": "AUDIT-CROSSR"}
 
-    def test_unwritable_dst_swallowed(self, tmp_path):
-        """旧式写盘 `except: pass` ⟹ 失败也 rc=0（调用方另有 P0-2 断言兜底）。"""
+    def test_unwritable_dst_fails_loud(self, tmp_path):
+        """原子写失败必须 fail-loud（旧实现 `except: pass` 会把没写成报成成功）。"""
         src = self._src(tmp_path, {})
-        p = _run("crossfull-copy", src, str(tmp_path / "no" / "d" / "x.json"), "/w")
-        assert p.returncode == 0
+        blocker = tmp_path / "blocker"
+        blocker.write_text("not a dir", encoding="utf-8")
+        p = _run("crossfull-copy", src, str(blocker / "x.json"), "/w")
+        assert p.returncode != 0
+        assert "[ERROR] crossfull-copy write failed" in p.stderr
 
     def test_non_dict_source_nonzero(self, tmp_path):
         """源根为 list 时旧式 `d.get` 抛 AttributeError ⟹ rc≠0（shell 侧 `|| true`）。"""
         src = self._src(tmp_path, raw="[1,2]")
         assert _run("crossfull-copy", src, str(tmp_path / "d.json"), "").returncode != 0
+
+    def test_copies_sidecar(self, tmp_path):
+        """副本须带上冷索引侧车（否则冷叶丢失 = 读分裂）。"""
+        src = self._src(tmp_path, {"gate_data": {}})
+        dst = str(tmp_path / "dst.json")
+        with open(src + ".satellite-index.jsonl", "w", encoding="utf-8") as f:
+            f.write(json.dumps({"op": "put", "batch_id": "b", "arm": "A",
+                                "leaf": {"kind": "pipeline"}}) + "\n")
+        assert _run("crossfull-copy", src, dst, "").returncode == 0
+        assert Path(dst + ".satellite-index.jsonl").is_file()
+
+    def test_removes_stale_sidecar(self, tmp_path):
+        """源无侧车 ⟹ 目标残留侧车须清掉（防陈旧冷叶混入）。"""
+        src = self._src(tmp_path, {"gate_data": {}})
+        dst = str(tmp_path / "dst.json")
+        Path(dst + ".satellite-index.jsonl").write_text("stale\n", encoding="utf-8")
+        assert _run("crossfull-copy", src, dst, "").returncode == 0
+        assert not Path(dst + ".satellite-index.jsonl").exists()
 
 
 class TestDiscoverScheduler:

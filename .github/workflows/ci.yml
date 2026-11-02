@@ -1,5 +1,9 @@
 name: ci
 
+# 最小权限：CI 只读仓库；写权限只留给 release workflow。
+permissions:
+  contents: read
+
 on:
   push:
   pull_request:
@@ -24,17 +28,19 @@ jobs:
   smoke:
     name: smoke (syntax / plan-lint / fast tests)
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
         with:
           fetch-depth: 0
-      - uses: actions/setup-python@v5
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
         with:
           python-version: "3.12"
       - name: install test deps
         # cryptography：身份认证验签 / Ed25519 封印用例的**真跑**依赖。缺它时相关测试
         # 只能 importorskip（覆盖归零）；装上才守得住验签路径。
-        run: python -m pip install --upgrade pip pytest pytest-xdist cryptography
+        run: python -m pip install --upgrade pip pytest pyyaml==6.0.2 pytest-xdist cryptography pyyaml==6.0.2
       - name: smoke gate
         env:
           CI_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before }}
@@ -47,16 +53,19 @@ jobs:
     # 再跑 smoke 门 + 可移植测试集，证明公开树在隔离解释器下自洽。
     name: venv (isolated interpreter)
     runs-on: ubuntu-24.04
+    timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
         with:
           python-version: "3.12"
       - name: create venv + install deps
         run: |
           python -m venv .venv
           . .venv/bin/activate
-          python -m pip install --upgrade pip pytest pytest-xdist cryptography
+          python -m pip install --upgrade pip pytest pytest-xdist cryptography pyyaml==6.0.2
       - name: assert interpreter is the venv
         run: |
           . .venv/bin/activate
@@ -85,13 +94,19 @@ jobs:
     name: plan-lint (pw-sn pre-gate)
     if: github.event_name == 'workflow_dispatch' && inputs.plan != ''
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
         with:
           python-version: "3.12"
       - name: plan linter
-        run: python scripts/gk_plan_lint.py "${{ inputs.plan }}"
+        env:
+          # 输入经 env 中转：禁止把 `inputs.*` 直接插进 run（模板注入）。
+          PLAN: ${{ inputs.plan }}
+        run: python scripts/gk_plan_lint.py "$PLAN"
 
   full:
     # 全量回归依赖 WSL/9p 语义、审计密钥与既有失败基线（_accept_baseline.txt 绑定解释器），
@@ -99,10 +114,12 @@ jobs:
     name: full regression (self-hosted WSL)
     if: github.event_name == 'workflow_dispatch'
     runs-on: [self-hosted, linux, wsl]
+    timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
         with:
           fetch-depth: 0
+          persist-credentials: false
       - name: acceptance suite
         env:
           # 解释器可经仓库变量覆盖；**缺省 = `python3`**（公开面不写死个人 venv 路径）。
@@ -114,18 +131,21 @@ jobs:
     # 连续 3 轮稳定后再转硬门（owner：先在 linux 必过、windows 只报不拦）。
     name: platform smoke (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     continue-on-error: ${{ matrix.os == 'windows-latest' }}
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-24.04, windows-latest]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
         with:
           python-version: "3.12"
       - name: install test deps
-        run: python -m pip install --upgrade pip pytest
+        run: python -m pip install --upgrade pip pytest pyyaml==6.0.2
       - name: shell syntax
         shell: bash
         run: bash -n gatekeeper-cli.sh
@@ -155,15 +175,18 @@ jobs:
     # 三类缺件：命令注册了没函数、插件登记了没内置源、安装器注册钩子却没 wrapper。
     name: package + hook integrity
     runs-on: ubuntu-24.04
+    timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
         with:
           python-version: "3.12"
       - name: install test deps
         # 2026-11-02 CI 修复：本 job 跑 pytest，但原先没装 pytest ⟹
         #   `python -m pytest` 直接 "No module named pytest"（exit 1），不是测试失败。
-        run: python -m pip install --upgrade pip pytest
+        run: python -m pip install --upgrade pip pytest pyyaml==6.0.2
       - name: integrity scan
         run: python scripts/gk_package_integrity.py --json
       - name: hook / integrity tests
@@ -181,18 +204,26 @@ jobs:
           fi
 
   security-audit:
-    # workflow 供应链 + 危险命令静态扫描（2026-11-02 新增，**观察期** continue-on-error）。
+    # workflow 供应链 + 危险命令静态扫描（2026-11-02 新增；本地静态门为硬门，
+    # actionlint 仅在 runner 已安装时执行）。
     name: security audit (static)
     runs-on: ubuntu-24.04
-    continue-on-error: true
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
         with:
           python-version: "3.12"
+      - name: install lint deps
+        run: python -m pip install --upgrade pip pyyaml==6.0.2
+      - name: workflow security gate
+        # 最小权限 / SHA pin / persist-credentials / timeout / run 注入。
+        run: python scripts/gk_ci_security_lint.py --json
       - name: bash dangerous-command static scan
         run: |
-          python scripts/gk_bash_static_scan.py --json > static-scan.json || true
+          python scripts/gk_bash_static_scan.py --json > static-scan.json
           cat static-scan.json | head -c 2000
       - name: workflow lint (actionlint if present)
         run: |
@@ -201,7 +232,7 @@ jobs:
           else
             echo "actionlint not installed — SKIP (not a pass)"
           fi
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         if: always()
         with:
           name: static-scan

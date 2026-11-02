@@ -178,7 +178,9 @@ class TestDiscoverWiring:
         snap = body.find('cp -f "$STATE_FILE" "$_carry_f"')
         # 锚须**重建 heredoc 独有**：`"gate_data":{},"monitor_scores":{}` 在 idle 分支**也**出现
         # （实测：用它会命中更早的 idle 行 ⟹ 次序断言假红），故并上 `main_repo` 字段定位真重建点。
-        rebuild = body.find('"main_repo":"$MAIN_REPO_WIN","gate_data":{}')
+        # 2026-11-02 重锚：discover 重建 heredoc 已改为 `g("GK_ST_MAIN_REPO")` 形态
+        #   （原 `"main_repo":"$MAIN_REPO_WIN","gate_data":{}` 在 HEAD 已不存在）。
+        rebuild = body.find('"main_repo": g("GK_ST_MAIN_REPO"), "gate_data": {},')
         carry = body.find("from gk_discover_carry import carry_over as _carry")
         assert snap != -1 and rebuild != -1 and carry != -1, "三要素缺一 ⟹ 保全链断裂"
         assert snap < rebuild < carry, "次序必须是「快照 → 重建 → 回填」（倒了即抹掉后又去读它）"

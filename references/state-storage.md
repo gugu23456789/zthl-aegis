@@ -61,8 +61,12 @@ updated: 2026-11-02
 ```
 
 - 片名单源 = `gk_satellite.KIND_SUFFIX`（禁第二份字面量）。
-- 写入唯一入口 = `gk_satellite.append()`（片 + per-arm 索引叶子 + 判活锚三件同批）。
-- 索引落点 = `gate_data.satellite_index.<batch_id>.<arm>`（per-arm 叶子，避免同批多臂互相覆盖）。
+- 写入唯一入口 = `gk_satellite.append()`（片 + 冷索引侧车 + 热索引叶 + 判活锚同批）。
+- 索引 = **热 ∪ 冷**：热叶在 `gate_data.satellite_index.<batch_id>.<arm>`，每 kind 只留最近
+  `INLINE_LEAVES_MAX_PER_KIND`（6）叶；更旧的冷叶落 `<state>.satellite-index.jsonl`（append-only）。
+  读面统一走 `gk_satellite.index_entries()`（侧车同键优先），禁直读 `gate_data.satellite_index`。
+- 拓扑与崩溃安全见 README「元数据路由（DAG）」：`写 → 网关 → state` 与 `片/侧车 → 压缩 → manifest`
+  两条支路只在 state 汇合，读面无回写边。
 - `rejected_edits` 出窗条目落 `<state>.rejected-edits-journal.jsonl`（append-only、**永不回收**，
   `gk_advance._append_rejected` → `REJECTED_CAP`）；live 只留窗口内条目，审计读 journal。
   2026-11-01 改名（原 `-archive` 会落进卫星 `*-archive` 认知域）；旧名不自动迁移，读面两代都认。
@@ -130,13 +134,13 @@ bash gatekeeper-cli.sh state --archive-isolated [--apply] # 隔离 state 可逆�
 拦截的两条边界：**收缩写放行**（新体积 < 磁盘现有体积 ⟹ 裁剪正在生效，不自锁）；
 逃生舱 `GK_STATE_WALL_BLOCK=0`（显式放行，留 stderr 痕迹）。
 
-**三条腿**（各自独立的裁剪线，按墙的比例定价，合计 85%，留 15% 给其余字段）：
+**三条腿**（各自独立的裁剪线，按墙的比例定价，各 5%、合计 15%，留 85% 给其余字段）：
 
 | 腿 | 落点 | 比例 | 值 | 越线动作 |
 |:--|:--|:--|:--|:--|
-| `subagent_history` | `gatekeeper-cli.sh` `_HIST_MAX_BYTES` | 45% | 1152 KB | 最旧条目出窗 → 落 history 片 |
-| `task_pipeline` | `gk_json_utils.TASK_PIPE_MAX_BYTES` | 20% | 512 KB | 已决条目出窗 → 落 pipeline 片 |
-| `ecc_findings` | `gk_json_utils.ECC_MAX_BYTES` | 20% | 512 KB | closed 可归档；open 超 `ECC_MAX_OPEN(96)` 就地溢出 |
+| `subagent_history` | `gatekeeper-cli.sh` `_HIST_MAX_BYTES` | 5% | 128 KB | 最旧条目出窗 → 落 history 片 |
+| `task_pipeline` | `gk_json_utils.TASK_PIPE_MAX_BYTES` | 5% | 128 KB | 已决条目出窗 → 落 pipeline 片 |
+| `ecc_findings` | `gk_json_utils.ECC_MAX_BYTES` | 5% | 128 KB | closed 可归档；open 超 `ECC_MAX_OPEN(96)` 就地溢出 |
 
 另两个计数轴：`ECC_MAX_ENTRIES=256`、`ECC_MAX_OPEN=96`。运维覆盖口：`GK_STATE_TRIM_KB=<KB>`
 （只覆盖 history 腿，不改源码）。

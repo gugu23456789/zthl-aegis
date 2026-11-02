@@ -32,6 +32,7 @@ import hashlib
 import json
 import math
 import os
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -475,6 +476,24 @@ _HINT_PHASES = {
                                    "外部检索（按需，落证据清单；无外部依赖可跳过）",
                                    "证据清单（产物落卫星片，不阻塞 EDIT）"],
                          "skip_flag": "GK_SKIP_RESEARCH_PRELUDE=1",
+                         # 2026-11-02（owner 裁定）：可选 408 特化帧。默认 **auto**：
+                         #   由程序按任务文本/阶段判定 408 或 generic；显式 `GK_RESEARCH_FRAME=408|generic`
+                         #   覆盖。帧只做提示，**不阻塞** advance / EDIT（见 references/research-408.md）。
+                         "frame_env": "GK_RESEARCH_FRAME",
+                         "default_frame": "auto",
+                         "auto": True,
+                         "auto_note": "auto = 系统/自维护任务 → 408；文案/艺术/创作 → generic",
+                         "non_blocking": True,
+                         "frames": {
+                             "408": {
+                                 "desc": "计算机 408 四轴：数据结构 / 计算机组成 / 操作系统 / 计算机网络",
+                                 "axes": ["数据结构", "计算机组成", "操作系统", "计算机网络"],
+                                 "template": ["负载模型", "数据结构", "内存与写路径",
+                                              "并发与崩溃一致性", "复杂度预算", "失败模式",
+                                              "实验与验证", "408 结论"],
+                                 "doc": "references/research-408.md",
+                             },
+                         },
                      },
                      "next": "ECO-EDIT", "trigger": "bash gatekeeper-cli.sh advance ECO-EDIT"},
     "ECO-EDIT": {"phase": "ECO-EDIT", "desc": "plan-refinement quality gate: invoke Skill(plan-refinement) for F1-F7 SCR review before advancing",
@@ -610,6 +629,94 @@ _GATES_JSON = {
 }
 
 
+# ── 408 research frame 自动判定（2026-11-02）──────────────────────────────
+# 目标：由程序判断当前任务是否值得走 408 四轴（系统/自维护），而不是让调用方每次手填。
+# 只做 advisory：结果放 `extras["research_frame"]`，**没有任何 gate 消费它**。
+_RESEARCH_SYSTEM_RE = re.compile(
+    r"(?:\bstate\s+(?:file|write|store|machine|wall|shard|index|patch|size|lock)\b"
+    r"|\b(?:storage|satellite|shard|concurrency|atomic|crash|recovery|"
+    r"write[ -]amplification|cache|memory|file[ -]?system|kernel|network|distributed|"
+    r"consistency|dag|lsm|b\+[ -]?tree|heap|scheduler|pipeline|ci|build|refactor|"
+    r"migration|database|queue|protocol|cli|hook|thread|process|fsync|mmap|"
+    r"benchmark|latency|throughput|performance|optimization|self-maintenance)\b"
+    r"|状态|存储|卫星|分片|索引|并发|原子|崩溃|恢复|写放大|缓存|内存|文件系统|内核|"
+    r"网络|分布式|一致性|数据结构|调度|管线|构建|测试|重构|迁移|数据库|队列|协议|"
+    r"接口|命令行|钩子|线程|进程|序列化|性能|延迟|吞吐|基准|优化|自维护|元数据|路由)",
+    re.IGNORECASE,
+)
+_RESEARCH_CREATIVE_RE = re.compile(
+    r"(?:\b(?:copywriting|marketing|advertising|artwork|artistic|illustration|poem|"
+    r"poetry|novel|fiction|screenplay|translation|naming|slogan|branding|creative|"
+    r"storytelling|essay|blog|newsletter)\b"
+    r"|文案|艺术|创作|海报|标题|命名|翻译|诗歌|小说|剧本|营销|品牌|视觉|配色|排版|"
+    r"宣传|广告|故事|散文|随笔|博客|通讯)",
+    re.IGNORECASE,
+)
+
+
+def classify_research_frame(task_text: str = "", *, stage: str = "",
+                            project_type: str = "", target: str = "",
+                            plan_path: str = "", env: dict = None) -> dict:
+    """判定 408 / generic（确定性关键词 + 阶段/项目类型；不抛、不阻塞）。
+
+    显式覆盖：`GK_RESEARCH_FRAME=408|generic`（env 或进程环境）。
+    auto 规则：
+      · 只有创作信号 → generic；
+      · 只有系统信号 → 408；
+      · 两类都有 → 创作信号 >= 系统信号时 generic（文案介绍存储仍算文案），否则 408；
+      · 无信号 → standing/ECO-/RED-/AUDIT- 默认 408（自维护），其余 generic。
+    """
+    raw = ""
+    if isinstance(env, dict) and "GK_RESEARCH_FRAME" in env:
+        raw = str(env.get("GK_RESEARCH_FRAME") or "")
+    else:
+        raw = str(os.environ.get("GK_RESEARCH_FRAME") or "")
+    explicit = raw.strip().lower()
+    if explicit in ("408", "generic"):
+        return {"frame": explicit, "reason": "env override", "auto": False,
+                "blocking": False, "system_signals": [], "creative_signals": []}
+
+    text = " ".join(str(x) for x in (task_text, target, stage, project_type) if x)[:8192]
+    if plan_path:
+        try:
+            p = Path(plan_path)
+            if p.is_file():
+                text += " " + p.read_text(encoding="utf-8", errors="replace")[:4096]
+        except OSError:
+            pass
+    sys_hits = sorted({m.group(0).lower() for m in _RESEARCH_SYSTEM_RE.finditer(text)})
+    cre_hits = sorted({m.group(0).lower() for m in _RESEARCH_CREATIVE_RE.finditer(text)})
+    if cre_hits and (not sys_hits or len(cre_hits) >= len(sys_hits)):
+        frame, reason = "generic", "creative signals dominate"
+    elif sys_hits:
+        frame, reason = "408", "system signals"
+    elif project_type == "standing" or stage.startswith(("ECO-", "RED-", "AUDIT-")):
+        frame, reason = "408", "standing/self-maintenance default"
+    else:
+        frame, reason = "generic", "no system signals"
+    return {"frame": frame, "reason": reason, "auto": True, "blocking": False,
+            "system_signals": sys_hits[:8], "creative_signals": cre_hits[:8]}
+
+
+def research_frame_for_state(d: dict, env: dict = None) -> dict:
+    """从 state 的任务/计划/阶段字段判定 frame（字段缺失也不抛）。"""
+    d = d if isinstance(d, dict) else {}
+    gd = d.get("gate_data") if isinstance(d.get("gate_data"), dict) else {}
+    parts = []
+    for src in (d, gd):
+        for k in ("task", "task_text", "current_task", "target", "plan", "plan_path",
+                  "title", "desc"):
+            v = src.get(k)
+            if isinstance(v, str) and v.strip():
+                parts.append(v[:4096])
+    stage = str(d.get("r_phase") or d.get("stage") or "")
+    ptype = str(gd.get("project_type") or d.get("project_type") or "")
+    plan_path = str(d.get("plan_path") or gd.get("plan_path") or "")
+    return classify_research_frame(" ".join(parts), stage=stage, project_type=ptype,
+                                   target=str(d.get("target") or ""),
+                                   plan_path=plan_path, env=env)
+
+
 def _hint_for(to_stage: str, d: dict, cc: dict, remote: str, current: str = "") -> tuple:
     """Build hint object + top-level extras (bash L2511-2569 + L2630-2692).
 
@@ -640,6 +747,14 @@ def _hint_for(to_stage: str, d: dict, cc: dict, remote: str, current: str = "") 
     extras["current_remote"] = remote
     extras["tool_policy"] = dict(_TOOL_POLICY)
     extras["post_check"] = "bash gatekeeper-cli.sh self-check"
+    # 2026-11-02：408 frame 自动判定（advisory）。只写 extras，不参与任何 gate 判定；
+    #   判定失败也退化为 generic，绝不阻断 advance。
+    if to_stage == "ECO-RESEARCH":
+        try:
+            extras["research_frame"] = research_frame_for_state(d)
+        except Exception as e:  # noqa: BLE001 — 边界：分类器异常不得阻断质询
+            extras["research_frame"] = {"frame": "generic", "auto": True, "blocking": False,
+                                        "reason": "classifier_error: %s" % type(e).__name__}
     # 2026-08-27 序列节点安全网：总运行线路 + 车站播报（gk_node_guard.py 承载）
     # Phase 3.5d route_template 实装形态：route_map = 地铁总运行路线，station = 当前车站播报 + 下一站预报
     try:

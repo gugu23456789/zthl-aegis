@@ -5573,12 +5573,12 @@ except Exception as _sx:
 #   ok 但零净增）；同批归档 gate_data.task_pipeline（13 条已决，−67.7KB）⟹ state 190,377 B，
 #   余量足够容纳 96KB 的 history。
 # 2026-10-26（owner 裁定「裁剪线抬到 128KB/196KB」）：96KB→128KB。
-# 2026-11-01（T7 容量对齐，计划 §2.3）：800KB(5/16) → **1,179,648 = 墙 × 45%**。
-#   依据：口径 = 10 轮 × 6 臂 = 60 臂 × 16,940B ≈ 1,016,400B；旧线 819,200 只多 24% 余量
-#   ⟹ history 先撞、pipeline/findings 两腿闲置。现三腿 45%/20%/20% = 85%，留 15% 余量。
+# 2026-11-02（owner 裁定「收紧 payload 配额」）：三腿各 **5% = 128KB**，合计 15%，
+#   其余 85% 留给其它 key。依据：卫星片/冷侧车已承接 bulk；history 一窗只需
+#   一轮（6 臂 × 16KB × 1.2 ≈ 118KB），不再按 10 轮 60 臂定价。
 #   单源 = `gk_json_utils.HIST_MAX_BYTES`（本行为同值字面量，bash 不可 import；
 #   漂移由 `scripts/test_gk_state_trim_lines.py` 逐值守）。
-_HIST_MAX_BYTES=1179648  # 1152KB = STATE_SIZE_WALL * 45 // 100
+_HIST_MAX_BYTES=131072  # 128KB = STATE_SIZE_WALL * 5 // 100
 # 逃生舱：「GK_STATE_TRIM_KB=196」把本腿裁剪线**显式覆盖**为 196KB（不改源码）
 try:
   _kb=int(os.environ.get('GK_STATE_TRIM_KB') or 0)

@@ -1,24 +1,24 @@
 #!/usr/bin/env python3
-"""state 三条腿裁剪线**按墙比例定价** + 余量不变式（owner 2026-11-01 裁定「按比例放大」）。
+"""state 三条腿裁剪线**按墙比例定价** + 有界不变式（owner 2026-11-02「收紧 payload」）。
 
 背景
 ====
-2026-10-16 墙已 ×10（`STATE_SIZE_WALL` = 2,621,440 B），但三条腿在 2026-10-26 被**统一拍成
-128KB 定值** ⟹ 相对墙从 31.25%/25%/25% 掉到 4.9% ⟹ **裁剪线结构性失效**（三腿全满也只占墙
-14.6%，永远撞不到墙，等于没有裁剪线）。2026-11-01 owner 裁定按**同一比例**回填。
+2026-10-16 墙已 ×10（`STATE_SIZE_WALL` = 2,621,440 B）。2026-11-01 曾把三腿抬到
+45%/20%/20%（合计 85%）以「按比例放大」；但 satellite 冷侧车/分片已承接 bulk ⟹ 该口径
+会把主 state 继续推向墙。2026-11-02 收紧为**三腿各 5% = 15%**，其余 85% 留给其它 key。
 
 三条腿（数值单源 = `gk_json_utils`）：
-  · `subagent_history`  → `HIST_MAX_BYTES`        = 墙 × 45% = 1152KB（bash `_HIST_MAX_BYTES` 为同值字面量）
-  · `task_pipeline`     → `TASK_PIPE_MAX_BYTES`   = 墙 × 20% = 512KB（`gk_task_gate` **import** 本常量）
-  · `ecc_findings`      → `ECC_MAX_BYTES`         = 墙 × 20% = 512KB
+  · `subagent_history`  → `HIST_MAX_BYTES`        = 墙 × 5% = 128KB（bash `_HIST_MAX_BYTES` 同值）
+  · `task_pipeline`     → `TASK_PIPE_MAX_BYTES`   = 墙 × 5% = 128KB（`gk_task_gate` **import** 本常量）
+  · `ecc_findings`      → `ECC_MAX_BYTES`         = 墙 × 5% = 128KB
 
 判据
 ====
 1. bash 字面量 == python 单源值（禁各自漂移）；
 2. `gk_task_gate` 的腿 == `gk_json_utils.TASK_PIPE_MAX_BYTES`（禁本地第二定义）；
-3. 每条腿 == 墙的固定比例（45% 或 20%）；
-4. **比例不变式**：三腿合计 ∈ [75%, 90%] 墙 —— 既不得「三腿满线仍只占零头」（失效），
-   也不得「三腿合法 ⟹ 整 state 违规」（余量至少 10%）；
+3. 每条腿 == 墙的固定比例（5%）；
+4. **有界不变式**：单腿 ≥ 一轮预算（否则归档抖动），单腿 ≤ 10% 墙、三腿合计 ≤ 30% 墙
+   （主 state 必须给其它 key 留 ≥70% 余量）；
 5. bash 侧保留 `GK_STATE_TRIM_KB` 覆盖口（运维显式改线，不需改源码）。
 """
 import os
@@ -58,19 +58,23 @@ def test_three_legs_match_single_source():
 
 
 def test_legs_are_wall_ratios():
-    """每条腿 = 墙的固定比例（history 45%，pipeline/findings 20%）。"""
+    """每条腿 = 墙的固定比例（2026-11-02 起各 5%）。"""
     wall = J.STATE_SIZE_WALL
-    assert J.HIST_MAX_BYTES == wall * 45 // 100, (J.HIST_MAX_BYTES, wall * 45 // 100)
-    assert J.TASK_PIPE_MAX_BYTES == wall * 20 // 100, (J.TASK_PIPE_MAX_BYTES, wall * 20 // 100)
-    assert J.ECC_MAX_BYTES == wall * 20 // 100
+    assert J.HIST_MAX_BYTES == wall * 5 // 100, (J.HIST_MAX_BYTES, wall * 5 // 100)
+    assert J.TASK_PIPE_MAX_BYTES == wall * 5 // 100, (J.TASK_PIPE_MAX_BYTES, wall * 5 // 100)
+    assert J.ECC_MAX_BYTES == wall * 5 // 100
 
 
-def test_legs_scale_is_not_structurally_dead():
-    """三腿合计须占墙 [75%, 90%]：太小 = 裁剪线失效；太大 = 三腿合法却撞墙。"""
+def test_legs_bounded_and_hold_one_round():
+    """单腿 ≥ 一轮（防归档抖动）；单腿 ≤10% 墙、三腿合计 ≤30% 墙（给其它 key 留余量）。"""
+    import gk_satellite as S
+    wall = J.STATE_SIZE_WALL
+    for leg in (J.HIST_MAX_BYTES, J.TASK_PIPE_MAX_BYTES, J.ECC_MAX_BYTES):
+        assert leg >= S.SAT_ROUND_BUDGET_BYTES, "腿小于一轮预算 ⟹ 归档抖动"
+        assert leg <= wall * 10 // 100, "单腿 > 10% 墙 ⟹ 多腿可撑爆 state"
     total = J.HIST_MAX_BYTES + J.TASK_PIPE_MAX_BYTES + J.ECC_MAX_BYTES
-    ratio = float(total) / J.STATE_SIZE_WALL
-    assert 0.75 <= ratio <= 0.90, (
-        "三腿合计 %.3f 墙（%d B / %d B）—— 应落在 [0.75, 0.90]" % (ratio, total, J.STATE_SIZE_WALL))
+    assert total <= wall * 30 // 100, (
+        "三腿合计 %d B > 30%% 墙（%d B）" % (total, wall * 30 // 100))
 
 
 def test_trim_line_env_override_documented():

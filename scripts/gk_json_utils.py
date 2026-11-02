@@ -524,21 +524,19 @@ def wall_level(used, wall=None) -> dict:
 # ⟹ 实测只报 `SINGLE_KEY_HEAVY: gate_data = 164,536 B (94.0%)`，**指不到**真重键
 # `gate_data.ecc_findings`（154,626 B）—— 这是**归因**盲区，非「无预警」。
 #
-# ── 三条腿按**墙的比例**定价（2026-11-01 owner 裁定「按比例放大」）──────────────
-# 背景：墙在 2026-10-16 已 ×10（262,144 → 2,621,440），但三腿仍在 10-26 被**统一拍成
-#   128KB 定值** ⟹ 相对墙从 31.25%/25%/25% 掉到 4.9%/4.9%/4.9%，裁剪线**结构性失效**
-#   （三腿全满也只占墙 14.6%，永远撞不到墙，等于没有裁剪线）。
-# 修法（2026-11-01 T7，计划 §2.3 容量对齐）：按「10 轮 × 6 臂」的并发口径重定价 ——
-#   旧 5/16 + 1/4 + 1/4 = 81.25%，但 60 臂 × 16,940B = 1,016,400B 只比 history 腿（819,200）
-#   多 24% ⟹ history 腿先撞、另两腿闲。现改 **45% / 20% / 20%**（合计 85%，留 15% 给其余字段）：
-#   · `subagent_history` → 墙 × 45% = 1,179,648（给 60 臂 16% 余量）
-#   · `task_pipeline`    → 墙 × 20% = 524,288（1/4 → 20%，让出 5% 给 history）
-#   · `ecc_findings`     → 墙 × 20% = 524,288
+# ── 三条腿按**墙的比例**定价（2026-11-02 owner 裁定「收紧 payload 配额」）──────────
+# 背景：墙在 2026-10-16 已 ×10（262,144 → 2,621,440）。2026-11-01 曾按「10 轮 × 6 臂」
+#   把三腿抬到 45%/20%/20%（合计 85%）；但 satellite 冷侧车/分片已承接 bulk ⟹ 该口径
+#   会把主 state 继续推向墙。2026-11-02 收紧为三腿各 5%、合计 15%，其余 85% 留给其它 key。
+#   卫星片 / 冷索引侧车已承接 bulk；history 一窗只需一轮（6 臂 ≈118KB）。
+#   · `subagent_history` → 墙 × 5% = 131,072（128KB，一轮 6 臂 × 16KB × 1.2 ≈ 118KB）
+#   · `task_pipeline`    → 墙 × 5% = 131,072（128KB）
+#   · `ecc_findings`     → 墙 × 5% = 131,072（128KB）
 # 单源：本模块 = 唯一数值源；`gk_task_gate` **import** 本常量，bash `_HIST_MAX_BYTES` 为
 #   同值字面量（bash 不可 import），漂移由 `test_gk_state_trim_lines.py` 逐值守。
-HIST_MAX_BYTES = STATE_SIZE_WALL * 45 // 100      # 1,179,648 = 1152KB（T7：60 臂 × 16,940B 的 16% 余量）
-TASK_PIPE_MAX_BYTES = STATE_SIZE_WALL * 20 // 100  # 524,288 = 512KB
-ECC_MAX_BYTES = TASK_PIPE_MAX_BYTES               # 524,288 = 512KB
+HIST_MAX_BYTES = STATE_SIZE_WALL * 5 // 100       # 131,072 = 128KB（一轮 6 臂 ≈118KB）
+TASK_PIPE_MAX_BYTES = STATE_SIZE_WALL * 5 // 100  # 131,072 = 128KB
+ECC_MAX_BYTES = TASK_PIPE_MAX_BYTES               # 131,072 = 128KB
 ECC_MAX_ENTRIES = 256
 ECC_MAX_OPEN = 96
 _ECC_WARN_RATIO = 0.8              # 单轴 used/cap 达此比例即 warn（先预警后撞墙）

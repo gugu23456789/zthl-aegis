@@ -108,10 +108,12 @@ def test_arm15c_cli_history_payload_holds_state_lock():
     src = CLI.read_text(encoding="utf-8")
     payload = _cli_history_payload(src)
     assert "subagent_history" in payload, "切出的载荷不含 `subagent_history` —— 锚失效，臂失去意义"
-    assert "state_lock('$STATE_FILE')" in payload, (
+    lock_tok = "state_lock(os.environ['GK_PY_STATE'])"
+    read_tok = "json.load(open(os.environ['GK_PY_STATE']"
+    assert lock_tok in payload, (
         "monitor 落库载荷未取 `state_lock` ⟹ 并发臂完成时读-改-写互相覆盖")
-    lock_at = payload.index("state_lock('$STATE_FILE')")
-    read_at = payload.index("json.load(open('$STATE_FILE'")
+    lock_at = payload.index(lock_tok)
+    read_at = payload.index(read_tok)
     assert read_at > lock_at, "载荷的状态读取在取锁**之前** ⟹ 锁未覆盖读，丢更新窗口仍在"
     assert "json.dump(d,open('$STATE_FILE'" not in payload, (
         "载荷仍用裸 `json.dump(...,STATE_FILE...)` 直写（非原子、绕开单一出纳）")

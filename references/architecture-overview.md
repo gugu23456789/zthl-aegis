@@ -21,7 +21,7 @@ updated: 2026-11-02
 | CLI 命令数 | 52 | `^_CMD_REG[` 计数 |
 | 红队站点 | 16 | `gk_chain.py` 的 `Step("RED-*")` |
 | 自检检查函数 | 37 | `gk_self_check.py` 的 `def check_*` |
-| references 入库 md | 46 | `git ls-files references/*.md`（顶层） |
+| references 入库 md | 47 | `git ls-files references/*.md`（顶层） |
 | 子代理角色 | 8 | `subagent_runner.ROLE_TOOLS` |
 | hook R0 门禁 | Gate R0.1–R0.17（17 个） | `pre_tool_hook.py` 的 `Gate R0.N` |
 | 红队向量 | 156 | `references/red-vectors.json` |
@@ -93,6 +93,7 @@ spz-gatekeeper-r-sequence/
 │   ├── e1e4-evaluator-matrix.md
 │   ├── flywheel-implementation-plan.md
 │   ├── superagent-comparison.md
+│   ├── research-408.md
 │   ├── ecc-write-spec.md
 │   ├── ecc-analysis-findings.md
 │   ├── ecc-finding-20260612-flywheel.md

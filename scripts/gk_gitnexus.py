@@ -259,7 +259,7 @@ def _cache_get(key: str) -> str | None:
 # 两条修法：
 #   ① spawn 时**独立进程组**（POSIX `start_new_session` / Windows `CREATE_NEW_PROCESS_GROUP`），
 #      超时走 `killpg` / `taskkill /T` **整棵树**；
-#   ② pidfile 记账（`~/.gatekeeper/gitnexus-workers.json`）：下次任何一次 spawn 前先 `reap()`，
+#   ② pidfile 记账（`~/.gatekeeper/gitnexus-workers.json`）：下次任何一次 spawn 前先 `reap_workers()`，
 #      把上一次被外部 kill 留下的孤儿收掉（外部 kill 场景下这是唯一可行的兜底）。
 _WORKER_PIDFILE = Path(os.path.expanduser("~")) / ".gatekeeper" / "gitnexus-workers.json"
 

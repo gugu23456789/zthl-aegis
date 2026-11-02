@@ -143,6 +143,12 @@ def test_reclaim_holds_shard_written_by_append(tmp_path):
     try:
         st = _mkstate(tmp_path)
         SAT.append(st, "pipeline", [{"id": 1}], batch_id="b1", arm="A")
+        # 2026-11-02：append 同时写侧车（冷索引事实源）；本臂要把内联叶改成过期，
+        #   须先移除侧车，否则 `index_entries` 侧车同键优先、仍读到 append 的新鲜叶。
+        try:
+            os.remove(SAT.sidecar_path(st))
+        except OSError:
+            pass
         d = json.load(open(st, encoding="utf-8"))
         d.setdefault("gate_data", {})["satellite_index"] = {
             "b1": {"A": {"kind": "pipeline", "arm": "A", "ttl_s": 60,

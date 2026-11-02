@@ -8,10 +8,10 @@ monitor --align 的升格实现：0 API、纯静态扫描、JSON 检查项输出
 2026-08-28 合并 audit --docs 文档审查引擎（gk_audit_docs.check_docs 的 C1-C5
 7 项检查全部吸纳），统一 doc-align 为文档一致性 + 漂移的单一入口。
 
-检查器（28 项 = run_all 静态注册数的**唯一事实源**；`comment_code_mismatch` 双向判等，
+检查器（30 项 = run_all 静态注册数的**唯一事实源**；`comment_code_mismatch` 双向判等，
        见该检查器 ④。audit_docs 的 7 项经 `for r in check_audit_docs_merged()` **一次
-       append** 展开 ⟹ 静态计数 28 = 下表 1–28 行中 audit_docs 的 7 行折为 1 个单位，
-       另含 2026-11-01 新增的 `gk_facts` 事实块比对）:
+       append** 展开 ⟹ 静态计数 30 = 下表 1–28 行中 audit_docs 的 7 行折为 1 个单位，
+       另含 2 项后加检查：`skill_duty_pointer`、`gk_facts` 事实块比对）:
  1. papers_framework_drift   — 论文框架 vs 当前架构事实（2026-10-27 起一篇已归档；
                                在册篇目建事实清单，部分篇目在 SKIP 内 ⟹ 检查面 = 在册且未 skip 的篇目）
  2. cli_protocol_commands    — references/cli-protocol.md 命令数 vs gatekeeper-cli.sh _CMD_REG
@@ -112,7 +112,12 @@ def check_papers_framework_drift(papers_dir: str) -> dict:
     if fn is None:
         return {"check": "papers_framework_drift", "status": "SKIP",
                 "detail": "论文事实清单未随包（私有面 gk_paper_facts.py 不存在）— 跳过"}
-    return fn(papers_dir)
+    r = fn(papers_dir)
+    if r.get("status") == "WARN" and "无在册篇目" in str(r.get("detail", "")):
+        # 无公开篇目 = 无可核对项，不是缺陷；发布门按 SKIP 计（不假绿也不假红）。
+        r.update(status="SKIP",
+                 detail=str(r.get("detail", "")) + "（无可核对项 ⟹ SKIP）")
+    return r
 
 
 # ── 检查器 2: CLI 命令数 ─────────────────────────────────────────────
@@ -1725,7 +1730,8 @@ def check_gk_facts(skill_dir: str) -> dict:
                 "detail": "事实块比对异常: %s" % type(e).__name__}
 
 
-def run_all(skill_dir: str, papers_dir: str, review_skill_dir: str) -> dict:
+def run_all(skill_dir: str, papers_dir: str, review_skill_dir: str,
+            release: bool = False) -> dict:
     issues = 0
     checks = []
 
@@ -1844,15 +1850,26 @@ def run_all(skill_dir: str, papers_dir: str, review_skill_dir: str) -> dict:
 
     # 2026-09-13 缺陷1 实装: anchor_existence — 文档 path:line 锚存在性检查
     # （第三轮质询实证行号手打漂移 → 审计层假绿；WARN 不阻断）
-    checks.append(check_anchor_existence(skill_dir))
+    # 2026-11-02（发布门）：`release=True` 时只扫公开 references/；docs/plans 不进公开导出面，
+    #   其历史锚漂移不应阻断发布（完整内部检查仍走默认 `doc-align`）。
+    checks.append(check_anchor_existence(skill_dir,
+                                         docs_subdir=("references" if release else "docs/plans")))
     # `ECC-PLAND`（2026-10-13 落刀）：计划↔实现漂移检测器（挂 doc-align，**不新增 CLI 命令**）
-    checks.append(check_plan_landing_drift(skill_dir))
+    if release:
+        checks.append({"check": "plan_landing_drift", "status": "SKIP",
+                       "detail": "release 模式：docs/plans 不在公开导出面，跳过历史计划漂移"})
+    else:
+        checks.append(check_plan_landing_drift(skill_dir))
 
     # 2026-10-28（对账）：subagent 报告 ↔ 派发账本（近期未入账 ⟹ FAIL；存量基线冻结 ⟹ WARN）
-    r = check_subagent_unlogged(skill_dir)
-    if r["status"] == "FAIL":
-        issues += 1
-    checks.append(r)
+    if release:
+        checks.append({"check": "subagent_unlogged", "status": "SKIP",
+                       "detail": "release 模式：docs/analysis/subagent 不在公开导出面，跳过"})
+    else:
+        r = check_subagent_unlogged(skill_dir)
+        if r["status"] == "FAIL":
+            issues += 1
+        checks.append(r)
 
     # 2026-10-31：`advance --force` 教学漂移（WARN 不阻断；stage-6-r6-flow 自相矛盾的防复发）
     checks.append(check_force_teaching(skill_dir))
@@ -2442,6 +2459,7 @@ def main(argv=None):
     args = _argv  # argv 注入统一源（param → sys.argv[1:]），防双读 sys.argv 形态漂移
     summary = False
     strict = False
+    release = False
     i = 0
     while i < len(args):
         if args[i] == "--skill-dir" and i + 1 < len(args):
@@ -2452,6 +2470,8 @@ def main(argv=None):
             review_skill_dir = args[i + 1]; i += 2
         elif args[i] == "--summary":
             summary = True; i += 1
+        elif args[i] == "--release":
+            release = True; i += 1
         elif args[i] == "--strict":
             # 2026-10-28（消灭局限）：WARN 纳入失败判据。旧行为只数 FAIL ⟹
             # `issues=0` 可以同时伴随 151 条锚漂移 / 17 条计划漂移（实测），审计层假绿。
@@ -2493,7 +2513,7 @@ def main(argv=None):
                     review_skill_dir = _c
                     break
 
-    result = run_all(skill_dir, papers_dir, review_skill_dir)
+    result = run_all(skill_dir, papers_dir, review_skill_dir, release=release)
     if summary:
         print(summarize(result))
     else:

@@ -20,6 +20,13 @@
 - 随包分发的第三方组件（当前为 Apache ECharts 5.6.0）的许可见
   [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) 与 [`THIRD_PARTY_LICENSES/`](THIRD_PARTY_LICENSES/)。
 
+### 个人独立作品声明
+
+本仓是 **Pu Junhan** 的个人独立作品，仅代表个人观点与技术实践，不代表任何雇主、客户或组织的立场。
+开发过程中未使用任何雇主/客户的专有代码、机密信息或资源；第三方依赖与参考实现均按其许可证使用，
+并在 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) 与 [`references/`](references/) 中标注。
+本仓不构成商业承诺、法律意见，也不构成对任何第三方系统的授权。
+
 ### 它做什么
 
 - **阶段门**：工作沿显式阶段推进（`discover` → `guard-edit` → `advance`），越阶段编辑是**拒绝**，
@@ -28,6 +35,30 @@
 - **审计与 finding**：缺陷带 id、关闭判据与证据链登记；关闭必须引用工具可验证的来源。
 - **状态压缩**：长寿命 state 拆成小的元数据头 + append-only 卫星片，每片单写者、读侧做并集。
 - **交叉审查**：评审与计划质询走受约束的子代理通道（token/条数预算），而不是不受约束的对话调用。
+
+### 元数据路由（DAG）
+
+主 state 的元数据路由是**单向 DAG**：写者只经网关落主 state；卫星写者先落片/侧车，再以
+manifest/热叶汇入；读面只读，压缩器只换代。这里没有「读面回写 state」的环。
+
+```mermaid
+flowchart LR
+  W["写者<br/>CLI · satellite · finding"] --> G["update_state<br/>锁 + checksum + 原子替换"]
+  G --> S["主 state<br/>权威元数据 + 热索引（每 kind ≤6 叶）"]
+  W --> P["卫星片<br/>payload JSONL"]
+  W --> C["冷索引侧车<br/>satellite-index.jsonl（append-only）"]
+  C --> H["热叶 / manifest"]
+  H --> S
+  P --> R["读面 / 压缩"]
+  C --> R
+  R -. "只读" .-> P
+  R -. "只读" .-> C
+  K["压缩器"] -->|"新代"| C
+  K -->|"manifest 交换"| S
+```
+
+**无环保证**：`写 → 网关 → state` 与 `片/侧车 → 压缩 → manifest` 两条支路只在 state 汇合；
+读面没有回写边。**崩溃安全**：先片/侧车、后 manifest；交换前的旧状态始终完整。
 
 ### 目录结构
 
@@ -269,6 +300,12 @@ python -m pytest scripts/ -q
 
 测试是红先的：修复必须带一个在上一提交上会失败的测试。性能敏感套件（WASM、长上下文探针）
 在工具链缺失时标记跳过。
+
+发布前文档门（事实块 + 结构对齐 + 声明↔代码）：
+
+```bash
+python scripts/gk_doc_release.py --strict
+```
 
 ### 安全姿态
 

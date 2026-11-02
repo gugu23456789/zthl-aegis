@@ -131,6 +131,7 @@ _ROUTES = {
 _CHECKLISTS = {
     "ECO-RESEARCH": ["discover (同步状态)", "state (检查当前阶段)", "self-check (环境完整性检查)",
                      "research-prelude: 问题分解 → 外部检索（按需）→ 证据清单（可跳过：GK_SKIP_RESEARCH_PRELUDE=1）",
+                     "research-408（默认 auto；GK_RESEARCH_FRAME=408|generic 覆盖；advisory 不阻塞，见 references/research-408.md）",
                      "monitor --subagent 分析参考项目", "gitnexus context (代码结构360度视图)", "read 参考项目关键文件"],
     "ECO-EDIT": ["guard-edit <file> (编辑权限检查)", "pre-tool-check (门禁验证)", "pytest (测试通过后再 commit)"],
     "ECO-VERIFY": ["self-check (env/gitnexus/key/tests)", "context --update (子agent上下文更新)", "reflect (反思当前进展)", "audit --crossfull (统一启动器: 全量交叉审查一条命令)"],

@@ -286,6 +286,7 @@ dead-code-multilang:
 - pip install zizmor==1.26.0
 - zizmor --format plain --min-severity <high|medium> .github/workflows/   # (可配置) 参考: gatekeeper=medium, spz2glb=high
 - actionlint（可用 gh CLI 免 Go 工具链）
+- python scripts/gk_ci_security_lint.py --json   # 最小权限/SHA pin/persist-credentials/timeout/run 注入
 # ── 脚本危险命令静态扫描（D 类 T1059，2026-08-15：脚本内部命令绕过命令字符串级 gate）──
 - shell: bash
   run: |
@@ -352,8 +353,46 @@ dead-code-multilang:
 - **脚本内危险命令须静态扫描**（D 类 T1059，2026-08-15：`bash <script>` 内部 rm -rf 可绕过命令字符串级 gate——E2E 自删事故；静态扫描=写时/CI 主防线，运行时 R0.3 兜底）
 - npm audit ENOLOCK 假绿（`bash -e` + continue-on-error）——测试必须真实执行
 - http.server 分步 trap kill——server + 测试同一步骤
-- `persist-credentials: false` + action SHA256 pin（供应链）
+- `persist-credentials: false` + action **40 位 commit SHA** pin（供应链；tag 会漂移）
 - **npm install 必须 `--ignore-scripts`**（防 preinstall/postinstall 钩子投毒——ChainDrop 事件 2026-08-04：keyv@6.0.0 等 1300+ 包带 `"preinstall":"node setup.mjs"`，npm install 即触发窃密器；浏览器等二进制由显式 `npx playwright install` 下载，不受影响）
-- zizmor `|| true` 非阻塞 = 无防御
+- zizmor `|| true` 非阻塞 = 无防御；安全 job 不得 `continue-on-error: true`
+- 发布 job 必须有 `attest-build-provenance`（`id-token: write` / `attestations: write`）；`environment: release` 可选——**单人维护不要配 required reviewers**，GitHub 不允许触发者自审，会永久等待
 - Pages 部署：github-pages 环境 deployment branch 白名单漏加 main → 部署失败
 - GitCode 环境无 GitHub Actions 等效语义，模板不可直接照搬（需移植）
+
+## 9. 安全防护基线（2026-11-02）
+
+**必须全部满足**（本地门 = `python scripts/gk_ci_security_lint.py --json`）：
+
+| 项 | 要求 | 原因 |
+|:--|:--|:--|
+| 最小权限 | 顶层 `permissions: { contents: read }`；写权限只给发布 job | 泄露 token 的爆炸半径 |
+| Action pin | `uses: owner/repo@<40-hex SHA>`，禁止 `@v4` 浮动 tag | tag 可被重指，SHA 不可变 |
+| 凭据隔离 | 每个 checkout `persist-credentials: false` | 防后续步骤读取 git 凭据 |
+| 超时 | 每个 job `timeout-minutes` | 防挂起/资源耗尽 |
+| 安全门 | security/audit job 不得 `continue-on-error` / `|| true` | 假绿 = 无防御 |
+| 注入 | `inputs.*` / 不可信 `github.event.*` 不得直接进 `run:`，经 `env:` 中转 | 脚本注入 |
+| 发布证明 | `actions/attest-build-provenance`；`environment: release` 可选，但单人维护不要配 required reviewers | 供应链可核验，且不自锁 |
+| PR 边界 | `pull_request_target` 不得 checkout PR head | 不可信代码 + 写 token |
+
+```yaml
+permissions: { contents: read }
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    # environment: release  # 可选；单人维护不要配 required reviewers（会自锁）
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@<40-hex SHA>   # v4
+        with: { persist-credentials: false, fetch-depth: 0 }
+      - uses: actions/attest-build-provenance@<40-hex SHA>  # v2
+        with: { subject-path: dist/*.zip }
+```
+
+> 发布包模板的正文仍以 §3–§8 为准；本节是**安全最低线**，新增 workflow 必须过
+> `gk_ci_security_lint.py` 才允许进 CI。

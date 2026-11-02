@@ -17,13 +17,15 @@
     "gitnexus context/impact called on key symbols",
     "cross_review_pending or cross_review_completed",
     "ecc_impact_file_created or ecc_finding_file_created",
-    "research prelude: problem decomposition + evidence list (skippable via GK_SKIP_RESEARCH_PRELUDE=1)"
+    "research prelude: problem decomposition + evidence list (skippable via GK_SKIP_RESEARCH_PRELUDE=1)",
+    "optional 408 frame (default auto; GK_RESEARCH_FRAME=408|generic overrides): four axes + eight-section report (see references/research-408.md); advisory only, never blocks"
   ],
   "must_not": [
     "skip_reference_reading",
     "advance_without_understanding_upstream_changes",
     "proceed_without_identifying_impact_targets",
-    "block_edit_on_skipped_prelude"
+    "block_edit_on_skipped_prelude",
+    "block_edit_on_missing_research_frame"
   ],
   "structural_checks": [
     {

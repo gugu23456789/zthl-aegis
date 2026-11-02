@@ -50,7 +50,8 @@ from pathlib import Path
 # R2（2026-09-22）：state 序列化单一事实源 —— 勿再内联 json.dump 直写 state。
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from gk_json_utils import (dump_state, state_lock, ser_bytes,  # noqa: E402
-                           state_size_report, STATE_SIZE_WALL, STATE_SIZE_RESERVE)
+                           state_size_report, STATE_SIZE_WALL, STATE_SIZE_RESERVE,
+                           WALL_TRIM_PCT)
 
 DEFAULT_SKILL = Path(__file__).resolve().parent.parent
 
@@ -479,7 +480,10 @@ def _write_checksum(state_file: str) -> None:
         if not s:
             return
         gd = json.dumps(s.get("gate_data", {}), sort_keys=True)
-        s["_checksum"] = hashlib.sha256(gd.encode()).hexdigest()[:16]
+        want = hashlib.sha256(gd.encode()).hexdigest()[:16]
+        if s.get("_checksum") == want:
+            return                       # 已正确 ⟹ 零写（防 >95% 水位的等量写被拦）
+        s["_checksum"] = want
         dump_state(state_file, s)
 
 
@@ -505,6 +509,12 @@ def save_findings(state_file: str, findings: list) -> None:
         s = _read_state(state_file)
         gd = s.setdefault("gate_data", {})
         gd["ecc_findings"] = findings
+        # 2026-11-02（写崩修复）：checksum 与台账**同一次写**落盘。
+        #   原实现先 `save_findings` 再 `_write_checksum` 二次写；后者只改 checksum，
+        #   体积不缩 ⟹ 在 >95% 水位被 `_wall_guard` 拦（实测 archive_closed 收缩到
+        #   2,600,777 B 后，第二次写 2,600,811 B 被拒）⟹ 修复动作被自己的收尾写阻断。
+        s["_checksum"] = hashlib.sha256(
+            json.dumps(gd, sort_keys=True).encode()).hexdigest()[:16]
         dump_state(state_file, s)
 
 
@@ -2454,9 +2464,11 @@ def archive_closed(state_file: str, target_total: int = 0, keep_closed: int = 0,
     定价、无人汇总 ⟹ 它膨胀即吃掉他人预留（见 runtime 子计划 §4.13.9-E）。
 
     语义（四条都可机检，判据见 `test_gk_finding.py::TestArchiveClosedQuota`）：
-      - **配额由汇总预算派生**（不另拍数）：`target_total`（缺省 = `STATE_SIZE_WALL −
-        STATE_SIZE_RESERVE`）减去**其余分量实测字节**（≈ `canon_bytes − ser_bytes(findings)`）
+      - **配额由汇总预算派生**（不另拍数）：`target_total`（缺省 = **`WALL_TRIM_PCT` 90% 水位**，
+        不是 `WALL − RESERVE`）减去**其余分量实测字节**（≈ `canon_bytes − ser_bytes(findings)`）
         ⟹ 得 `ecc_findings` 可用预算；`keep_closed` = 至少保留的 closed 条数。
+        取 90% 而非 99.4%：95% 是**写入口拦截线**，若只裁到 `WALL − RESERVE`，归档虽成功但
+        state 仍在 95% 以上 ⟹ 下一次普通写立刻被墙闸拦 ⟹ 修复动作没有真正闭环。
       - **只动 `closed`**：`open`/`fixed`/`rejected` **一律不碰**（未闭环/待复核 = 治理信息，
         不得因体积被裁）。
       - 从**最旧** closed 起移出（`closed_at` → `last_modified` → `first_added` 回退），直到
@@ -2472,7 +2484,7 @@ def archive_closed(state_file: str, target_total: int = 0, keep_closed: int = 0,
         _gate_writable(state_file)
     findings = load_findings(state_file)
     rep = state_size_report(state_file)
-    budget = (target_total or (STATE_SIZE_WALL - STATE_SIZE_RESERVE)) \
+    budget = (target_total or (STATE_SIZE_WALL * WALL_TRIM_PCT // 100)) \
         - (rep.get("canon_bytes", 0) - ser_bytes(findings))
     cand = sorted((f for f in findings if f.get("status") == "closed"),
                   key=lambda f: str(f.get("closed_at") or f.get("last_modified")

@@ -285,15 +285,15 @@ def render_state_wall(d: dict) -> str:
         "拦截的两条边界：**收缩写放行**（新体积 < 磁盘现有体积 ⟹ 裁剪正在生效，不自锁）；",
         "逃生舱 `GK_STATE_WALL_BLOCK=0`（显式放行，留 stderr 痕迹）。",
         "",
-        "**三条腿**（各自独立的裁剪线，按墙的比例定价，合计 85%，留 15% 给其余字段）：",
+        "**三条腿**（各自独立的裁剪线，按墙的比例定价，各 5%、合计 15%，留 85% 给其余字段）：",
         "",
         "| 腿 | 落点 | 比例 | 值 | 越线动作 |",
         "|:--|:--|:--|:--|:--|",
-        "| `subagent_history` | `gatekeeper-cli.sh` `_HIST_MAX_BYTES` | 45%% | %d KB | 最旧条目出窗 → 落 history 片 |"
+        "| `subagent_history` | `gatekeeper-cli.sh` `_HIST_MAX_BYTES` | 5%% | %d KB | 最旧条目出窗 → 落 history 片 |"
         % (d["hist"] // 1024),
-        "| `task_pipeline` | `gk_json_utils.TASK_PIPE_MAX_BYTES` | 20%% | %d KB | 已决条目出窗 → 落 pipeline 片 |"
+        "| `task_pipeline` | `gk_json_utils.TASK_PIPE_MAX_BYTES` | 5%% | %d KB | 已决条目出窗 → 落 pipeline 片 |"
         % (d["pipe"] // 1024),
-        "| `ecc_findings` | `gk_json_utils.ECC_MAX_BYTES` | 20%% | %d KB | closed 可归档；open 超 `ECC_MAX_OPEN(%d)` 就地溢出 |"
+        "| `ecc_findings` | `gk_json_utils.ECC_MAX_BYTES` | 5%% | %d KB | closed 可归档；open 超 `ECC_MAX_OPEN(%d)` 就地溢出 |"
         % (d["ecc"] // 1024, d["open"]),
         "",
         "另两个计数轴：`ECC_MAX_ENTRIES=%d`、`ECC_MAX_OPEN=%d`。运维覆盖口：`GK_STATE_TRIM_KB=<KB>`"

@@ -368,7 +368,8 @@ def cmd_del_top(state_path: str, key: str) -> dict:
         del data[k]
         w = gk_state._write_state(data, state_path)
     if not w.get("ok", False):
-        return {"ok": False, "error": w.get("error", "state 写入失败")}
+        return {"ok": False, "error": w.get("error", "state 写入失败"),
+                "detail": w.get("detail", "")}
     return {"ok": True, "deleted": True, "key": k, "checksum": w.get("checksum")}
 
 
@@ -425,7 +426,8 @@ def cmd_worktrees_extra(state_path: str, op: str, path: str,
         data["worktrees_extra"] = new
         w = gk_state._write_state(data, state_path)
         if not w.get("ok", False):
-            return {"ok": False, "error": w.get("error", "state 写入失败")}
+            return {"ok": False, "error": w.get("error", "state 写入失败"),
+                "detail": w.get("detail", "")}
         return {"ok": True, "changed": True, "op": op, "path": p,
                 "worktrees_extra": new, "checksum": w.get("checksum")}
 
@@ -501,7 +503,8 @@ def cmd_wt_domain(state_path: str, op: str, token: str, path: str,
         gd["wt_domain"] = bucket
         w = gk_state._write_state(data, state_path)
         if not w.get("ok", False):
-            return {"ok": False, "error": w.get("error", "state 写入失败")}
+            return {"ok": False, "error": w.get("error", "state 写入失败"),
+                "detail": w.get("detail", "")}
         return {"ok": True, "changed": True, "op": op, "token": tok, "path": p,
                 "wt_domain": new, "checksum": w.get("checksum")}
 
@@ -774,7 +777,8 @@ def cmd_set_nested(state_path: str, path: str, value_json: str) -> dict:
         parent[leaf] = val
         w = gk_state._write_state(data, state_path)
     if not w.get("ok", False):
-        return {"ok": False, "error": w.get("error", "state 写入失败")}
+        return {"ok": False, "error": w.get("error", "state 写入失败"),
+                "detail": w.get("detail", "")}
     return {"ok": True, "path": ".".join(segs), "value": val, "checksum": w.get("checksum")}
 
 
@@ -811,7 +815,8 @@ def cmd_append_list(state_path: str, path: str, item_json: str) -> dict:
         n = len(lst)
         w = gk_state._write_state(data, state_path)
     if not w.get("ok", False):
-        return {"ok": False, "error": w.get("error", "state 写入失败")}
+        return {"ok": False, "error": w.get("error", "state 写入失败"),
+                "detail": w.get("detail", "")}
     return {"ok": True, "path": ".".join(segs), "appended": item, "len": n,
             "checksum": w.get("checksum")}
 

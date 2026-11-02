@@ -132,8 +132,14 @@ def test_arm31_ember_burn_archives_over_budget_state(tmp_path):
     st = d.get("status") or {}
     assert st.get("archived", 0) > 0, f"越线却零归档：{out[:600]}"
     after = gju.state_size_report(str(sb / ".gatekeeper.state"))
-    assert after["canon_bytes"] <= WALL - RESERVE, (
-        "归档后仍在墙外：%d > %d" % (after["canon_bytes"], WALL - RESERVE))
+    trim_line = WALL * gju.WALL_TRIM_PCT // 100
+    assert after["canon_bytes"] <= trim_line, (
+        "归档后仍在 90%% 裁剪线外：%d > %d" % (after["canon_bytes"], trim_line))
+    # 闭环判据：归档后普通写必须**不再**被 95% 墙闸拦（否则 burn 只清了一次，state 仍锁死）。
+    probe = gju.update_state(str(sb / ".gatekeeper.state"),
+                             lambda d: d.setdefault("gate_data", {}).__setitem__(
+                                 "_post_burn_probe", 1))
+    assert probe.get("ok"), "burn 后普通写仍被拒：%r" % (probe,)
     arch = sb / ".gatekeeper.state.finding-archive.jsonl"
     assert arch.is_file(), "旁挂余烬档未落 ⟹ 归档不可回溯"
     rows = [ln for ln in arch.read_text(encoding="utf-8").splitlines() if ln.strip()]

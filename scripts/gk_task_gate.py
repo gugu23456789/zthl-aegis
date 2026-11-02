@@ -89,8 +89,8 @@ _TASK_PIPE_RESOLVED = ("approved", "fix_required", "dropped")
 # F-REV-51 复发（2026-10-04）：计数上限不防 262,144 **总墙**（每条 decided 含 full_task ≈ 数 KB）。
 # 实测 state 撞 268,056 B ⟹ dispatch 被 F-REV-51 拦。补**字节**上限 + 溢出归档
 # （对齐 <state>.history-archive.jsonl 先例：append-only、可回溯、不静默丢弃）。
-# 2026-11-01（owner 裁定「三条腿按墙比例放大」）：数值**不再本地定义** —— 单源 =
-# `gk_json_utils.TASK_PIPE_MAX_BYTES`（= 墙 × 1/4 = 640KB，沿用墙 ×10 之前的老比例）。
+# 2026-11-02（owner 裁定「收紧 payload 配额」）：数值**不再本地定义** —— 单源 =
+# `gk_json_utils.TASK_PIPE_MAX_BYTES`（= 墙 × 5% = 128KB，与 history/findings 同比例）。
 # 漂移由 `test_gk_state_trim_lines.py` 逐值守。
 _TASK_PIPE_ARCHIVE_SUFFIX = gk_satellite.KIND_SUFFIX["pipeline"]  # 单源 = 中枢（禁第二份字面量）
 

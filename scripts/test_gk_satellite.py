@@ -129,6 +129,85 @@ def test_append_in_tx_does_not_write_state(tmp_path):
     r = SAT.append(st, "pipeline", [{"x": 1}], batch_id="bx", arm="A", gd=gd)
     assert r.get("ok") and gd["satellite_index"]["bx"]["A"]["records"] == 1, r
     assert open(st, encoding="utf-8").read() == before, "in-tx append 竟写了 state（应零 state 写）"
+    assert len(SAT._read_sidecar(st)) == 1, "in-tx append 未落冷索引侧车"
+
+
+def test_inline_index_capped_and_spilled_to_sidecar(tmp_path):
+    """主 state 内联索引按 kind 只留最近 `INLINE_LEAVES_MAX_PER_KIND` 叶，旧叶进侧车。"""
+    import gk_satellite as SAT
+    st = _mkstate(tmp_path)
+    for i in range(8):
+        r = SAT.append(st, "pipeline", [{"i": i}], batch_id="b", arm="A%d" % i,
+                       ts="2026-11-02T00:00:%02d+00:00" % i)
+        assert r.get("ok"), r
+    inline = json.load(open(st, encoding="utf-8"))["gate_data"]["satellite_index"]["b"]
+    assert len(inline) == SAT.INLINE_LEAVES_MAX_PER_KIND, inline
+    assert set(inline) == {"A2", "A3", "A4", "A5", "A6", "A7"}, "未按最旧优先溢出"
+    assert len(SAT._read_sidecar(st)) == 8
+    assert set(SAT.index_entries(st, "b")) == {"A%d" % i for i in range(8)}
+
+
+def test_gc_applies_spill_and_keeps_union(tmp_path):
+    """`gc --dry-run` 报 would_spill；apply 后内联 ≤ cap、并集不丢。"""
+    import gk_satellite as SAT
+    st = _mkstate(tmp_path)
+    shard = SAT.shard_path(st, "pipeline")
+    open(shard, "a", encoding="utf-8").write('{"x":1}\n')
+    d = json.load(open(st, encoding="utf-8"))
+    d["gate_data"]["satellite_index"] = {"b": {
+        "A%d" % i: {"kind": "pipeline", "arm": "A%d" % i, "records": 1,
+                    "last_ts": "2026-11-02T00:00:%02d+00:00" % i}
+        for i in range(8)}}
+    open(st, "w", encoding="utf-8").write(json.dumps(d, ensure_ascii=False))
+    dry = SAT.gc_index(st, dry_run=True)
+    assert len(dry["would_spill"]) == 2, dry
+    out = SAT.gc_index(st, dry_run=False)
+    assert out.get("ok") and out.get("spilled") == 2, out
+    assert out.get("leaves_after") == 8, "leaves_after 须计叶子数（非 batch 数）"
+    inline = json.load(open(st, encoding="utf-8"))["gate_data"]["satellite_index"]["b"]
+    assert len(inline) == SAT.INLINE_LEAVES_MAX_PER_KIND
+    assert len(SAT.index_entries(st, "b")) == 8
+
+
+def test_reclaim_sidecar_only_leaf_does_not_recreate_inline(tmp_path):
+    """侧车冷叶打墓碑时不得为它重建内联（否则外置又长回主 state）。"""
+    import gk_satellite as SAT
+    st = _mkstate(tmp_path)
+    leaf = {"kind": "pipeline", "arm": "A", "records": 1, "ttl_s": 60,
+            "first_ts": "2000-01-01T00:00:00+00:00",
+            "last_ts": "2000-01-01T00:00:00+00:00"}
+    SAT._sidecar_write(st, [{"op": "put", "batch_id": "b", "arm": "A",
+                             "leaf": leaf, "ts": "2026-11-02T00:00:00+00:00"}])
+    r = SAT.reclaim(st, now=1_600_000_000.0, dry_run=False)
+    assert r.get("ok") and r.get("tombstoned"), r
+    d = json.load(open(st, encoding="utf-8"))
+    assert not (d.get("gate_data") or {}).get("satellite_index"), "侧车叶被重建进内联"
+    assert SAT.index_entries(st, "b")["A"].get("reclaimed_ts")
+
+
+def test_append_skips_inline_on_wall_block(tmp_path, monkeypatch):
+    """>95% 水位：热索引写被拦 ⟹ 侧车已落 ⟹ `ok:true` + inline_skipped（不阻断修复写）。"""
+    import gk_satellite as SAT
+    import gk_json_utils as JU
+    st = _mkstate(tmp_path)
+    d = json.load(open(st, encoding="utf-8"))
+    d["gate_data"]["pad"] = "x" * 2000
+    open(st, "w", encoding="utf-8").write(json.dumps(d, ensure_ascii=False))
+    monkeypatch.setattr(JU, "STATE_SIZE_WALL", 1000)   # 95% = 950 B，必拦
+    r = SAT.append(st, "pipeline", [{"x": 1}], batch_id="b", arm="A")
+    assert r.get("ok") and r.get("inline_skipped"), r
+    assert "STATE_WALL_BLOCK" in r.get("leaf_error", "")
+    assert set(SAT.index_entries(st, "b")) == {"A"}, "侧车未兜住热索引跳过"
+
+
+def test_sidecar_ignores_torn_line(tmp_path):
+    """侧车 append-only：半行/坏行不得毁掉已提交索引。"""
+    import gk_satellite as SAT
+    st = _mkstate(tmp_path)
+    assert SAT.append(st, "pipeline", [{"x": 1}], batch_id="b", arm="A").get("ok")
+    with open(SAT.sidecar_path(st), "a", encoding="utf-8") as f:
+        f.write("{broken\n")
+    assert set(SAT.index_entries(st, "b")) == {"A"}
 
 
 def test_converge_cli_history_segment_calls_center():
@@ -170,7 +249,11 @@ def test_converge_cli_history_registers_index_e2e(tmp_path):
     # 裁剪线用逃生舱**显式钉死**（2026-11-01 三腿按墙比例放大后默认 800KB ⟹ 90KB 夹具
     # 不再触发出窗；本臂要验的是「出窗即落片+登记索引」通路，与默认值无关）。
     env = dict(os.environ, GK_TASK="t", GK_HMAC_VALID="skip", GK_STATE_TRIM_KB="64",
-               GK_OUTPUT_FILE=str(out), GK_REPORT_FILE=str(tmp_path / "sub-1.md"))
+               GK_OUTPUT_FILE=str(out), GK_REPORT_FILE=str(tmp_path / "sub-1.md"),
+               # 落库段 body 直接读 `os.environ['GK_PY_SCRIPTS'/'GK_PY_STATE']`
+               # （CLI 平时在 1762 行注入，测试绕过 CLI 入口 ⟹ 须补）
+               GK_PY_SCRIPTS=_slash(CLI.parent / "scripts"),
+               GK_PY_STATE=_slash(state))
     r = subprocess.run([sys.executable, "-c", body], input=json.dumps(ecc),
                        capture_output=True, text=True, env=env, timeout=90)
     assert r.returncode == 0, (r.returncode, r.stderr[-600:])

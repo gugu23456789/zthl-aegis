@@ -9,7 +9,7 @@ Citation discipline:
 - Historical line numbers are not kept in the public tree.
 
 <!-- GK-REFS:START（由 scripts/gk_docgen_facts.py 生成，勿手改） -->
-> 公开面共 **23** 份文档（本索引自动生成；出包范围 = `oss-export-whitelist.json`）。
+> 公开面共 **24** 份文档（本索引自动生成；出包范围 = `oss-export-whitelist.json`）。
 
 ### 1. Architecture and routing
 
@@ -58,6 +58,12 @@ Citation discipline:
 | [sequence-node-safety-net-template.md](sequence-node-safety-net-template.md) | 序列节点安全网模板（Sequence-Node Safety Net Template） |
 | [standard-maintenance-module.md](standard-maintenance-module.md) | 标准维护模块（自愈层） |
 | [wasm-engineering-template.md](wasm-engineering-template.md) | WASM 工程标准模板（通用） |
+
+### 9. Other
+
+| Document | Purpose |
+|:--|:--|
+| [research-408.md](research-408.md) | Research 408 — 计算机 408 四轴优化分析 |
 
 <!-- GK-REFS:END -->
 

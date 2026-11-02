@@ -288,7 +288,7 @@ def check_state_file(state_path: str, skill_dir: str = _SKILL_DIR) -> dict:
     #    原实现仅查 git status，缺 push 历史验证，手写声明可绕过)
     #
     # 2026-10-29（E22，A′ 续）：**按生命周期收窄产出范围**。该字段唯一写方是 STAGE_2 的
-    #   `cmd_state_update` ⟹ standing / analysis 项目（ECO-* / ECC-* / IDLE）结构性不声明。
+    #   state-update 命令 ⟹ standing / analysis 项目（ECO-* / ECC-* / IDLE）结构性不声明。
     #   产出来只会让 `total_fields` 虚高、`matches/total` 失真，并给适配器喂假阳性 finding
     #   （E20 首轮 7 条里 `audit.state.ci_green` 即属此类）。
     #   保留 `"ci_green" in gd` 作 **or** 条件 ⟹ 已声明就必须被审（删键不能让它消失，
@@ -342,7 +342,7 @@ def check_state_file(state_path: str, skill_dir: str = _SKILL_DIR) -> dict:
 
     # 4. branch_cleaned — F-11: None 不得通过，仅显式 True 通过
     # 2026-10-29（E21，A′）：**只在分支退休阶段产出**（STAGE_5 / DONE）。该字段的唯一写方是
-    #   `cmd_state_update` 的 STAGE_5 分支 ⟹ 其余阶段结构性为 None；产出来只会让
+    #   state-update 命令的 STAGE_5 分支 ⟹ 其余阶段结构性为 None；产出来只会让
     #   `total_fields` 虚高、`matches/total` 失真，并给适配器喂假阳性 finding。
     #   ⚠ 改的是「检查范围」，不是「通过标准」：进入该阶段后 None 仍然判失败。
     if str(s.get("stage", "")) in ("STAGE_5", "DONE"):

@@ -12,7 +12,9 @@
 =======================================================================
 - **单片**（每 kind 一文件，复用既有同族名，见 `KIND_SUFFIX`）：`<state>.<kind>-archive.jsonl`，
   append-only、`batch_id`/`arm` 作**字段**（对齐 §18.2 载体）。
-- **per-arm 索引叶子** `gate_data.satellite_index.<batch_id>.<arm>`（**非** arms map）。
+- **per-arm 索引叶子**：**热**叶在 `gate_data.satellite_index.<batch_id>.<arm>`（每 kind 只留最近
+  `INLINE_LEAVES_MAX_PER_KIND` 叶）；**冷**叶落 `<state>.satellite-index.jsonl`（append-only 侧车）。
+  读面 `index_entries` = 热 ∪ 冷（侧车同键优先）⟹ 主 state 体积有上界，臂数增长不再线性撑大 state。
   **理由（实证）**：`cmd_set_nested` 禁「目标已是容器」的整键替换（G4 防丢更新）⟹ 若把
   `satellite_index.<batch_id>` 写成含 `arms{}` 的容器，**第一臂**写入后即变容器 ⟹ **第二臂
   （或宿主）写入被 fail-loud 拒** ⟹ 与中枢单写者契约**结构性不相容**、c5 不可达。per-arm
@@ -66,6 +68,183 @@ def shard_path(state_file: str, kind: str) -> str:
 def index_path(batch_id: str, arm: str) -> str:
     """per-arm 索引叶子路径（`gate_data.satellite_index.<batch_id>.<arm>`）。"""
     return "%s.%s.%s" % (INDEX_ROOT, batch_id, arm)
+
+
+# ── 冷索引侧车（2026-11-02）────────────────────────────────────────────────
+# 主 state 只保留**最近一轮**的内联热索引（6 臂/kind）；更旧的叶子落到
+# `<state>.satellite-index.jsonl`（append-only），读面 `index_entries` 取并集。
+# 目的：`satellite_index` 不再随臂数单调增长 ⟹ 主 state 体积有上界，
+# 同时保留 per-arm 叶子语义与 `set-nested` 定点写（热路径零 schema 变更）。
+INDEX_SIDECAR_SUFFIX = ".satellite-index.jsonl"
+INLINE_LEAVES_MAX_PER_KIND = 6
+
+
+def sidecar_path(state_file: str) -> str:
+    """冷索引侧车路径（state 同目录；`.jsonl` ⟹ `iter_live_states` 天然看不见）。"""
+    return str(state_file) + INDEX_SIDECAR_SUFFIX
+
+
+def _append_sidecar(state_file: str, entries: list) -> int:
+    """追加侧车行（调用方须持 `state_lock`；fsync 后返回条数）。"""
+    if not entries:
+        return 0
+    p = sidecar_path(state_file)
+    d = os.path.dirname(os.path.abspath(p))
+    if d:
+        os.makedirs(d, exist_ok=True)
+    n = 0
+    with open(p, "a", encoding="utf-8") as f:
+        for e in entries:
+            f.write(json.dumps(e, ensure_ascii=False) + "\n")
+            n += 1
+        f.flush()
+        os.fsync(f.fileno())
+    return n
+
+
+def _sidecar_write(state_file: str, entries: list) -> int:
+    """持锁写侧车（`state_lock` 可重入）；失败抛给调用方决定 fail-loud / best-effort。"""
+    from gk_json_utils import state_lock as _state_lock
+    with _state_lock(state_file):
+        return _append_sidecar(state_file, entries)
+
+
+def _read_sidecar(state_file: str) -> dict:
+    """读回侧车 `{(batch_id, arm): leaf}`；坏行/半行跳过（append-only 容忍）。"""
+    p = sidecar_path(state_file)
+    out = {}
+    if not os.path.isfile(p):
+        return out
+    try:
+        with open(p, encoding="utf-8", errors="replace") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    e = json.loads(line)
+                except Exception:  # noqa: BLE001 — 半行/坏行
+                    continue
+                if not isinstance(e, dict):
+                    continue
+                key = (str(e.get("batch_id") or ""), str(e.get("arm") or ""))
+                op = e.get("op")
+                if op == "del":
+                    out.pop(key, None)
+                elif op == "put" and isinstance(e.get("leaf"), dict):
+                    out[key] = e["leaf"]
+    except OSError:
+        return {}
+    return out
+
+
+def _inline_index(state_file: str) -> dict:
+    """主 state 内联热索引（`gate_data.satellite_index`）；缺失/坏读 ⟹ `{}`。"""
+    try:
+        import gk_state as GS
+        data = GS._read_state(state_file)
+    except Exception:  # noqa: BLE001 — 边界
+        try:
+            with open(state_file, encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception:
+            data = {}
+    si = ((data or {}).get("gate_data") or {}).get("satellite_index") or {}
+    return si if isinstance(si, dict) else {}
+
+
+def _leaf_ts(leaf: dict) -> str:
+    return str((leaf or {}).get("last_ts") or (leaf or {}).get("first_ts") or "")
+
+
+def _spill_candidates(si: dict) -> list:
+    """内联索引中超出 `INLINE_LEAVES_MAX_PER_KIND` 的**最旧**叶子（按 kind **全局**计数）。
+
+    ⚠ 计数必须跨 batch：否则每个 batch 各留 6 叶 ⟹ 总内联量随 batch 数线性增长，
+    外置形同虚设（实测 audit-bureau：23 batch × ≤6 pipeline 叶 ⟹ 旧实现 0 候选）。
+    """
+    out = []
+    by_kind = {}
+    for batch, arms in (si or {}).items():
+        if not isinstance(arms, dict):
+            continue
+        for arm, leaf in arms.items():
+            if isinstance(leaf, dict):
+                by_kind.setdefault(str(leaf.get("kind") or ""), []).append(
+                    (batch, arm, leaf))
+    for _kind, items in by_kind.items():
+        if len(items) <= INLINE_LEAVES_MAX_PER_KIND:
+            continue
+        items.sort(key=lambda x: _leaf_ts(x[2]))
+        out.extend(items[:len(items) - INLINE_LEAVES_MAX_PER_KIND])
+    return out
+
+
+def _rewrite_inline_index(state_file: str, remove) -> bool:
+    """从主 state 内联索引删除 `remove={(batch,arm)}`（整键重写、持锁、重算 checksum）。
+
+    这是**唯一**允许整键重写 `satellite_index` 的删除面（`set-nested` 无删除语义）；
+    只动该键，不碰其它 gate_data。
+    """
+    remove = set(remove or ())
+    if not remove:
+        return True
+    import gk_json_utils as JU
+    with JU.state_lock(state_file):
+        try:
+            with open(state_file, encoding="utf-8") as f:
+                d = json.load(f)
+        except Exception:  # noqa: BLE001 — 边界
+            return False
+        gd = d.setdefault("gate_data", {})
+        si = gd.get("satellite_index")
+        if not isinstance(si, dict):
+            return True
+        for batch, arm in remove:
+            arms = si.get(batch)
+            if isinstance(arms, dict):
+                arms.pop(arm, None)
+            if isinstance(arms, dict) and not arms:
+                si.pop(batch, None)
+        gd["satellite_index"] = si
+        d["_checksum"] = hashlib.sha256(
+            json.dumps(gd, sort_keys=True).encode()).hexdigest()[:16]
+        return bool(JU.dump_state(state_file, d))
+
+
+def _spill_inline(state_file: str, gd: dict = None) -> int:
+    """把内联热索引中超额的**最旧**叶子移到侧车（冷索引），再从内联删除。
+
+    `gd` 非 None ⟹ 只处理调用方持有的 `gd`（in-tx，零 state 写）；
+    否则读主 state 并在删除时整键重写。**先写侧车成功、后删内联**（崩溃安全）。
+    """
+    si = (gd or {}).get("satellite_index") if gd is not None else _inline_index(state_file)
+    if not isinstance(si, dict):
+        return 0
+    victims = _spill_candidates(si)
+    if not victims:
+        return 0
+    side = _read_sidecar(state_file)
+    entries = []
+    for batch, arm, leaf in victims:
+        if side.get((batch, arm)) != leaf:
+            entries.append({"op": "put", "batch_id": batch, "arm": arm,
+                            "leaf": leaf, "ts": _now()})
+    if entries:
+        try:
+            _sidecar_write(state_file, entries)
+        except Exception:  # noqa: BLE001 — 侧车失败 ⟹ 保留内联（不丢），best-effort
+            return 0
+    if gd is not None:
+        for batch, arm, _leaf in victims:
+            arms = si.get(batch)
+            if isinstance(arms, dict):
+                arms.pop(arm, None)
+            if isinstance(arms, dict) and not arms:
+                si.pop(batch, None)
+        return len(victims)
+    return len(victims) if _rewrite_inline_index(
+        state_file, {(b, a) for b, a, _ in victims}) else 0
 
 
 def append(state_file: str, kind: str, records: list, *, batch_id: str,
@@ -129,6 +308,14 @@ def append(state_file: str, kind: str, records: list, *, batch_id: str,
     leaf = {"kind": kind, "file": os.path.basename(shard), "arm": arm,
             "records": len(records), "bytes": nbytes,
             "first_ts": stamp, "last_ts": stamp, "ttl_s": int(ttl_s or _lease_ttl or 0)}
+    # 冷索引侧车：**先落侧车**（append-only + fsync）再登记内联热索引。
+    # 侧车是索引的第二持久面（主 state 内联只留最近一轮）；写失败 ⟹ fail-loud（片已落）。
+    try:
+        _sidecar_write(state_file, [{"op": "put", "batch_id": batch_id, "arm": arm,
+                                     "leaf": leaf, "ts": stamp}])
+    except Exception as e:  # noqa: BLE001 — 边界
+        return {"ok": False, "error": "卫星索引侧车写失败（片已落）：%s: %s"
+                % (type(e).__name__, e), "shard": shard, "leaf": leaf}
     # [ECC-078AAECF33FB] 生产者接线：片一落盘即把**片基址登记为判活锚**（卫星计划 §3③a/§7）。
     #   遗漏（cross-review）：`claim_anchor` 已实装却**无生产调用点** ⟹ 只有测试手调才落锚；真实
     #   路径产的片**无锚** ⟹ `reclaim` 一旦从 dry-run 转 live 即可误删在用片。best-effort：锚失败
@@ -142,8 +329,9 @@ def append(state_file: str, kind: str, records: list, *, batch_id: str,
     # in-tx：索引并入调用方的 `gd`（**零 state 写** —— 防 caller 随后 save_state 覆盖）
     if gd is not None:
         gd.setdefault("satellite_index", {}).setdefault(batch_id, {})[arm] = leaf
+        _spilled = _spill_inline(state_file, gd=gd)
         return {"ok": True, "shard": shard, "appended": len(records), "leaf": leaf,
-                "claim": claim}
+                "claim": claim, "spilled": _spilled}
     # 索引登记（**只经**定点 set-nested；禁顶层整替 ⟹ 与 c4 拦截面同调）
     try:
         import gk_state_patch as SP
@@ -152,23 +340,38 @@ def append(state_file: str, kind: str, records: list, *, batch_id: str,
     except Exception as e:  # noqa: BLE001 — 边界
         reg = {"ok": False, "error": "%s: %s" % (type(e).__name__, e)}
     if not reg.get("ok"):
+        # `cmd_set_nested` → `_write_state` 把异常放在 `detail`（`error` 恒 `write_failed`）
+        _err = "%s %s" % (reg.get("error", ""), reg.get("detail", ""))
+        # 95% 水位拦截时，**侧车已是事实源**：热索引只是缓存，跳过它不算写失败
+        # （否则 `archive_closed` / `ember burn` 这类「收缩修复」会被自己的收尾写阻断）。
+        if "STATE_WALL_BLOCK" in _err:
+            return {"ok": True, "shard": shard, "appended": len(records),
+                    "index_path": index_path(batch_id, arm), "leaf": leaf,
+                    "claim": claim, "spilled": 0, "inline_skipped": True,
+                    "leaf_error": _err}
         return {"ok": False, "error": "索引登记失败（片已落）", "shard": shard,
-                "appended": len(records), "leaf_error": reg.get("error", "")}
+                "appended": len(records), "leaf_error": _err}
+    _spilled = _spill_inline(state_file)
     return {"ok": True, "shard": shard, "appended": len(records),
-            "index_path": index_path(batch_id, arm), "leaf": leaf, "claim": claim}
+            "index_path": index_path(batch_id, arm), "leaf": leaf, "claim": claim,
+            "spilled": _spilled}
 
 
 def index_entries(state_file: str, batch_id: str = "") -> dict:
-    """读回卫星索引（hub/余烬读面）。`batch_id` 空 ⟹ 整份 `satellite_index`。"""
-    try:
-        import gk_state as GS
-        data = GS._read_state(state_file)
-    except Exception:  # noqa: BLE001 — 边界
-        data = json.load(open(state_file, encoding="utf-8"))
-    si = ((data or {}).get("gate_data") or {}).get("satellite_index") or {}
+    """读回卫星索引（hub/余烬读面）：**内联热索引 ∪ 冷索引侧车**，侧车同键优先。
+
+    `batch_id` 空 ⟹ 整份并集；非空 ⟹ 该 batch 的 arms map。
+    读面**单源**（`gk_moa_aggregate` 等一律经此，禁直读 `gate_data.satellite_index`）。
+    """
+    merged = {}
+    for batch, arms in _inline_index(state_file).items():
+        if isinstance(arms, dict):
+            merged[batch] = dict(arms)
+    for (batch, arm), leaf in _read_sidecar(state_file).items():
+        merged.setdefault(batch, {})[arm] = leaf
     if batch_id:
-        return si.get(batch_id, {}) if isinstance(si, dict) else {}
-    return si
+        return merged.get(batch_id, {})
+    return merged
 
 
 def _iso_age_s(ts: str, now: float):
@@ -318,14 +521,35 @@ def backfill_ttl(state_file: str, *, ttl_s: int = 0, dry_run: bool = False) -> d
                 "dry_run": bool(dry_run), "ttl_s": _ttl}
     import gk_state_patch as SP
     stamp = _now()
-    n_ok = 0
+    inline = _inline_index(state_file)
+    si = index_entries(state_file)
+    n_ok, errors = 0, []
     for batch, arm in targets:
-        path = index_path(batch, arm)
-        SP.cmd_set_nested(state_file, path + ".ttl_s", json.dumps(_ttl))
-        reg = SP.cmd_set_nested(state_file, path + ".backfilled_ts", json.dumps(stamp))
-        n_ok += 1 if reg.get("ok") else 0
+        leaf = dict((si.get(batch) or {}).get(arm) or {})
+        leaf["ttl_s"] = _ttl
+        leaf["backfilled_ts"] = stamp
+        try:
+            _sidecar_write(state_file, [{"op": "put", "batch_id": batch, "arm": arm,
+                                         "leaf": leaf, "ts": stamp}])
+        except Exception as e:  # noqa: BLE001 — 边界
+            errors.append({"target": "%s/%s" % (batch, arm),
+                           "error": "%s: %s" % (type(e).__name__, e)})
+            continue
+        # 内联热索引同步（若该叶仍在 state 内；sidecar-only 叶不重建内联）
+        arms = inline.get(batch)
+        if isinstance(arms, dict) and arm in arms:
+            path = index_path(batch, arm)
+            SP.cmd_set_nested(state_file, path + ".ttl_s", json.dumps(_ttl))
+            reg = SP.cmd_set_nested(state_file, path + ".backfilled_ts",
+                                    json.dumps(stamp))
+            if not reg.get("ok"):
+                errors.append({"target": "%s/%s" % (batch, arm),
+                               "error": reg.get("error", "")})
+                continue
+        n_ok += 1
     return {"ok": True, "backfilled": n_ok, "ttl_s": _ttl,
-            "targets": ["%s.%s" % (b, a) for b, a in targets]}
+            "targets": ["%s.%s" % (b, a) for b, a in targets],
+            "errors": errors}
 
 
 def reclaim(state_file: str, *, now: float = None, dry_run: bool = True) -> dict:
@@ -400,18 +624,35 @@ def reclaim(state_file: str, *, now: float = None, dry_run: bool = True) -> dict
     if dry_run or not would:
         return out
     tomb = []
+    inline = _inline_index(state_file)
     for rec in would:
         tgt = "%s/%s" % (rec["batch_id"], rec["arm"])
+        ts = _now()
+        leaf = dict((si.get(rec["batch_id"]) or {}).get(rec["arm"]) or {})
+        leaf["reclaimed_ts"] = ts
+        # 墓碑先落侧车（冷索引事实源，侧车同键优先）；再同步内联（若该叶仍在 state）。
         try:
-            import gk_state_patch as SP
-            reg = SP.cmd_set_nested(state_file,
-                                    index_path(rec["batch_id"], rec["arm"]) + ".reclaimed_ts",
-                                    json.dumps(_now(), ensure_ascii=False))
-            tomb.append({"target": tgt, "ok": bool(reg.get("ok")),
-                         "error": reg.get("error", "")})
+            _sidecar_write(state_file, [{"op": "put", "batch_id": rec["batch_id"],
+                                         "arm": rec["arm"], "leaf": leaf, "ts": ts}])
         except Exception as e:  # noqa: BLE001 — 边界
             tomb.append({"target": tgt, "ok": False,
                          "error": "%s: %s" % (type(e).__name__, e)})
+            continue
+        arms = inline.get(rec["batch_id"])
+        if isinstance(arms, dict) and rec["arm"] in arms:
+            try:
+                import gk_state_patch as SP
+                reg = SP.cmd_set_nested(
+                    state_file,
+                    index_path(rec["batch_id"], rec["arm"]) + ".reclaimed_ts",
+                    json.dumps(ts, ensure_ascii=False))
+                tomb.append({"target": tgt, "ok": bool(reg.get("ok")),
+                             "error": reg.get("error", "")})
+            except Exception as e:  # noqa: BLE001 — 边界
+                tomb.append({"target": tgt, "ok": False,
+                             "error": "%s: %s" % (type(e).__name__, e)})
+        else:
+            tomb.append({"target": tgt, "ok": True, "error": ""})
     out["tombstoned"] = tomb
     return out
 
@@ -482,12 +723,13 @@ def verify_shards(state_file: str) -> dict:
 
 
 def gc_index(state_file: str, dry_run: bool = True, max_per_kind: int = 0) -> dict:
-    """卫星索引 **GC**：删「已墓碑」与「悬空（片不存在）」叶子（缺省 dry-run）。
+    """卫星索引 **GC**：删「已墓碑」/「悬空」叶 + 把内联超 cap 的最旧叶溢出到冷侧车。
 
     ⚠ 写面例外（**受控**）：`satellite_index` 的唯一常规写面是定点 `set-nested`，但它**无删除
     语义** ⟹ 删叶子只能整键重写。本函数因此是全仓**唯一**对 `satellite_index` 做删除的写者：
     持 `state_lock` 读-改-写、只动该键、同批重算 `_checksum`（同 `_write_checksum` 算法）。
     「过期但片存在」的叶子**不删**（保留可回溯性）；越容量只报不删。
+    冷侧车删除走 `{"op":"del"}` 追加（append-only），不重写侧车。
     """
     cap = int(max_per_kind or 0) or SAT_MAX_ARMS_PER_KIND
     si = index_entries(state_file)
@@ -512,30 +754,35 @@ def gc_index(state_file: str, dry_run: bool = True, max_per_kind: int = 0) -> di
         n = sum(1 for k in kept if k["kind"] == kind)
         if n > cap:
             over[kind] = {"leaves": n, "cap": cap}
+    _rm_preview = {(r["batch_id"], r["arm"]) for r in removed}
+    spill = [c for c in _spill_candidates(_inline_index(state_file))
+             if (c[0], c[1]) not in _rm_preview]
     out = {"ok": True, "dry_run": bool(dry_run),
            "removed": removed, "removed_count": len(removed),
            "kept": len(kept), "over_capacity": over,
-           "capacity": {"max_arms_per_kind": cap}}
-    if dry_run or not removed:
+           "would_spill": ["%s/%s" % (b, a) for b, a, _l in spill],
+           "capacity": {"max_arms_per_kind": cap,
+                        "inline_max_per_kind": INLINE_LEAVES_MAX_PER_KIND}}
+    if dry_run:
         return out
-    import gk_json_utils as JU
     _rm = {(r["batch_id"], r["arm"]) for r in removed}
-    with JU.state_lock(state_file):
-        d = json.load(open(state_file, encoding="utf-8"))
-        gd = d.setdefault("gate_data", {})
-        si2 = gd.get("satellite_index") or {}
-        for batch, arm in _rm:
-            arms = si2.get(batch)
-            if isinstance(arms, dict):
-                arms.pop(arm, None)
-            if isinstance(arms, dict) and not arms:
-                si2.pop(batch, None)
-        gd["satellite_index"] = si2
-        d["_checksum"] = hashlib.sha256(
-            json.dumps(gd, sort_keys=True).encode()).hexdigest()[:16]
-        JU.dump_state(state_file, d)
+    if _rm:
+        try:
+            _sidecar_write(state_file, [{"op": "del", "batch_id": b, "arm": a,
+                                         "ts": _now()} for b, a in _rm])
+        except Exception as e:  # noqa: BLE001 — 边界
+            out["ok"] = False
+            out["error"] = "侧车删除写失败：%s: %s" % (type(e).__name__, e)
+            return out
+        if not _rewrite_inline_index(state_file, _rm):
+            out["ok"] = False
+            out["error"] = "内联索引删除写失败"
+            return out
+    spilled = _spill_inline(state_file)
     out["applied"] = len(removed)
-    out["leaves_after"] = len(kept)
+    out["spilled"] = spilled
+    out["leaves_after"] = sum(len(a) for a in index_entries(state_file).values()
+                              if isinstance(a, dict))
     return out
 
 
