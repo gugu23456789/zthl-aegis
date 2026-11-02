@@ -13,8 +13,10 @@
   4. 公开面**零绝对硬编码**：CLI / suagent_sandbox.sh / run_w2a_web_pyramid.sh 不得再出现
      `/opt/spz-py312` 之类个人 venv 路径。
 """
+import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -51,7 +53,9 @@ def _run(tmp_path, need, env_extra):
     env = {"PATH": str(empty), "HOME": str(tmp_path), "GK_PY_GLOBS": ""}
     env.update(env_extra)
     bash = shutil.which("bash") or "/bin/bash"   # 绝对路径：PATH 已清空（避免捡到系统 python3）
-    r = subprocess.run([bash, str(script), need], capture_output=True, text=True,
+    # 必须给 bash 传 POSIX 形态：Windows 反斜杠路径会让 `BASH_SOURCE` 归一到 `.` ⟹
+    # `_root` 算错，仓内 venv / 通配候选全丢（2026-11-02 Windows CI 实测）。
+    r = subprocess.run([bash, script.as_posix(), need], capture_output=True, text=True,
                        env=env, timeout=30)
     return r.returncode, r.stdout.strip()
 
@@ -101,13 +105,35 @@ def test_subagent_requirement_does_not_fall_back(tmp_path):
     assert rc == 1 and out == "", (rc, out)
 
 
+def _windows_path(p):
+    """MSYS 形态（`/tmp/...`）→ Windows 形态，供断言比较；非 Windows 原样返回。"""
+    if os.name != "nt":
+        return p
+    bash = shutil.which("bash")
+    if not bash:
+        return p
+    r = subprocess.run([bash, "-c", 'cygpath -w "$1"', "_", p],
+                       capture_output=True, text=True)
+    return r.stdout.strip() or p
+
+
 def test_discovers_venv_variant_windows_layout(tmp_path):
     """仓内 `.venv-accept/Scripts/python.exe`（Windows 布局）也必须被发现。"""
     winbin = tmp_path / ".venv-accept" / "Scripts"
-    winbin.mkdir(parents=True)
-    shim = _shim(winbin, "python.exe", has_pytest=False)
-    rc, out = _run(tmp_path, "any", {})
-    assert rc == 0 and out == shim, (rc, out)
+    if os.name == "nt":
+        # Windows 不能执行「改名成 .exe 的 shell 脚本」（CI 实测 exit 1），也不宜只复制
+        # python.exe（副本目录缺 DLL）。直接建一个真 venv：Scripts/python.exe + pyvenv.cfg
+        # 就是生产形态，且不依赖 PATH。
+        subprocess.run([sys.executable, "-m", "venv", "--without-pip",
+                        str(tmp_path / ".venv-accept")],
+                       check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        shim = winbin / "python.exe"
+        rc, out = _run(tmp_path, "any", {})
+    else:
+        winbin.mkdir(parents=True)
+        shim = Path(_shim(winbin, "python.exe", has_pytest=False))
+        rc, out = _run(tmp_path, "any", {})
+    assert rc == 0 and os.path.normcase(_windows_path(out)) == os.path.normcase(str(shim)), (rc, out)
 
 
 # ── ④ 公开面零绝对硬编码 ─────────────────────────────────────────────────────

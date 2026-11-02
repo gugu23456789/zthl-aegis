@@ -10,7 +10,7 @@
 #   3. `ACCEPT_PY`        —— 既有验收键（向后兼容）
 #   4. `scripts/_accept_py.local` —— **本机私有** pin（gitignore）；一行路径
 #   5. 仓内 `.venv`（POSIX `bin/python*` / Windows `Scripts/python.exe`）
-#   6. `GK_PY_GLOBS` 通配（缺省 `/opt/*/bin/python`；`:` 分隔多组）—— 发现式，缺省不存在即跳过
+#   6. `GK_PY_GLOBS` 通配（缺省 `/opt/*/bin/python`；多组分隔符 POSIX=`:`、Windows=`;`）—— 发现式，缺省不存在即跳过
 #   7. `scripts/suagent_py311.sh`（仓内包装器）
 #   8. `python3` / `python`（PATH）
 #
@@ -108,20 +108,24 @@ for _rt in $_roots; do
   done
 done
 IFS="$_oldifs_v"
-# 通配发现（缺省 /opt/*/bin/python；多组用 ':' 分隔）
+# 通配发现（缺省 /opt/*/bin/python；多组分隔符 POSIX=':' / Windows=';'）
 # 通配发现：**只在 POSIX 侧**用 `/opt/*` 缺省（那是 WSL 时代的产物）；Windows 侧默认**不启用**
 #   —— 否则在 WSL bash 下 `/opt/*/bin/python` 会匹配到**与本仓无关**的 `/opt/entropygs/bin/python`
 #   之类，把解释器解析到无关虚拟环境（2026-11-02 实测踩到）。`GK_PY_GLOBS` 仍可显式开启。
 if [ "$_plat" = "win" ]; then
   _globs="${GK_PY_GLOBS-}"                  # 默认空；显式设了才用
+  # Windows 用 `;` 分隔多组：盘符里的 `:` 会被当成分隔符（2026-11-02 CI 实测：
+  #   `C:\Users\…\py-good` 被切成 "C" 与 "\Users\…" 两段 ⟹ 候选丢失/串味）。
+  _glob_sep=';'
 else
   _globs="${GK_PY_GLOBS-/opt/*/bin/python}" # `-`（非 `:-`）：显式置空 = 关闭通配发现
+  _glob_sep=':'
 fi
-_oldifs="$IFS"; IFS=':'
+_oldifs="$IFS"; IFS="$_glob_sep"
 for _g in $_globs; do
   IFS="$_oldifs"
   for _p in $_g; do [ -x "$_p" ] && _cands+=("$_p"); done
-  IFS=':'
+  IFS="$_glob_sep"
 done
 IFS="$_oldifs"
 _add "$_root/scripts/suagent_py311.sh"
