@@ -28,7 +28,7 @@ import zipfile
 from datetime import datetime, timezone
 
 EXCLUDE_DIRS = {".git", "__pycache__", ".pytest_cache", ".mypy_cache", ".zthl", ".keys",
-                "node_modules", ".venv", "venv", ".venv-accept", ".idea", ".vscode"}
+                "dist", "node_modules", ".venv", "venv", ".venv-accept", ".idea", ".vscode"}
 EXCLUDE_SUFFIXES = (".pyc", ".pyo", ".log", ".tmp", ".bak", ".sig", ".seal")
 EXCLUDE_NAMES = {"SHA256SUMS", "release-manifest.json"}
 

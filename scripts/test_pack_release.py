@@ -81,6 +81,8 @@ def test_pack_excludes_runtime_artifacts(tmp_path):
     (t / ".git").mkdir()
     (t / ".git" / "config").write_text("x\n", encoding="utf-8")
     (t / "run.log").write_text("x\n", encoding="utf-8")
+    (t / "dist").mkdir()
+    (t / "dist" / "old.zip").write_bytes(b"x")
     r = P.pack(str(t), str(tmp_path / "dist"), "v1")
     paths = {f["path"] for f in r["manifest"]["files"]}
     assert paths == {"LICENSE", "README.md", "scripts/a.py"}, paths

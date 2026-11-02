@@ -38,8 +38,8 @@ jobs:
         env:
           VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
         run: |
-          python scripts/pack_release.py --tree . --out dist --version "$VERSION"
-          python scripts/pack_release.py --tree . --out dist --version "$VERSION" --json > dist/pack-report.json
+          python scripts/pack_release.py --tree . --out dist --version "$VERSION" --json > pack-report.json
+          cat pack-report.json
       - name: verify checksums (extract + sha256sum -c)
         env:
           VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}

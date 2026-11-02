@@ -103,7 +103,7 @@ jobs:
           PY
       - name: fast tests
         shell: bash
-        run: python -m pytest -q scripts/test_pack_release.py scripts/test_oss_scrub.py scripts/test_py_resolve.py
+        run: python -m pytest -q scripts/test_pack_release.py scripts/test_py_resolve.py scripts/test_opcap_evidence_alias.py
 
   security-audit:
     # workflow 供应链 + 危险命令静态扫描（2026-11-02 新增，**观察期** continue-on-error）。
