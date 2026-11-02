@@ -52,6 +52,11 @@ def _run(tmp_path, need, env_extra):
     empty.mkdir(exist_ok=True)
     env = {"PATH": str(empty), "HOME": str(tmp_path), "GK_PY_GLOBS": ""}
     env.update(env_extra)
+    if os.name == "nt":
+        # 环境变量不走 MSYS 的参数路径转换：一律给 POSIX 形态（C:/...），
+        # 否则 `[ -x "$cand" ]` / 执行在 PATH 受限时行为不一致。
+        env = {k: (v.replace("\\", "/") if isinstance(v, str) else v)
+               for k, v in env.items()}
     bash = shutil.which("bash") or "/bin/bash"   # 绝对路径：PATH 已清空（避免捡到系统 python3）
     # 必须给 bash 传 POSIX 形态：Windows 反斜杠路径会让 `BASH_SOURCE` 归一到 `.` ⟹
     # `_root` 算错，仓内 venv / 通配候选全丢（2026-11-02 Windows CI 实测）。
@@ -63,7 +68,7 @@ def _run(tmp_path, need, env_extra):
 def test_env_override_wins(tmp_path):
     shim = _shim(tmp_path, "py-ok", has_pytest=True)
     rc, out = _run(tmp_path, "any", {"GK_PYTHON": shim})
-    assert rc == 0 and out == shim, (rc, out)
+    assert rc == 0 and os.path.normcase(out) == os.path.normcase(shim), (rc, out)
 
 
 def test_pytest_requirement_picks_peer_candidate(tmp_path):
@@ -72,14 +77,14 @@ def test_pytest_requirement_picks_peer_candidate(tmp_path):
     good = _shim(tmp_path, "py-good", has_pytest=True)
     rc, out = _run(tmp_path, "pytest", {"GK_PYTHON": bad,
                                         "GK_PY_GLOBS": str(tmp_path / "py-good")})
-    assert rc == 0 and out == good, (rc, out)
+    assert rc == 0 and os.path.normcase(out) == os.path.normcase(good), (rc, out)
 
 
 def test_pytest_requirement_falls_back_to_any(tmp_path):
     """一个带 pytest 的都没有 ⟹ 回落 any（调用方据此显式 SKIP，而非解析失败）。"""
     bad = _shim(tmp_path, "py-bad", has_pytest=False)
     rc, out = _run(tmp_path, "pytest", {"GK_PYTHON": bad})
-    assert rc == 0 and out == bad, (rc, out)
+    assert rc == 0 and os.path.normcase(out) == os.path.normcase(bad), (rc, out)
 
 
 def test_no_candidate_exits_nonzero(tmp_path):
@@ -95,7 +100,7 @@ def test_subagent_requirement_skips_python_without_deps(tmp_path):
     full = _shim(tmp_path, "py-full", has_pytest=True, has_subagent=True)
     rc, out = _run(tmp_path, "subagent", {"GK_PYTHON": plain,
                                           "GK_PY_GLOBS": str(full)})
-    assert rc == 0 and out == full, (rc, out)
+    assert rc == 0 and os.path.normcase(out) == os.path.normcase(full), (rc, out)
 
 
 def test_subagent_requirement_does_not_fall_back(tmp_path):

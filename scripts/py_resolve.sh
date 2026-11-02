@@ -34,8 +34,14 @@ _plat_ov="${2:-}"
 _plat="${_plat_ov:-}"
 if [ -z "$_plat" ]; then
   _plat="wsl"
-  case "$(uname -s 2>/dev/null)" in
-    MINGW*|MSYS*|CYGWIN*) _plat="win" ;;
+  # 先看 bash 自带 `OSTYPE`：`uname` 是外部命令，PATH 受限时可能根本不在
+  # （2026-11-02 Windows CI 实测：PATH 被清空 ⟹ uname 取不到 ⟹ 误判 wsl ⟹
+  #  用 ':' 切 Windows 盘符路径，glob 候选被切碎丢失）。
+  case "${OSTYPE:-}" in
+    msys*|cygwin*|win32*) _plat="win" ;;
+    *) case "$(uname -s 2>/dev/null)" in
+         MINGW*|MSYS*|CYGWIN*) _plat="win" ;;
+       esac ;;
   esac
 fi
 # 根目录：只用内建（`dirname` 是外部命令；本脚本可能在 **PATH 受限** 环境被调用/被测）
@@ -61,8 +67,11 @@ if [ -f "$_root/scripts/_accept_py.local" ]; then
   _plat="${_plat_ov:-}"
   if [ -z "$_plat" ]; then
     _plat="wsl"
-    case "$(uname -s 2>/dev/null)" in
-      MINGW*|MSYS*|CYGWIN*) _plat="win" ;;
+    case "${OSTYPE:-}" in
+      msys*|cygwin*|win32*) _plat="win" ;;
+      *) case "$(uname -s 2>/dev/null)" in
+           MINGW*|MSYS*|CYGWIN*) _plat="win" ;;
+         esac ;;
     esac
   fi
   while IFS= read -r _line || [ -n "$_line" ]; do
