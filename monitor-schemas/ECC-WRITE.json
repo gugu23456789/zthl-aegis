@@ -1,0 +1,56 @@
+{
+  "name": "ECC-WRITE",
+  "stage": "standing",
+  "purpose": "ECC finding 写入的**形式完备**审计（B 类 · 判断可闭合侧）。⚠ **只判形式，不判判断内容**：让 LLM 判『判断是否正确』= **自指**（LLM 判 LLM 的结论），既越权又不可判。纪律 = **机器填事实、人填判断**（见 `ECC-FF45F426BA45`）。",
+  "scope": {
+    "note": "⚠ 两个同名族必须分清（2026-09-28，规范正本 references/ecc-write-spec.md）：",
+    "ECC-FINDING": "**持久缺陷台账**（`state.gate_data.ecc_findings[]`；写通道 `gatekeeper-cli.sh finding register`）。**覆盖除 subagent 输出外的全部产出场景**：manual / crossr / crossrev / red / review / audit / monitor / prose / subagent-promoted。本 schema 只约束它。",
+    "EccOutput": "**subagent 单次调用输出**（`docs/analysis/subagent/*.json`；`subagent_runner.EccOutput` 形态，HMAC+JWT 签名、易失）。**不落台账**；只可经 `finding register --from-report` **显式提升**（仅抽允许字段）。"
+  },
+  "requires": [
+    "record_has_id_and_status",
+    "closure_oracle_classified_or_explicitly_blank",
+    "root_key_is_fingerprint_if_present",
+    "source_is_whitelisted_token_not_prose",
+    "evidence_anchors_present_if_claiming_evidence",
+    "principal_singular_if_present",
+    "resolution_states_condition_if_present",
+    "facts_and_judgement_separable"
+  ],
+  "evidence": [
+    "title/source 内**可复查事实**（命令 + stdout、`file:line`）与**判断**（是否真缺陷 / 归属域 / 主要矛盾）**可分辨**",
+    "principal（主要矛盾）若给出则**恰好 1 条**（禁并列 —— 并列 = 未定位矛盾）",
+    "resolution（转化 / 闭合条件）若给出则**写明条件**（形如「在 X 条件下成立/闭合」），禁无条件断言",
+    "closure_oracle ∈ {\"mechanical\",\"judgment\",\"\"}；非空时须与「闭合是否需人审」一致（mechanical = 确定性 oracle 可判；judgment = 需人的判断）",
+    "root_key 若给出则为**根因指纹**（无空白、长度 ≤64 字符），非散文；有 root_key 时判重按根因合并",
+    "`source` 为**白名单内短 token**（≤32 字符、无空白）：`manual|crossr|crossrev|red|review|audit|monitor|prose|subagent-promoted`；**长文本出处**走 `source_note`（`--source-file` 通道）",
+    "`severity` 若给出则 ∈ {info,low,medium,high,critical} 且合并只升不降；`owner` 若给出则为责任域 token（如 `skill.<plan>`，无空白、≤120）"
+  ],
+  "must_not": [
+    "judge_whether_the_judgement_is_correct",
+    "author_missing_judgement_on_behalf_of_human",
+    "fail_solely_because_closure_oracle_is_blank",
+    "fail_solely_because_legacy_source_is_nonconforming",
+    "mutate_or_normalize_the_finding_record",
+    "paste_a_whole_subagent_report_into_the_ledger",
+    "treat_EccOutput_as_a_ledger_record"
+  ],
+  "structural_checks": [
+    {
+      "check": "closure_oracle_enum_valid",
+      "command": "bash gatekeeper-cli.sh state 2>/dev/null | python3 -c \"import sys,json;d=json.load(sys.stdin);fs=d.get('gate_data',{}).get('ecc_findings',[]);bad=[f.get('id') for f in fs if (f.get('closure_oracle') or '') not in ('','mechanical','judgment')];print('FAIL' if bad else 'PASS')\"",
+      "fail_if": "exit_code != 0"
+    },
+    {
+      "check": "ledger_reconcile_clean",
+      "command": "bash gatekeeper-cli.sh finding reconcile 2>/dev/null | python3 -c \"import sys,json;print('PASS' if json.load(sys.stdin).get('ok') else 'FAIL')\"",
+      "fail_if": "exit_code != 0"
+    },
+    {
+      "check": "source_token_conformance",
+      "command": "/opt/spz-py312/bin/python -m pytest scripts/test_gk_ecc_source_spec.py -q",
+      "fail_if": "exit_code != 0",
+      "note": "新写入 fail-loud（`register` 边界）+ 存量 WARN 分级（`check_ecc_form`）；见 §7 反例表"
+    }
+  ]
+}

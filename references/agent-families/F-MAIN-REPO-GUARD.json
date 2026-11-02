@@ -1,0 +1,17 @@
+{
+  "family": "F-MAIN-REPO-GUARD",
+  "match": {"any": ["主仓守卫", "Main worktree is read-only", "main is read-only", "主工作树只读", "守护面作用域", "被治理仓主工作树"]},
+  "anchor_symbols": ["_MAIN_REPO_WIN_RE", "_MAIN_REPO_WSL_RE", "MAIN_REPO_WIN", "MAIN_WORKTREE"],
+  "tier": 4,
+  "edit_quota": 8,
+  "allowed_paths": ["gatekeeper-cli.sh", "scripts/pre_tool_hook.py"],
+  "forbidden_paths": [
+    "docs/", "references/", "scripts/gk_state.py", "scripts/gk_json_utils.py",
+    "scripts/gk_finding.py", "scripts/gk_agent_family.py", "scripts/gk_route_center.py",
+    "scripts/gk_state_patch.py"
+  ],
+  "narrow_task_template": "修 {anchor}。**落点 = `gatekeeper-cli.sh`（`pre_tool_check` 与 `guard_edit` 两个主仓守卫消费点）**；`scripts/pre_tool_hook.py` 仅在需要同调时方可动。**禁止**改 `docs/`、`references/`、`scripts/gk_*` 共享模块、以及任何测试文件 —— 红先臂由主 agent 写、已证对 HEAD 必红，你**只负责落刀**。\n\n## 族契约（ECC-542F75AF97C0，已实证）\n病象：`Main worktree is read-only` 分支只匹配 `_MAIN_REPO_WIN_RE`/`_MAIN_REPO_WSL_RE`，其源常量 `MAIN_REPO_WIN`/`MAIN_REPO_WSL`（constants 区）**硬编码**为 `.../spz_gatekeeper_project` ⟹ `target_repo=skill`（技能仓自维护）时技能仓主树**零拦截**。修向：加**动态臂** —— 被治理仓由 `state.target_repo` 经**单源** `gk_route_center.py resolve-repo <repo> --skill-dir <SD>` 解析（`skill` → 技能仓 install dir；`gatekeeper` → 产品仓），命中「被治理仓主工作树」（路径等于 gov_path，或以 gov_path 的目录边界为前缀）即 BLOCK。**禁**在 bash 内复制一份「仓名→路径」映射（第二实现）；仓名→路径映射的单一事实源 = `gk_route_center.resolve_repo`。\n\n## 落刀清单（一律用**符号锚**定位，禁凭行号）\n1. `pre_tool_check` 的主仓守卫块（锚 `_MAIN_REPO_WSL_RE`）：**保留**原有三臂（含 RG 缺位的 fail-closed 判缺臂）不动，其后追加动态臂（case 形态，比较 `real_path` 与 `gov_path`）。\n2. `guard_edit` 的 MAIN_WORKTREE 块（锚 `MAIN_WORKTREE`）：同样追加动态臂（该处路径变量为 `path`）。\n3. `gov_path` 取值：先用 `json_val` 读 `$STATE_FILE` 的 `target_repo`；为空 ⟹ **跳过**动态臂（零回归）。解析失败一律回落空串、**不得**据此阻断（解析不出仓名时 fail-open，命中主树时仍 fail-closed）。\n\n## 你**不需要**做的\n- 红先测试由主 agent 负责（`test_first` 已给出且已证对 HEAD 必红）；你**无需**跑测试。验收命令（你不用跑）：{verify_cmd}\n- ⚠ **判据自检**：若你发现 `test_first` 判据存在**注释盲**或**前置未验证**（可能真空通过/假红），在报告里点出并附一行复现 —— 但**仍须先落刀**。",
+  "test_first": "scripts/test_gk_main_repo_guard_scope.py::test_target_repo_skill_main_tree_blocked",
+  "verify_cmd": "bash -c 'cd \"$PWD\" && python3 -m pytest scripts/test_gk_main_repo_guard_scope.py -q'  # cwd=本工作树根（coder 的 worktree）；**禁**写死家目录绝对路径",
+  "affected_tests": ["scripts/test_gk_main_repo_guard_scope.py"]
+}

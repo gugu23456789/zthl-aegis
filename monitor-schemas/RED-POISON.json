@@ -1,0 +1,21 @@
+{
+  "name": "RED-POISON",
+  "stage": "standing",
+  "structural_checks": [
+    {
+      "check": "red_poison_scan",
+      "command": "python3 scripts/_red_attacks.py poison 2>/dev/null | grep -q '\"phase\": \"poison\"'",
+      "fail_if": "exit_code != 0"
+    },
+    {
+      "check": "state_loader_present",
+      "command": "test -f scripts/gk_state.py",
+      "fail_if": "exit_code != 0"
+    },
+    {
+      "check": "red_poison_findings_json",
+      "command": "python3 scripts/_red_attacks.py poison 2>/dev/null | grep -q '\"findings\"'",
+      "fail_if": "exit_code != 0"
+    }
+  ]
+}

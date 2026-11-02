@@ -1,0 +1,22 @@
+{
+  "stage": "STAGE_0",
+  "name": "START — Worktree Setup + Plan Restore",
+  "trigger": "进入 R-phase",
+  "requires": [
+    "feature_worktree_created",
+    "branch_not_main",
+    "plan_restored_from_backup"
+  ],
+  "produces": [
+    "working_worktree",
+    "plan_in_feature_docs"
+  ],
+  "evidence": [
+    "git worktree list shows feature branch",
+    "docs/plans/ plan file exists in worktree"
+  ],
+  "must_not": [
+    "code_in_main_worktree",
+    "plan_missing_from_worktree"
+  ]
+}

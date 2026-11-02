@@ -1,0 +1,28 @@
+{
+  "family": "F-oss-doc-anchor-drift",
+  "match": {
+    "any": [
+      "doc anchor drift",
+      "anchor_existence",
+      "文档行锚漂移",
+      "U8",
+      "OSS_DOC_ANCHOR_DRIFT"
+    ]
+  },
+  "anchor_symbols": ["anchor_existence"],
+  "tier": 3,
+  "edit_quota": 10,
+  "allowed_paths": ["docs/plans/"],
+  "forbidden_paths": [
+    "scripts/",
+    "references/",
+    "gatekeeper-cli.sh",
+    "docs/analysis/",
+    "docs/plan-backup/",
+    "docs/superpowers/"
+  ],
+  "narrow_task_template": "修**当前活跃计划**里指向已失效的行锚（U8 的活体面）。\n\n## 目标 finding\n{anchor}\n\n## 落点（唯一允许面）\n只改**本族受理的那一份活跃计划**（`docs/plans/<active>.md`）。\n\n## 铁律（先读懂再动手）\n1. `anchor_existence` 的扫描面 = `docs/plans/*.md`，**不是** `references/`；`references/` 面由 `crossref_drift` 覆盖。\n2. **已完成的历史计划不重写**：那是时点记录，改锚等于篡改历史；且 T1（`content_drift`）的目标行不可验证（`declared_symbol` 为空）。\n3. 只处理两类可确证缺陷：\n   - `file_missing` 且**目标文件真实存在于其它路径** ⟹ 补全真实相对路径（如裸名 `x.md` → `references/x.md` / `docs/superpowers/specs/…`）；\n   - `content_drift` 且**声明符号在文件内另有唯一命中行** ⟹ 改行号；找不到唯一命中则**删锚**（保留文字描述），不得猜行号。\n4. 禁止批量正则替换；每条锚必须 `grep -n` 人工核到目标行。\n\n## 判据自检（落刀前实跑）\n- `bash gatekeeper-cli.sh doc-align --json` 里 `anchor_existence.drifted` **总数只降不升**；\n- 被改的每条锚：`grep -n '<符号或章节>' <目标文件>` 必须有唯一命中；\n- 若命中是检查器误报（目标确实在），**不要改文档**，在报告里单列并附复现命令。\n\n## 验收\n{verify_cmd}\n\n## 你不需要做的\n合入 / 提交由主 agent 负责；历史计划的存量漂移不在本任务内。",
+  "test_first": "scripts/test_gk_doc_align.py",
+  "verify_cmd": "bash -c 'cd \"$PWD\" && bash scripts/_accept_cli.sh scripts/test_gk_doc_align.py'",
+  "affected_tests": ["scripts/test_gk_doc_align.py"]
+}

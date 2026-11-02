@@ -1,0 +1,27 @@
+{
+  "family": "F7-worktree-route-visibility",
+  "match": {"any": ["申请—分发", "申请-分发", "只定位不分配", "视野硬编码", "dirscan 漏检", "standing 段 worktree", "agent/session worktree", "agent 两段 worktree", "worktree 对中枢不可见"]},
+  "anchor_symbols": ["resolve_worktree"],
+  "tier": 4,
+  "edit_quota": 3,
+  "allowed_paths": ["scripts/gk_route_center.py"],
+  "forbidden_paths": [
+    "docs/", "references/", ".gitignore",
+    "gatekeeper-cli.sh", "scripts/pre_tool_hook.py", "scripts/gk_moa_aggregate.py",
+    "scripts/test_gk_route_center.py",
+    "scripts/test_gk_state_write_single_entry.py",
+    "scripts/test_gk_edit_budget_accounting.py",
+    "scripts/test_gk_lock_observability.py",
+    "scripts/test_gk_dispatch_budget_single_source.py",
+    "scripts/test_gk_ecc_review.py",
+    "scripts/test_gk_moa_accept.py",
+    "scripts/test_gk_moa_aggregate.py",
+    "scripts/test_gk_xenv_form_residual.py",
+    "scripts/test_gk_xenv_form_fsform.py",
+    "scripts/test_gk_xenv_form_scope.py"
+  ],
+  "narrow_task_template": "修 {anchor}。**唯一目标文件 = `scripts/gk_route_center.py`**（唯一 allowed_path）。**禁止**改任何测试文件（红先臂由主 agent 写、已证对 HEAD 必红）、`docs/`、`references/`、`gatekeeper-cli.sh`、`scripts/pre_tool_hook.py` —— 你**只负责落刀**。\n\n## 病象（已端到端实证，勿再复核）\n`gk_route_center.resolve_worktree` 的跨仓 dirscan 原**只**扫 `*/feature/*` 且分支名须命中 `r[0-9.]+` ⟹ `standing/<slug>` 与 `agent/<family|session>/<sha8>` 两类 worktree 对 L3 **完全不可见**（落 `detected=False`）。route 白名单 = 模块级常量 `WORKTREE_ROUTES`（**单一事实源**，新增 route 必须在此登记）。\n\n## 落刀清单（用**符号锚**定位，勿依赖行号）\n1. `WORKTREE_ROUTES` 恰三条（**按实测形态**，勿加臆测 route）：`feature` → `*/feature/*`（1 段）；`standing` → `*/standing/*`（1 段）；`agent` → `*/agent/*/*`（**2 段**，同时覆盖 `agent/<family>/<sha8>` 与 `agent/session/<sha8>`）。⚠ `dryrun/` 实测只容 `*.state` 文件（**非** worktree route）、`audit/` 不存在 ⟹ **均不得列入**。\n2. `r_phase` 按 route 分派：`feature` 取 `r[0-9.]+`（**命中才收**，既有语义逐字不变）；`standing`/`agent` 取空串。\n3. `branch` 取 **repo 之后的全子路径**：`feature/<rN>`、`standing/<slug>`、`agent/<family|session>/<sha8>`（agent 两段 ⟹ **不是** `agent/<sha8>`）。\n4. 返回 dict **新增**键 `route`（取值 ∈ `{feature, standing, agent}`）；未命中 → 空串；`detected=False` 时其余键仍为空串。**只新增键，不改既有键名/语义**（CLI 消费方 `cmd_discover` 只读 branch/worktree/r_phase/detected）。\n5. 显式/自动前缀（`GATEKEEPER_WORKTREE_ROOT`）分支的返回同步补 `route=feature`（语义不变）。\n\n## ⛔ 不得触碰\n- 任何 `PROTECTED_REGION` 标记（本文件通常无；以源码为准）。\n- `apply_worktree` / `resolve_plan` / `resolve_repo` / `resolve_state` / `resolve_narrow` 的既有行为与签名。\n- 兄弟族落点：`gatekeeper-cli.sh`（F3a/F3b/F18/F-cli-dispatch 共用）、`scripts/pre_tool_hook.py`（XENV-FORM / F-hook-lock 落点）、`scripts/gk_moa_aggregate.py`（MoA 族落点）—— 一字不动。\n\n## 落刀方式 / 你**不需要**做的\n- 用 `edit` 工具落刀。`worktree` / `family_id` 见本任务串末尾；`used` 传你**已成功落刀的次数**（第一刀传 0），`allowed` 传本任务串末尾的配额；`old_str` 必须**逐字**取自文件（先用 `read` 取原文，禁凭记忆）。\n- **红先测试由主 agent 负责**：`test_first` 已给出且已证对 HEAD 必红。你**无需**跑测试、无需自证。落刀后把每个 `edit` / `guard-edit` 返回值**原样**贴回。\n- 主 agent 的验收命令（你不用跑）：{verify_cmd}\n- ⚠ **判据自检**：若你发现 `test_first` 判据存在**注释盲**（把注释文本当代码站点）或**前置未验证**（判据可能真空通过/假红），在报告里点出并附一行复现 —— 但**仍须先落刀**。",
+  "test_first": "scripts/test_gk_worktree_route_visibility.py::test_standing_route_is_detected",
+  "verify_cmd": "bash -c 'cd \"$PWD\" && /opt/spz-py312/bin/python -m pytest scripts/test_gk_worktree_route_visibility.py -q'  # cwd=本工作树根（coder 的 worktree）；**禁**写死家目录绝对路径（会触发 foreign_content_guard 白名单误判，见 ECC-8D46F2B1C0A4）",
+  "affected_tests": ["scripts/test_gk_worktree_route_visibility.py"]
+}

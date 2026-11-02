@@ -1,0 +1,21 @@
+{
+  "name": "AUDIT-STATE",
+  "stage": "standing",
+  "structural_checks": [
+    {
+      "check": "state_file_exists",
+      "command": "test -f .gatekeeper.state",
+      "fail_if": "exit_code != 0"
+    },
+    {
+      "check": "audit_state_available",
+      "command": "bash gatekeeper-cli.sh audit --state 2>/dev/null | grep -q '\"state_checks\"'",
+      "fail_if": "exit_code != 0"
+    },
+    {
+      "check": "checksum_integrity",
+      "command": "bash gatekeeper-cli.sh self-check 2>/dev/null | grep -q '\"checksum_integrity\".*\"PASS\"'",
+      "fail_if": "exit_code != 0"
+    }
+  ]
+}
