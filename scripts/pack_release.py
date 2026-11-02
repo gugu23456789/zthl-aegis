@@ -29,8 +29,12 @@ from datetime import datetime, timezone
 
 EXCLUDE_DIRS = {".git", "__pycache__", ".pytest_cache", ".mypy_cache", ".zthl", ".keys",
                 "dist", "node_modules", ".venv", "venv", ".venv-accept", ".idea", ".vscode"}
+# 运行期落盘（2026-11-02）：CI release 作业先跑 smoke ⟹ 仓库根出现 `.gatekeeper.*`
+#   （state / plan / session / write-claims 等）；`pack-report.json` 由 shell 重定向预建。
+#   二者都是**运行期产物**，进包即污染发布物（且 claims 属运行元数据）。
+EXCLUDE_PREFIXES = (".gatekeeper.",)
 EXCLUDE_SUFFIXES = (".pyc", ".pyo", ".log", ".tmp", ".bak", ".sig", ".seal")
-EXCLUDE_NAMES = {"SHA256SUMS", "release-manifest.json"}
+EXCLUDE_NAMES = {"SHA256SUMS", "release-manifest.json", "pack-report.json"}
 
 # 公开树没有 oss_scrub 时的保守兜底（只挡「本机绝对路径」这一类最硬的身份形态）
 _FALLBACK_IDENTITY = (
@@ -54,6 +58,8 @@ def _excluded(rel: str) -> bool:
         return True
     name = parts[-1]
     if name in EXCLUDE_NAMES:
+        return True
+    if name.startswith(EXCLUDE_PREFIXES):
         return True
     if name.endswith(EXCLUDE_SUFFIXES):
         return True

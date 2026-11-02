@@ -83,6 +83,11 @@ def test_pack_excludes_runtime_artifacts(tmp_path):
     (t / "run.log").write_text("x\n", encoding="utf-8")
     (t / "dist").mkdir()
     (t / "dist" / "old.zip").write_bytes(b"x")
+    # 2026-11-02 实测（v0.9.3 CI 包）：release 作业先跑 smoke（CLI 落 `.gatekeeper.*`）+
+    #   shell 重定向预建 `pack-report.json` ⟹ 二者被当成发布内容打进 zip。此处钉死排除面。
+    (t / ".gatekeeper.write-claims.jsonl").write_text("{}\n", encoding="utf-8")
+    (t / ".gatekeeper.state").write_text("{}\n", encoding="utf-8")
+    (t / "pack-report.json").write_text("", encoding="utf-8")
     r = P.pack(str(t), str(tmp_path / "dist"), "v1")
     paths = {f["path"] for f in r["manifest"]["files"]}
     assert paths == {"LICENSE", "README.md", "scripts/a.py"}, paths
