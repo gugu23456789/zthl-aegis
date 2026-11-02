@@ -40,6 +40,45 @@ jobs:
           CI_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before }}
         run: bash scripts/ci_smoke.sh
 
+  venv-gate:
+    # 2026-11-02 owner 要求：CI 必须在内置虚拟环境里完整跑一遍。
+    # 背景：package-integrity 曾因「跑 pytest 却没装 pytest」整 job 假红；
+    # 依赖 runner 自带 site-packages 的写法不可审计。这里从零建 venv、装依赖，
+    # 再跑 smoke 门 + 可移植测试集，证明公开树在隔离解释器下自洽。
+    name: venv (isolated interpreter)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: create venv + install deps
+        run: |
+          python -m venv .venv
+          . .venv/bin/activate
+          python -m pip install --upgrade pip pytest pytest-xdist cryptography
+      - name: assert interpreter is the venv
+        run: |
+          . .venv/bin/activate
+          test "$(command -v python)" = "$PWD/.venv/bin/python"
+          python -c "import sys; print('prefix =', sys.prefix)"
+      - name: smoke gate in venv
+        env:
+          CI_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          . .venv/bin/activate
+          bash scripts/ci_smoke.sh
+      - name: portable suites in venv
+        shell: bash
+        run: |
+          . .venv/bin/activate
+          python -m pytest -q \
+            scripts/test_pack_release.py \
+            scripts/test_py_resolve.py \
+            scripts/test_opcap_evidence_alias.py \
+            scripts/test_gk_package_integrity.py \
+            scripts/test_gk_hook_manage.py
+
   plan-gate:
     # plan_lint 是**计划质询前置 pw-sn 安全网**（针对本轮要质询的那份计划），
     # 不是仓库级文档 lint ⟹ 不进 push/PR 常规门，只按手填路径触发。
