@@ -1,0 +1,61 @@
+name: release
+
+# 发布纪律（对齐 references/ci-pipeline-template.md §3.6 / §5 / §6）：
+#   tag → 全量 smoke → 确定性打包 → 校验和回验 → GitHub Release（附 zip + manifest + SHA256SUMS）
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "待打包的 tag（workflow_dispatch 用）"
+        required: true
+        default: ""
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: package + verify + publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: install test deps
+        run: python -m pip install --upgrade pip pytest pytest-xdist cryptography
+      - name: smoke gate
+        run: bash scripts/ci_smoke.sh
+      - name: pack (deterministic zip + SHA256SUMS + manifest)
+        env:
+          VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+        run: |
+          python scripts/pack_release.py --tree . --out dist --version "$VERSION"
+          python scripts/pack_release.py --tree . --out dist --version "$VERSION" --json > dist/pack-report.json
+      - name: verify checksums (extract + sha256sum -c)
+        env:
+          VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+        run: |
+          mkdir -p dist/unpacked
+          unzip -q "dist/zthl-aegis-$VERSION.zip" -d dist/unpacked
+          cd dist/unpacked
+          sha256sum -c SHA256SUMS
+      - name: publish release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+        run: |
+          gh release create "$VERSION" \
+            "dist/zthl-aegis-$VERSION.zip" \
+            "dist/SHA256SUMS" \
+            "dist/release-manifest.json" \
+            --title "ZTHL Aegis $VERSION" \
+            --generate-notes

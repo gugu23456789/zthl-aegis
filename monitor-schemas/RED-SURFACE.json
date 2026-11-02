@@ -1,0 +1,21 @@
+{
+  "name": "RED-SURFACE",
+  "stage": "standing",
+  "structural_checks": [
+    {
+      "check": "gitnexus_status_available",
+      "command": "bash gatekeeper-cli.sh self-check 2>/dev/null | grep -q '\"gitnexus\".*\"PASS\"'",
+      "fail_if": "exit_code != 0"
+    },
+    {
+      "check": "gitnexus_analyze_available",
+      "command": "bash gatekeeper-cli.sh monitor --gitnexus ECO-SCAN 2>/dev/null | grep -q '\"nodes\"'",
+      "fail_if": "exit_code != 0"
+    },
+    {
+      "check": "search_available",
+      "command": "bash gatekeeper-cli.sh search _CMD_REG --repo skill --line 1 2>/dev/null | grep -q '\"matches\"'",
+      "fail_if": "exit_code != 0"
+    }
+  ]
+}

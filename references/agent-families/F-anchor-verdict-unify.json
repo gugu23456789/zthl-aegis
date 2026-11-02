@@ -1,0 +1,20 @@
+{
+  "family": "F-anchor-verdict-unify",
+  "match": {"any": ["处置前强制回环预检", "finding-disposition-no-precheck", "ECC_PRECHECK_DRIFT", "_guard_precheck", "回环检测", "precheck_ack"]},
+  "anchor_symbols": ["_guard_precheck"],
+  "tier": 3,
+  "edit_quota": 6,
+  "allowed_paths": ["scripts/gk_ecc_review.py", "scripts/gk_finding.py"],
+  "forbidden_paths": [
+    "docs/", "references/", ".gitignore",
+    "gatekeeper-cli.sh", "scripts/pre_tool_hook.py",
+    "scripts/gk_plan_lint.py",
+    "scripts/test_gk_ecc_review.py", "scripts/test_gk_finding.py",
+    "scripts/test_anchor_verdict_unify.py",
+    "references/agent-families/F-anchor-verdict-engine.json"
+  ],
+  "narrow_task_template": "[⚠ 已拆分（2026-10-06）：**引擎段（`classify_anchor` / `_live_title` / EOF 分化 / 锚提取复用）已拆出至 `F-anchor-verdict-engine` + `docs/plans/2026-10-06-anchor-verdict-engine-unify-plan.md`**；本族**收缩为处置前强制回环闸**（Plan-2），`match.any` 已删去与引擎族重叠的键以去路由歧义。]\n\n实现 {anchor}（**处置前强制回环闸**）。**唯一目标 = `scripts/gk_finding.py` 1 文件**（引擎面已由 Plan-1 落；本族只落闸面）：\n\n② `scripts/gk_finding.py` —— (b) 新增 `_guard_precheck(state_file, fids, ack=False)` 并前置接入 **6 写面** `verify`/`close`/`reopen`/`amend_title`/`conflicts`/`archive_closed`，**写前置定序 = `_gate_writable` → `_assert_single_source` → `_guard_precheck` → 写**；(c) 闸**按 fid 过滤**（`scan_title_anchors` 无 fid 形参），根 = `DEFAULT_SKILL`；**内部 / 自动化面** `prune_duplicates`/`upsert_red_findings` 走**降级放行**（逐条跳过 drifted + 留痕，**不**硬阻断）；(d) `amend_anchors` 内调 `amend_title` 时传 `_skip_precheck=True`；(e) **`main` 的 `verify`/`close`/`reopen`/`amend-title`/`conflicts`/`archive-closed` 六分支解析 `--ack-drift`** 并透传 `ack=True`，放行时 journal 记 `precheck_ack`；(f) **`reconcile_pair` 回滚判据改「最后一个带 `to` 的事件」**（`last_to = next((e.get(\"to\") for e in reversed(evs) if \"to\" in e), None)`；否则 `precheck_ack` 尾插掩蔽回滚检测）；**`precheck_ack` 事件 schema = `{\"event\":\"precheck_ack\",\"fid\":<目标 fid>,\"ts\":<ISO>,\"drift\":[…]}`** —— **必带 `fid`**（否则 `reconcile_pair` 归入 `\"\"` ⟹ 永久假 FAIL「记录被删」）、**禁带 `to`**（非状态转移，会与 closed/open 判据串扰）。\n\n## 设计（权威源 = `docs/plans/2026-10-06-anchor-verdict-single-source-plan.md` §2.4，勿另行设计）\n\n闸命中 ⟹ **raise ValueError**，消息含 `ECC_PRECHECK_DRIFT: <fid> 锚 <anchor> <verdict>（detail）`。开关：env `GK_FINDING_PRECHECK=0` ⟹ SKIP（默认 `1` = 强制）。\n\n## 硬约束\n\n- ⛔ **remedy 不自锁**：`amend_anchors` 及其内部 `amend_title` 调用**不得**被闸拦。\n- 闸**不扫全台账**（按 fid 过滤）；**不**对 `register` / 只读子命令设闸；`conflicts` **不**属只读。\n- 闸判据面 = `_live_title(title)`（由 Plan-1 `F-anchor-verdict-engine` 提供；本族**不**重定义）。\n- `old_str` 必须**逐字**取自文件（先 `read`，禁凭记忆）；严格待在 `allowed_paths` 内。\n\n## ⛔ 不得触碰\n\n- `scripts/gk_plan_lint.py`、`gatekeeper-cli.sh`、`_CMD_REG`、任何 `PROTECTED_REGION` 标记内的行。\n- `_ARCHIVE_SUFFIX`（卫星 `gk_satellite.KIND_SUFFIX` 单源）。\n- 三个测试文件（`test_gk_ecc_review.py` / `test_gk_finding.py` / `test_anchor_verdict_unify.py`）—— 红先臂由主 agent 写、已证对 HEAD 必红。\n\n## 落刀方式 / 你**不需要**做的\n\n- 用 `edit` 工具落刀；`used` 传已成功落刀次数（第一刀传 0），`allowed` 传本任务串末尾配额。\n- **红先测试由主 agent 负责**（`test_first` 已给且已证对 HEAD 必红）：你**无需**跑测试、无需自证；落刀后把每个 `edit`/`guard-edit` 返回值**原样**贴回。\n- 主 agent 的验收命令（你不用跑）：{verify_cmd}\n- ⚠ **判据自检**：若发现 `test_first` 存在注释盲或前置未验证（可能真空通过/假红），在报告里点出并附一行复现 —— 但**仍须先落刀**。",
+  "test_first": "scripts/test_anchor_verdict_unify.py::test_arm4_disposition_gate_blocks_drifted",
+  "verify_cmd": "bash -c 'cd \"$PWD\" && /opt/spz-py312/bin/python -m pytest scripts/test_anchor_verdict_unify.py scripts/test_gk_ecc_review.py scripts/test_gk_finding.py -q'  # cwd=本工作树根（coder 的 worktree）；**禁**写死家目录绝对路径（会触发 foreign_content_guard 白名单误判，见 ECC-8D46F2B1C0A4）",
+  "affected_tests": ["scripts/test_anchor_verdict_unify.py", "scripts/test_gk_ecc_review.py", "scripts/test_gk_finding.py"]
+}

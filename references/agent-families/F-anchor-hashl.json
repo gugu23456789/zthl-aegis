@@ -1,0 +1,12 @@
+{
+  "family": "F-anchor-hashl",
+  "match": {"any": ["#L 形态锚", "hashL", "#L 锚", "锚刷机制", "REV-7 前置步", "待重钉清单", "锚提取器不可见"]},
+  "tier": 3,
+  "edit_quota": 12,
+  "allowed_paths": ["scripts/gk_plan_lint.py", "scripts/gk_doc_align.py", "scripts/gk_anchor_rebase.py"],
+  "forbidden_paths": ["gatekeeper-cli.sh", "docs/", "references/", "scripts/test_gk_plan_lint.py", "scripts/test_gk_doc_align.py", "scripts/test_gk_anchor_rebase.py"],
+  "narrow_task_template": "修 {anchor}。\n\n**目标 = `#L` 形态锚进「重钉面」、WARN 计数面逐字冻结**（三件，全在本任务串 allowed_paths 内）：① `scripts/gk_plan_lint.py` 的 `iter_anchor_refs` 增 `hashl_only` 口径（单一事实源，**禁**第二套正则）；② `scripts/gk_doc_align.py` 的 `check_anchor_existence` 用两套累加器 —— `anchors_l`/`drifted_l` 喂 WARN 面、`anchors_h`/`drifted_h` **只**喂 `rebase_plan`，并在 `_bound_symbol` 增 `#L` 绑定 fallback；③ `scripts/gk_anchor_rebase.py` 的 `_new_ref` 保留原锚形态（`:`/`#L` 与 `-`/`-L` 都按原样重建）。\n**禁止**改 `gatekeeper-cli.sh`、`docs/`、`references/` 与三个既有测试文件（红先臂由主 agent 写、已证对落刀前必红）。\n\n## 判据自检\n若发现 `test_first` 判据存在注释盲或前置未验证（可能真空通过 / 假红），在报告里点出并附一行复现 —— 但**仍须先落刀**。\n\n落刀后把每个 `edit` 返回值**原样**贴回。主 agent 的验收命令（你不用跑）：{verify_cmd}\n",
+  "test_first": "scripts/test_gk_anchor_rebase.py::test_hashl_anchor_is_repinnable",
+  "verify_cmd": "bash -c 'cd \"$PWD\" && /opt/spz-py312/bin/python -m pytest scripts/test_gk_plan_lint.py scripts/test_gk_doc_align.py scripts/test_gk_anchor_rebase.py -q'",
+  "affected_tests": ["scripts/test_gk_plan_lint.py", "scripts/test_gk_doc_align.py", "scripts/test_gk_anchor_rebase.py"]
+}

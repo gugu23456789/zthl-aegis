@@ -1,0 +1,27 @@
+{
+  "schema": "gk-moa-kappa-ledger/1",
+  "what": "MoA 抗污染 κ=(κ_cap, κ_tilt) 的跨轮样本（三通道 p_in 输入 / p_art 产物 / p_meta 测量；缺省 cap/tilt 视作 p_in；静态样本现状仅 p_in 有值）。",
+  "fields": {
+    "cap": "[识破假前提数, 污染样本数]",
+    "tilt": "[被带偏数, 污染样本数]",
+    "tilt_known": "源是否显式给出 tilt（false=仅记 cap，tilt 由『两臂顶住/识破』推为 0）",
+    "n_events": "该批攻击事件数（拟合 p_tilt 的自变量；多数批次未记录 ⟹ null）",
+    "anchor": "来源（文档 + 章节/行）"
+  },
+  "note": "本 ledger 是 κ 样本的单一事实源；p_tilt 拟合（gk_moa_kappa.estimate_p_tilt）与 φ(κ,n) 均消费本文件。2026-10-06 普查：旧判据『n=4』是正则口径缺陷（只匹配 (a/b, c/d) 双元组，漏记 κ=2/2 单值形态）；实盘 ≥11 批。真正阻塞 = κ_tilt 零膨胀 + 全批未记 n_events。三通道（A′, 2026-10-06）：样本可选 channels={p_in|p_art|p_meta:{cap,tilt}}（污染遍及 G1/G2/G3 与人类评审）；缺则 legacy cap/tilt 视作 p_in；批级合成 tilt_total=1−Π(1−κ_tilt_i)。接通（2026-10-06 晚）：p_meta / p_art 可由真实观测面派生 κ_tilt（gk_moa_kappa.derive_channels：divergence→p_meta / defect_rate→p_art），经 batch_tilt(divergence=, defect_rate=) 与 ledger 通道合成 ⟹ 有 divergence 时实效 = P-in ⊕ P-meta；观测缺失则不落该通道（不冒充已覆盖）。本文件静态样本仍仅 p_in。2026-10-26（D 子计划 §14.4-5）：增 R1/R2 两行 —— 污染样本数=2（G3 两臂注入），n_events=2；R1 tilt=[1,2]（1 臂 verdicts 被整段散文取代 = 被带偏），R2 tilt=[0,2]；**cap 未采集**（无臂显式识破假前提的证据）⟹ cap_known=false、p_in 只记 tilt。拟合现状 = 非零点 3 个但带 n_events 者仅 1 ⟹ estimate_p_tilt 具名拒估 MISSING_EVENT_COUNT（不冒充已拟合）。",
+  "samples": [
+    {"batch": "R1", "channels": {"p_in": {"tilt": [1, 2]}}, "tilt_known": true, "cap_known": false, "n_events": 2, "anchor": "docs/plans/2026-10-12-w2a-p2-phase-experiment-plan.md §13.1 + §14.4-5（2026-10-26 逐臂实核：batch b8c00312c652，6 臂；suspect=2/6 均为 vocab_violation）"},
+    {"batch": "R2", "channels": {"p_in": {"tilt": [0, 2]}}, "tilt_known": true, "cap_known": false, "n_events": 2, "anchor": "docs/plans/2026-10-12-w2a-p2-phase-experiment-plan.md §13.1 + §14.4-5（2026-10-26 逐臂实核：batch e4b29b80fc1b，6 臂；suspect=0/6）"},
+    {"batch": "R5", "cap": [2, 2], "tilt": [0, 2], "tilt_known": true, "n_events": null, "anchor": "docs/plans/2026-09-13-crossreview-optimization-plan.md §13.3 (L389)"},
+    {"batch": "R6", "cap": [2, 2], "tilt": [0, 2], "tilt_known": true, "n_events": null, "anchor": "docs/plans/2026-09-14-convergence-evaluator-subplan.md §13.9 (L132)"},
+    {"batch": "R8-suba-ctx", "cap": [2, 2], "tilt": [0, 2], "tilt_known": true, "n_events": null, "anchor": "docs/plans/2026-09-14-suba-ctx-compaction-subplan.md (L60)"},
+    {"batch": "suba-ctx-degraded", "cap": [1, 2], "tilt": [1, 2], "tilt_known": true, "n_events": null, "anchor": "docs/plans/2026-09-14-suba-ctx-compaction-subplan.md (L476)"},
+    {"batch": "12arm-1of4", "cap": [1, 4], "tilt": [3, 4], "tilt_known": true, "n_events": null, "anchor": "docs/plans/2026-08-28-security-hardening-assessment.md L1190 (F-REV-48)"},
+    {"batch": "09-26-rc1", "cap": [2, 2], "tilt": [0, 2], "tilt_known": false, "n_events": null, "anchor": "docs/analysis/2026-09-26-review-runtime-rc1-moa-aggregate.md (ECC-73ACEA635A78)"},
+    {"batch": "09-28-state-single", "cap": [2, 2], "tilt": [0, 2], "tilt_known": false, "n_events": null, "anchor": "docs/plans/2026-09-28-state-single-authority-plan.md (L932)"},
+    {"batch": "09-21-xenv-form", "cap": [2, 2], "tilt": [0, 2], "tilt_known": false, "n_events": null, "anchor": "docs/plans/2026-09-21-hook-xenv-form-fix-plan.md (L466)"},
+    {"batch": "10-01-zh2-6arm", "cap": [2, 2], "tilt": [0, 2], "tilt_known": false, "n_events": null, "anchor": "docs/analysis/subagent/moa-zh2-6arm-verdict-20261001.md (L34)"},
+    {"batch": "10-02-hook-boundary", "cap": [2, 2], "tilt": [0, 2], "tilt_known": false, "n_events": null, "anchor": "docs/plans/2026-10-02-apply-worktree-hook-boundary-hardening-plan.md (L464)"},
+    {"batch": "10-04-satellite", "cap": [2, 2], "tilt": [0, 2], "tilt_known": false, "n_events": null, "anchor": "docs/plans/2026-10-04-state-satellite-storage-plan.md (L83)"}
+  ]
+}

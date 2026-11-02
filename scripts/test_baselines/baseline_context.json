@@ -1,0 +1,1 @@
+{"ok":false,"error":"context signature INVALID — file may be tampered. Run: gatekeeper-cli.sh context --update"}

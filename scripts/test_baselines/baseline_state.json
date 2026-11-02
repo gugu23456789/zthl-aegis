@@ -1,0 +1,21 @@
+{
+  "r_phase": "ECO-SCAN",
+  "stage": "STAGE_0",
+  "branch": "batch8-python-migration",
+  "worktree": "<home>/.trae/skills/spz-gatekeeper-r-sequence",
+  "main_repo": "<home>/Downloads/<workspace>/spz_gatekeeper_project",
+  "gate_data": {
+    "scheduler": {
+      "mode": "cosine",
+      "max_lr": 4,
+      "min_lr": 1,
+      "total_steps": 6,
+      "current_step": 0,
+      "current_lr": 4
+    },
+    "project_type": "standing",
+    "last_release_check": 0
+  },
+  "monitor_scores": {},
+  "history": []
+}

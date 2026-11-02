@@ -1,0 +1,86 @@
+#!/usr/bin/env python3
+"""`pack_release.py` 的机检臂（2026-11-02）。
+
+守发布纪律（对齐 `references/ci-pipeline-template.md`）：
+  ① 产物三件套：zip + SHA256SUMS + release-manifest.json，且 SHA256SUMS 与 zip 成员逐字对上；
+  ② **确定性**：同输入两次打包 zip sha256 相同；
+  ③ **拒发**：身份字面量 / 禁词命中 ⟹ 不产出 zip（fail-closed）；
+  ④ 运行期产物（`__pycache__`/`.git`/`.log`）不进包。
+"""
+import hashlib
+import json
+import os
+import sys
+import zipfile
+from pathlib import Path
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import pack_release as P  # noqa: E402
+
+
+def _tree(tmp: Path) -> Path:
+    t = tmp / "tree"
+    (t / "scripts").mkdir(parents=True)
+    (t / "LICENSE").write_text("Mulan PSL v2\n", encoding="utf-8")
+    (t / "README.md").write_text("hello\n", encoding="utf-8")
+    (t / "scripts" / "a.py").write_text("print(1)\n", encoding="utf-8")
+    return t
+
+
+def test_pack_produces_triplet_and_checksums_match(tmp_path):
+    t = _tree(tmp_path)
+    out = tmp_path / "dist"
+    r = P.pack(str(t), str(out), "v1.2.3")
+    assert r["ok"] and r["file_count"] == 3
+    zp = out / "zthl-aegis-v1.2.3.zip"
+    assert zp.is_file() and (out / "SHA256SUMS").is_file() \
+        and (out / "release-manifest.json").is_file()
+    sums = {}
+    for ln in (out / "SHA256SUMS").read_text(encoding="utf-8").splitlines():
+        h, p = ln.split("  ", 1)
+        sums[p] = h
+    with zipfile.ZipFile(zp) as z:
+        for p, h in sums.items():
+            assert hashlib.sha256(z.read(p)).hexdigest() == h, p
+        assert "SHA256SUMS" in z.namelist()
+    man = json.loads((out / "release-manifest.json").read_text(encoding="utf-8"))
+    assert man["zip_sha256"] == hashlib.sha256(zp.read_bytes()).hexdigest()
+    assert man["file_count"] == 3
+
+
+def test_pack_is_deterministic(tmp_path):
+    t = _tree(tmp_path)
+    a = P.pack(str(t), str(tmp_path / "a"), "v1")
+    b = P.pack(str(t), str(tmp_path / "b"), "v1")
+    assert a["zip_sha256"] == b["zip_sha256"], "同输入 zip 不确定（mtime/排序未固定）"
+
+
+def test_pack_refuses_identity_and_writes_no_zip(tmp_path):
+    t = _tree(tmp_path)
+    (t / "leak.md").write_text("home: C:" + "\\Users\\HP\\proj\n", encoding="utf-8")
+    out = tmp_path / "dist"
+    r = P.pack(str(t), str(out), "v1")
+    assert r["ok"] is False and r["refused"] is True
+    assert not list(out.glob("*.zip")), "身份命中仍产出 zip（应 fail-closed）"
+
+
+def test_pack_refuses_forbidden_term(tmp_path):
+    t = _tree(tmp_path)
+    (t / "note.md").write_text("contains SECRETTERM here\n", encoding="utf-8")
+    terms = tmp_path / "terms.txt"
+    terms.write_text("# comment\nSECRETTERM\n", encoding="utf-8")
+    out = tmp_path / "dist"
+    r = P.pack(str(t), str(out), "v1", str(terms))
+    assert r["ok"] is False and not list(out.glob("*.zip"))
+
+
+def test_pack_excludes_runtime_artifacts(tmp_path):
+    t = _tree(tmp_path)
+    (t / "__pycache__").mkdir()
+    (t / "__pycache__" / "x.pyc").write_bytes(b"\0")
+    (t / ".git").mkdir()
+    (t / ".git" / "config").write_text("x\n", encoding="utf-8")
+    (t / "run.log").write_text("x\n", encoding="utf-8")
+    r = P.pack(str(t), str(tmp_path / "dist"), "v1")
+    paths = {f["path"] for f in r["manifest"]["files"]}
+    assert paths == {"LICENSE", "README.md", "scripts/a.py"}, paths

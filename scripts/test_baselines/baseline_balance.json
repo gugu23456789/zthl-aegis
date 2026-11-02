@@ -1,0 +1,6 @@
+Currency: CNY
+  Total: 10.21
+  Granted: 0.00
+  Topped-up: 10.21
+Available: True
+Rate limits: v4-pro=500, v4-flash=2500 (this CLI uses v4-flash)
