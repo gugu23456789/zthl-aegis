@@ -57,7 +57,20 @@ v0.9.4.1 之后完成了几项会影响发布面的改动：
 - 单人维护不配置 environment required reviewers（GitHub 不允许触发者自审，会永久等待）；
   tag push / workflow_dispatch 即人工闸门。
 
-## 3. 验证
+## 3. 为什么在这个版本回归 408 原理
+
+AI 系统构建正在进入“深水区”。竞争焦点从模型能力、demo 效果，转向真实负载下的系统可靠性、状态正确性、时延与成本。Agent 运行时越来越像一个有状态的分布式系统：持久化执行、状态/事件存储、并发写入、崩溃恢复、幂等、背压、隔离与可观测性。业界的工程重心也在向这一层收敛——durable execution、write-ahead logging、LSM/外部排序、资源上限、最小权限、可复现构建与供应链证明，正在从“后端基础设施”变成 AI 系统的基础设施。
+
+这就是 408 的价值：它提供的是系统层的共同语言和硬约束，而不是模型层的调参技巧。
+
+- **数据结构**：DAG / 堆 / 外排 / LSM / B+ 树决定状态、索引和合并的复杂度边界；选错结构，后面所有优化都是补丁。
+- **计算机组成**：缓存层次、写放大、fsync / 原子替换、页缓存决定“一次逻辑写”实际付出多少物理 I/O。
+- **操作系统**：进程/线程、锁、调度、虚拟内存、文件系统决定并发正确性与崩溃一致性。
+- **计算机网络**：一旦跨进程/跨机，重试、幂等、超时、乱序与一致性就无法回避。
+
+因此，408 research frame 不是学术怀旧，而是生产化的必然回归：先建模，再选型；先量化写放大，再谈优化；先写清崩溃点，再谈恢复；先定义失败模式，再谈可靠性。它默认 `auto` 判定，只对系统/自维护任务开启，对文案/艺术/创作保持 `generic`；只做 advisory，不阻塞质询。
+
+## 4. 验证
 
 - 定向回归：payload/finding/task/state 299 passed；ember/wall/satellite/state_ops/moa 155 passed；
   408 + claim + trim 12 passed；advance 67 passed；CI 安全门 + 打包 15 passed。
@@ -67,14 +80,14 @@ v0.9.4.1 之后完成了几项会影响发布面的改动：
   uninstall 后无安装面残留（测试日志除外）。
 - 发布包：确定性 zip + `SHA256SUMS` + `release-manifest.json`，打包后逐项回验。
 
-## 4. 发布物
+## 5. 发布物
 
 - `dist/zthl-aegis-v0.9.4.2.zip`
 - `dist/SHA256SUMS`
 - `dist/release-manifest.json`
 - 本说明：`RELEASE-NOTES-v0.9.4.2.md`
 
-## 5. 安装 / 升级
+## 6. 安装 / 升级
 
 ```bash
 bash install.sh --dest <skill-dir>
