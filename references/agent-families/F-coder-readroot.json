@@ -1,0 +1,13 @@
+{
+  "family": "F-coder-readroot",
+  "match": {"any": ["幽灵锚", "读根", "read 根", "read_gk_file 根", "worktree 副本读", "ECC-7A3BF1148812"]},
+  "anchor_symbols": ["read_gk_file", "_read_common"],
+  "tier": 4,
+  "edit_quota": 2,
+  "allowed_paths": ["scripts/subagent_runner.py"],
+  "forbidden_paths": ["docs/", "references/", ".gitignore", "gatekeeper-cli.sh", "scripts/pre_tool_hook.py", "scripts/gk_agent_edit.py", "scripts/gk_edit_gate.py", "scripts/gk_finding.py", "scripts/gk_state.py", "scripts/gk_agent_family.py", "scripts/test_gk_subagent_tooldiag.py", "scripts/test_subagent_role_tools.py", "scripts/test_subagent_runner_extract.py"],
+  "narrow_task_template": "修 {anchor}。**唯一目标文件 = `scripts/subagent_runner.py`**（唯一 allowed_path）。**禁止**改任何测试/文档/CLI/`scripts/gk_agent_edit.py` —— 红先臂由主 agent 写、已证对 HEAD 必红，你**只负责落刀**。\n\n## 设计（权威源 = finding ECC-7A3BF1148812，勿另行设计）\n`read_gk_file` 恒定以 `SKILL_DIR` 为读根（`_read_common(SKILL_DIR, path, …)`）⟹ worktree coder 无读**本工作树副本**通路（read 根 != edit 根 = 幽灵锚）。\n落刀：给 `read_gk_file` **新增可选第 3 参** `root: str = \"\"`，实现体改 `_read_common(root or SKILL_DIR, path, offset, \"read\", \"read_gk_file\", path)`。\n- **向后兼容**：缺省 `root=\"\"` ⟹ 仍读 `SKILL_DIR`，既有语义/输出**逐字不变**（既有臂 `test_reads_content` 用精确相等断言 ⟹ **禁改输出格式/加前缀**）。\n- docstring 增一句：`root` 为可选显式读根，默认 SKILL_DIR；worktree coder 传本人 worktree 绝对路径以读本工作树副本。\n- **不得**改 `_read_common` 签名/其它调用者（`read_repo_file`）、`_read_guard`、blocklist、region 判定。\n\n## 落刀方式 / 你**不需要**做的\n- 用 `edit` 工具落刀；`old_str` 必须**逐字**取自文件（先 `read` 取原文，禁凭记忆）；`used` 传已成功落刀次数（第一刀传 0），`allowed` 传本任务串末尾配额。\n- **红先测试由主 agent 负责**：`test_first` 已给出且已证对 HEAD 必红。你**无需**跑测试、无需自证。落刀后把每个 `edit` / `guard-edit` 返回值**原样**贴回。\n- ⚠ **读根自检**：`read` 工具默认读 **SKILL_DIR**（主树），**不是**本 worktree；本任务目标文件在落刀前与主树逐字同形，故直接从 read 取 `old_str` 即可。\n- 主 agent 的验收命令（你不用跑）：{verify_cmd}\n- ⚠ **判据自检**：若发现 `test_first` 注释盲或前置未验证，在报告里点出并附一行复现 —— 但**仍须先落刀**。",
+  "test_first": "scripts/test_gk_subagent_tooldiag.py::test_read_gk_file_honors_explicit_root",
+  "verify_cmd": "bash -c 'cd \"$PWD\" && /opt/spz-py312/bin/python -m pytest scripts/test_gk_subagent_tooldiag.py -q'  # cwd=本工作树根（coder 的 worktree）；禁写死家目录绝对路径（ECC-8D46F2B1C0A4）",
+  "affected_tests": ["scripts/test_gk_subagent_tooldiag.py", "scripts/test_subagent_role_tools.py", "scripts/test_subagent_runner_extract.py"]
+}

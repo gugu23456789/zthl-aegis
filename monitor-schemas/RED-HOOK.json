@@ -1,0 +1,21 @@
+{
+  "name": "RED-HOOK",
+  "stage": "standing",
+  "structural_checks": [
+    {
+      "check": "red_hook_scan",
+      "command": "python3 scripts/_red_attacks.py hook 2>/dev/null | grep -q '\"phase\": \"hook\"'",
+      "fail_if": "exit_code != 0"
+    },
+    {
+      "check": "hook_wrapper_executable",
+      "command": "test -x scripts/pre_tool_hook_wrapper.sh",
+      "fail_if": "exit_code != 0"
+    },
+    {
+      "check": "red_hook_findings_json",
+      "command": "python3 scripts/_red_attacks.py hook 2>/dev/null | grep -q '\"findings\"'",
+      "fail_if": "exit_code != 0"
+    }
+  ]
+}

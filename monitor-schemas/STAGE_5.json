@@ -1,0 +1,25 @@
+{
+  "stage": "STAGE_5",
+  "name": "RETIRE — Backup → Delete → Close",
+  "trigger": "PR 合并后",
+  "requires": [
+    "final_plan_backup",
+    "worktree_removed",
+    "local_branch_deleted",
+    "cli_advance_to_done",
+    "temp_scripts_cleaned"
+  ],
+  "produces": [
+    "clean_main_worktree",
+    "gatekeeper_state_done"
+  ],
+  "evidence": [
+    "git worktree list shows only main",
+    "git branch shows no feature/spz-gatekeeper-2.0.2-r<N>",
+    "docs/plan-backup/ has final plan snapshot"
+  ],
+  "must_not": [
+    "stale_feature_worktree_left",
+    "plan_backup_deleted_before_r6"
+  ]
+}

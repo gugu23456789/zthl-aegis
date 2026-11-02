@@ -1,0 +1,21 @@
+{
+  "name": "RED-INTEGRITY",
+  "stage": "standing",
+  "structural_checks": [
+    {
+      "check": "red_integrity_scan",
+      "command": "python3 scripts/_red_attacks.py integrity 2>/dev/null | grep -q '\"phase\": \"integrity\"'",
+      "fail_if": "exit_code != 0"
+    },
+    {
+      "check": "package_integrity_present",
+      "command": "test -f scripts/gk_package_integrity.py",
+      "fail_if": "exit_code != 0"
+    },
+    {
+      "check": "red_integrity_findings_json",
+      "command": "python3 scripts/_red_attacks.py integrity 2>/dev/null | grep -q '\"findings\"'",
+      "fail_if": "exit_code != 0"
+    }
+  ]
+}

@@ -1,0 +1,21 @@
+{
+  "name": "RED-PY",
+  "stage": "standing",
+  "structural_checks": [
+    {
+      "check": "red_py_scan",
+      "command": "python3 scripts/_red_attacks.py py 2>/dev/null | grep -q '\"phase\": \"py\"'",
+      "fail_if": "exit_code != 0"
+    },
+    {
+      "check": "json_utils_present",
+      "command": "test -f scripts/gk_json_utils.py",
+      "fail_if": "exit_code != 0"
+    },
+    {
+      "check": "red_py_findings_json",
+      "command": "python3 scripts/_red_attacks.py py 2>/dev/null | grep -q '\"findings\"'",
+      "fail_if": "exit_code != 0"
+    }
+  ]
+}

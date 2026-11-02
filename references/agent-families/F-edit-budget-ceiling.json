@@ -1,0 +1,12 @@
+{
+  "family": "F-edit-budget-ceiling",
+  "match": {"any": ["外生安全上限", "CEILING", "edit_budget 夹取", "逃生舱夹取", "GATEKEEPER_EDIT_BUDGET 夹取", "edit_budget_ceiling"]},
+  "tier": 4,
+  "edit_quota": 4,
+  "allowed_paths": ["scripts/gk_advance.py"],
+  "forbidden_paths": ["docs/", "references/", ".gitignore", "gatekeeper-cli.sh", "scripts/test_gk_edit_budget_overrides.py"],
+  "narrow_task_template": "修 {anchor}。**唯一目标文件 = `scripts/gk_advance.py`**（唯一 allowed_path）。**不得改** `scripts/test_gk_edit_budget_overrides.py`（红先臂由主 agent 持有）、**不得改** `gatekeeper-cli.sh` / `docs/` / `references/` / 其它 `scripts/` 文件。\n\n## 目标（owner 裁定 2026-10-07；审计署计划 §17.2 路①）\n对 env 抬额路径施加**外生安全上限**：`max_effective = min(候选 max, CEILING = 24)`。本族**只落路① `advance_env`**（`GATEKEEPER_EDIT_BUDGET` env 覆盖，standing 注入段）；路②③④ **不在本族范围**。\n\n## 背景（已实测，勿再复核）\nstanding 注入段现行 `if _ov: _budget = int(_ov)` 后仅 `max(1, _budget)` —— **逐字采用、无上界**（注释自述「人工逃生舱语义不变（逐字采用）」）⟹ env 传 999 得 `max=999`。红先臂 `test_edit_budget_env_override_is_clamped_by_ceiling` 在 HEAD 实测红：`{'max': 999, 'used': 0, 'remaining': 999, ...}`。\n\n## 落刀清单（**用符号锚**，勿依赖行号）\n1. 在 `EDIT_BUDGET_HARD_CAP = 16` 旁**新增**常量 `EDIT_BUDGET_CEILING = 24`（注释：§17.2 外生安全上限，owner 裁定 2026-10-07）。\n2. 把 standing 注入段的 env 覆盖分支由「逐字采用」改为「**夹取**」：`_budget = min(max(1, int(_ov)), EDIT_BUDGET_CEILING)`；`int(_ov)` 抛 `ValueError`/`TypeError` 的回落分支同样夹取（`min(_lr * EDIT_BUDGET_PER_LR, EDIT_BUDGET_CEILING)`）。\n3. **不新增 kill switch**；**不改** `remaining` / `used` / `edit_count` / `used_total` 算法；**不改** `budget_log_append(...)` 的留痕形态（路④「豁免 + 留痕」口径不变）。\n\n## ⛔ 不得触碰\n- 任何 `PROTECTED_REGION` 标记内的行（`gk_advance.py` 现无该标记；若 `guard-edit` 仍拒，**如实贴回拒绝消息**、继续其余落点）。\n- `GATEKEEPER_EDIT_BUDGET` 以外的抬额路径（② `_grant_node_budget` additive / ③ `state_patch` / ④ `GK_BUDGET_OVERRIDE`）—— **只报告现状，不落刀**。\n\n## 你不需要做的\n- 红先臂由主 agent 写/跑（`test_first` 已给出且已证 HEAD 必红）。你**无需**跑测试。落刀后把每个 `edit` / `guard-edit` 返回值**原样**贴回。`edit` 参数：`used` 传你已成功落刀次数（第一刀传 0），`allowed` 传本任务串末尾配额，`old_str` 必须逐字原文（先 `read` 再构造）。\n- ⚠ **判据自检**：若发现 `test_first` 存在注释盲或真空通过，在报告里点出并附复现 —— 但**仍须先落刀**。",
+  "test_first": "scripts/test_gk_edit_budget_overrides.py::test_edit_budget_env_override_is_clamped_by_ceiling",
+  "verify_cmd": "bash -c 'cd \"$PWD\" && /opt/spz-py312/bin/python -m pytest scripts/test_gk_edit_budget_overrides.py -q'",
+  "affected_tests": ["scripts/test_gk_edit_budget_overrides.py"]
+}

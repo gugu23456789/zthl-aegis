@@ -1,0 +1,29 @@
+{
+  "stage": "STAGE_4",
+  "name": "MERGE — PR → Merge → Align Local",
+  "trigger": "交叉审查通过后",
+  "requires": [
+    "pre_pr_plan_backup",
+    "pr_created_with_token",
+    "pr_contains_code_only_no_plan",
+    "ci_all_green_on_pr",
+    "after_merge_main_reset_to_origin",
+    "plan_restored_from_backup",
+    "gitnexus_post_r_analyzed"
+  ],
+  "produces": [
+    "merged_pr",
+    "gitnexus_post_r_baseline",
+    "delta_pre_vs_post_within_5_percent"
+  ],
+  "evidence": [
+    "git log --oneline -3 shows merge commit",
+    "gitnexus analyze post-merge node count vs pre-merge",
+    "docs/plans/ plan file restored after reset --hard"
+  ],
+  "must_not": [
+    "plan_files_in_pr_diff",
+    "reset_hard_without_backup",
+    "changelog_updated_during_r_phase"
+  ]
+}

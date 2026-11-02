@@ -1,0 +1,34 @@
+# gk-accept 位置依赖豁免清单（`ECC-94AA4F0B3D3A`；2026-10-02，相位 `R-HOSTCFG` 同批收尾）
+# ---------------------------------------------------------------------------
+# 语义：以下用例的**通过与否取决于运行位置**（主树真实技能目录 vs feature worktree），与
+#   「本轮改动面」无关。基线 `_accept_baseline.txt` 恒在**主树**拍摄 ⟹ 在 worktree 内跑
+#   accept 时这批臂会新增红；本清单把它们从 `NEW` 中剔除并显式列为 `EXEMPT`。
+#
+# ⚠ 纪律（`docs/analysis/r26-probes/r26_redface.txt.20260924`）：**豁免 ≠ 掩盖**。
+#   不得据此重刷基线以抹平差异；应优先考虑把臂改成**环境无关**（tmp 沙箱，而非真实技能目录）。
+#
+# 维护：新增条目须在下方附一句「为何位置依赖」；由
+#   `scripts/test_gk_accept_cli.py` 的机检臂
+#   （`test_accept_location_exempt_list_is_valid`）守住：文件存在 + 条数非空 +
+#   每条形如 `<test_*.py>::…` 且对应文件存在 + 不与基线重复 + 含理由注释。
+#
+# 2026-10-02（`ECC-94AA4F0B3D3A` **闭环**）：原 2 条位置依赖臂
+#   （`test_gk_xenv_form_residual.py::TestMainWorktreeGuardRegexForms::*`）已改为**自带 tmp 沙箱
+#   state** ⟹ 环境无关，条目**移除**（worktree 内实测由红转绿）。
+#
+# 当前有 3 条位置依赖条目（2026-10-12 新增 1，2026-10-27 新增 2，见下）。**保留本机制与机检**；若再度清空为
+#   空清单，须回填「当前无位置依赖条目」标记行（防误清空）。
+#
+# 2026-10-12（`ECC-D59A6171817B`）：`test_gk_node_guard.py::TestL9CliInjection::test_auto_context_file_found`
+#   为何位置依赖：`_auto_context_file()` 要求 `<skill>/references/subagent-context.json` 实存，
+#   而该件被 `.gitignore:25` 忽略 ⟹ linked worktree 天然缺失（主树绿、worktree 红）。
+test_gk_node_guard.py::TestL9CliInjection::test_auto_context_file_found
+#
+# 2026-10-27（U3 全量复核）：`test_gk_q2_hint_selfconsistency.py` 的 C/D 两臂
+#   为何位置依赖：两臂都**实跑真 hook**（`scripts/pre_tool_hook.py`，`cwd=<repo>`），hook 按
+#   真实仓根解析 state；`.gatekeeper.state` 被 `.gitignore` 忽略 ⟹ linked worktree 无 state
+#   ⟹ hook 按 fail-closed 回 `Stage is 'no_state_file'`（rc=2）⟹ 判据落在「环境缺 state」而非
+#   「hint 自洽 / 空 STATE_FILE 不覆盖」。主树实测 4 passed（`u3-q2-main.log`）、worktree 2 红。
+test_gk_q2_hint_selfconsistency.py::test_arm_c_injected_command_passes_hook
+test_gk_q2_hint_selfconsistency.py::test_arm_d_empty_state_file_env_not_override
+

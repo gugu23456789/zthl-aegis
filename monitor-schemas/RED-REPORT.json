@@ -1,0 +1,21 @@
+{
+  "name": "RED-REPORT",
+  "stage": "standing",
+  "structural_checks": [
+    {
+      "check": "audit_report_available",
+      "command": "bash gatekeeper-cli.sh audit --report --type redteam 2>/dev/null | grep -q '\"content_hash\"'",
+      "fail_if": "exit_code != 0"
+    },
+    {
+      "check": "keys_initialized",
+      "command": "test -f .keys/audit_ed25519.pem",
+      "fail_if": "exit_code != 0"
+    },
+    {
+      "check": "findings_exist",
+      "command": "bash gatekeeper-cli.sh audit --docs 2>/dev/null | grep -q '\"docs_checks\"'",
+      "fail_if": "exit_code != 0"
+    }
+  ]
+}

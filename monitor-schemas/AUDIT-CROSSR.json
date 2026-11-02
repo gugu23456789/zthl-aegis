@@ -1,0 +1,21 @@
+{
+  "name": "AUDIT-CROSSR",
+  "stage": "standing",
+  "structural_checks": [
+    {
+      "check": "reflect_available",
+      "command": "bash gatekeeper-cli.sh reflect 2>/dev/null | grep -q '\"ok\"'",
+      "fail_if": "exit_code != 0"
+    },
+    {
+      "check": "history_trend_available",
+      "command": "bash gatekeeper-cli.sh audit --memory 2>/dev/null | grep -q '\"history_count\"'",
+      "fail_if": "exit_code != 0"
+    },
+    {
+      "check": "gitnexus_available",
+      "command": "bash gatekeeper-cli.sh self-check 2>/dev/null | grep -q '\"gitnexus\".*\"PASS\"'",
+      "fail_if": "exit_code != 0"
+    }
+  ]
+}

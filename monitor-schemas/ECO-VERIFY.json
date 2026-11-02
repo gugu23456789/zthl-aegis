@@ -1,0 +1,48 @@
+{
+  "name": "ECO-VERIFY",
+  "stage": "standing",
+  "requires": [
+    "eco_edit_completed",
+    "adjudicate_recorded_with_verdicts",
+    "edit_budget_not_exhausted"
+  ],
+  "produces": [
+    "audit_report",
+    "key_integrity_verified",
+    "context_signature_valid",
+    "entropy_rate_recorded",
+    "docgen_recorded"
+  ],
+  "evidence": [
+    "gate_data.adjudicate_history has latest verdicts with score and decision",
+    "gatekeeper-cli.sh self-check reports key_integrity PASS",
+    "gatekeeper-cli.sh self-check reports context_injection PASS or WARN only",
+    "gate_data.entropy_rate < 0.5 or force_human_adjudicate invoked",
+    "audit --state or audit --report executed successfully",
+    "exit gate is composite: audit --all must pass before docgen runs"
+  ],
+  "must_not": [
+    "advance_without_adjudication",
+    "skip_entropy_check",
+    "ignore_key_integrity_failure",
+    "proceed_with_stale_context_signature",
+    "skip_docgen_before_leaving_verify"
+  ],
+  "structural_checks": [
+    {
+      "check": "adjudicate_recorded",
+      "command": "bash gatekeeper-cli.sh state 2>/dev/null | python3 -c \"import sys,json;d=json.load(sys.stdin);adj=d.get('gate_data',{}).get('adjudicate_history',[]);print('PASS' if len(adj)>0 else 'FAIL')\"",
+      "fail_if": "exit_code != 0"
+    },
+    {
+      "check": "entropy_monitored",
+      "command": "bash gatekeeper-cli.sh state 2>/dev/null | python3 -c \"import sys,json;d=json.load(sys.stdin);er=d.get('gate_data',{}).get('entropy_rate','0.0');print('PASS' if float(er)<0.5 else 'BLOCKED')\"",
+      "fail_if": "exit_code != 0"
+    },
+    {
+      "check": "key_integrity_ok",
+      "command": "bash gatekeeper-cli.sh self-check 2>/dev/null | python3 -c \"import sys,json;d=json.load(sys.stdin);print('PASS' if any(c.get('check')=='key_integrity' and c.get('status')=='PASS' for c in d.get('checks',[])) else 'FAIL')\"",
+      "fail_if": "exit_code != 0"
+    }
+  ]
+}
