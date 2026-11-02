@@ -168,11 +168,19 @@ def test_b1_force_low_score_records_monitor_history(tmp_path):
 
 
 def test_b2_force_does_not_pollute_rejected_edits(tmp_path):
-    """放行记录不得混进 `rejected_edits` —— 那是会被回灌给下一轮的「被拒」上下文。"""
+    """放行记录可以留痕（`outcome=forced`），但**不得回灌**成下一轮的「被拒」上下文。
+
+    2026-11-01 T1/T2 事件单写后，force 会写一条 `outcome="forced"` 进 `rejected_edits`
+    （原不变量「该键为空」因此不再成立）。不变量改判**读侧投影**：`_read_previous_rejections`
+    只回灌 `blocked`。这样既保住审计留痕，又不污染下一轮上下文。
+    """
     r, st = _advance(tmp_path, "STAGE_5", "DONE", force=True, score=0.3)
     assert r.get("allowed") is True
-    assert not (st["gate_data"].get("rejected_edits") or []), \
-        "force 放行被误记为 rejected_edits ⟹ 下一轮上下文被污染"
+    rej = st["gate_data"].get("rejected_edits") or []
+    assert [e.get("outcome") for e in rej] == ["forced"], \
+        f"force 应留**一条** forced 事件（事件单写）：{rej}"
+    fed = gk_advance._read_previous_rejections(st)
+    assert fed == [], f"force 事件被回灌为「被拒」上下文 ⟹ 下一轮被污染：{fed}"
 
 
 def test_b3_force_high_score_records_nothing(tmp_path):

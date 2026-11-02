@@ -12,8 +12,13 @@ import sys
 from pathlib import Path
 
 import pytest
-from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric import ed25519
+
+# 2026-11-02（CI 修复）：`cryptography` 是可选的验收依赖，未装时**跳过本文件**而非
+#   收集期 ImportError（后者会让整个 pytest 会话中断，连带其它测试全不跑）。
+pytest.importorskip("cryptography", reason="身份认证验签需 cryptography")
+
+from cryptography.hazmat.primitives import serialization  # noqa: E402
+from cryptography.hazmat.primitives.asymmetric import ed25519  # noqa: E402
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))

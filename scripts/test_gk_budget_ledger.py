@@ -38,6 +38,26 @@ def _state(tmp_path, eb=None):
     return st
 
 
+def _gen_key_dir(tmp_path, name="keys"):
+    """自建 audit Ed25519 钥对 —— 不依赖私仓 `.keys/`（OSS 包排除该目录）。
+
+    2026-11-02（CI 修复）：原用例从 `../.keys/` 复制钥对，公开仓无此目录 ⟹ 断言
+    `mode == "ed25519"` 恒红。改为临时生成钥对，判据（真签/真验）不变。
+    """
+    pytest.importorskip("cryptography", reason="ed25519 封印用例需 cryptography")
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import ed25519
+    d = tmp_path / name
+    d.mkdir()
+    priv = ed25519.Ed25519PrivateKey.generate()
+    (d / "audit_ed25519.pem").write_bytes(priv.private_bytes(
+        serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
+        serialization.NoEncryption()))
+    (d / "audit_ed25519.pub").write_bytes(priv.public_key().public_bytes(
+        serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo))
+    return d
+
+
 # ── C1 就地过滤 ──────────────────────────────────────────────────────────
 def test_c1_degrade_not_counted(tmp_path):
     st = _state(tmp_path)
@@ -120,12 +140,13 @@ def test_c4_entropy_and_audit_readers_agree(tmp_path):
 # ── C2b：真验签（审计署判据4b，owner 裁 A1，2026-10-07）─────────────────────
 #   篡改**签名**（digest 逐字不变）⟹ 旧实现（只比 digest）会误判 ok；新实现须判否。
 def test_c2b_seal_signature_verified(tmp_path):
+    keys = _gen_key_dir(tmp_path)
     st = _state(tmp_path)
-    assert L.append(str(st), "code-fix", "unit").get("ok"), "append 失败"
-    assert L.verify_seal(str(st)).get("ok") is True, "正常封印应通过"
+    assert L.append(str(st), "code-fix", "unit", key_dir=str(keys)).get("ok"), "append 失败"
+    assert L.verify_seal(str(st), key_dir=str(keys)).get("ok") is True, "正常封印应通过"
     sp = Path(str(st) + L.SEAL_SUFFIX)
     seal = json.loads(sp.read_text(encoding="utf-8"))
-    assert seal.get("mode") == "ed25519", f"默认 .keys 在场应按 ed25519 签: {seal.get('mode')}"
+    assert seal.get("mode") == "ed25519", f"有 audit 钥应按 ed25519 签: {seal.get('mode')}"
     sig = str(seal.get("sig") or "")
     assert sig, "ed25519 签名为空"
     seal["sig"] = ("A" if sig[0] != "A" else "B") + sig[1:]      # 篡改签名（digest 不变）
@@ -153,11 +174,7 @@ def test_c2c_keyless_strict_fails(tmp_path):
 def test_c2d_key_dir_env_same_as_ember(tmp_path, monkeypatch):
     """`_AUDIT_KEY_DIR` 须与 ember `pubkey_path` 同源：签名与验签落到同一钥目录。"""
     st = _state(tmp_path)
-    keys = tmp_path / "keys"
-    keys.mkdir()
-    src = Path(__file__).resolve().parent.parent / ".keys"
-    for name in ("audit_ed25519.pem", "audit_ed25519.pub"):
-        (keys / name).write_bytes((src / name).read_bytes())
+    keys = _gen_key_dir(tmp_path)
     monkeypatch.setenv("_AUDIT_KEY_DIR", str(keys))
     assert L.append(str(st), "code-fix", "unit").get("ok"), "append 失败"
     v = L.verify_seal(str(st), require_ed25519=True)

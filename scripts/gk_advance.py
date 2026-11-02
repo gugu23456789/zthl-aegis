@@ -843,8 +843,16 @@ def _append_rejected(gd: dict, entry: dict, state_file: str = "") -> int:
 
 
 def _read_previous_rejections(d: dict) -> list:
-    """T30: Read rejected_edits buffer — feed back as structured context."""
+    """T30: Read rejected_edits buffer — feed back as structured context.
+
+    2026-11-02（CI 修复）：`rejected_edits` 自 T1/T2 起语义扩为 gate_events（`outcome`
+    ∈ blocked|forced）。**forced = 人类终裁放行**，若回灌给下一轮当「被拒」上下文，
+    等于把放行记成失败（原 `test_b2` 不变量）。故此处只投影 `blocked`（无 outcome 的
+    存量行视为 blocked，零回归）。
+    """
     rej = d.get("gate_data", {}).get("rejected_edits") or []
+    rej = [r for r in rej
+           if isinstance(r, dict) and r.get("outcome", "blocked") != "forced"]
     if not rej:
         return []
     out = []
