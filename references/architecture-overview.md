@@ -84,6 +84,7 @@ spz-gatekeeper-r-sequence/
 │   ├── predicate-applicability.md
 │   ├── e1e4-evaluator-matrix.md
 │   ├── flywheel-implementation-plan.md
+│   ├── superagent-comparison.md
 │   ├── ecc-write-spec.md
 │   ├── ecc-analysis-findings.md
 │   ├── ecc-finding-20260612-flywheel.md

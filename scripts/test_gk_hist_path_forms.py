@@ -83,20 +83,6 @@ def _no_comments(src):
     return "\n".join(ln for ln in src.splitlines() if not ln.lstrip().startswith("#"))
 
 
-def _outside_protected(src):
-    """剔除 `PROTECTED_REGION::*` 区间（区内行级禁改，另行授权，不能算本轮的清理面）。"""
-    out, inside = [], False
-    for ln in src.splitlines():
-        s = ln.strip()
-        if s.startswith("# PROTECTED_REGION_START::"):
-            inside = True
-        if not inside:
-            out.append(ln)
-        if s.startswith("# PROTECTED_REGION_END::"):
-            inside = False
-    return "\n".join(out)
-
-
 def test_state_write_core_uses_env_paths():
     body = _no_comments(_func("_state_write"))
     assert "GK_PY_SCRIPTS" in body and "GK_PY_STATE" in body, body[:300]
@@ -138,14 +124,14 @@ def test_bill_payload_uses_env_state():
 
 
 def test_monitor_and_cron_inline_paths_cleared():
-    """monitor 读 state / hook 快照 / check-changes / cron 起停 / 回收落点。
+    """monitor 读 state / hook 快照 / check-changes / cron 起停 / 回收落点 / 审计落库。
 
-    判据面 = **区外**（受保护区行级禁改，需另行授权，见 `PROTECTED_REGION` 标记）。
+    判据面 = **全文件**（含 PROTECTED_REGION：owner 2026-11-02 已授权破区做路径归一）。
     """
-    code = _no_comments(_outside_protected(TXT))
-    assert "open('$" not in code, "区外仍有 python 内联 open('$…')（原生 Windows python 必失败）"
-    assert "open(\"$" not in code, "区外仍有 python 内联 open(\"$…\")"
-    assert "'${SKILL_DIR}/scripts'" not in code, "区外仍有 sys.path 内联 SKILL_DIR"
-    assert "'$SKILL_DIR/scripts'" not in code, "区外仍有 sys.path 内联 SKILL_DIR"
+    code = _no_comments(TXT)
+    assert "open('$" not in code, "仍有 python 内联 open('$…')（原生 Windows python 必失败）"
+    assert "open(\"$" not in code, "仍有 python 内联 open(\"$…\")"
+    assert "'${SKILL_DIR}/scripts'" not in code, "仍有 sys.path 内联 SKILL_DIR"
+    assert "'$SKILL_DIR/scripts'" not in code, "仍有 sys.path 内联 SKILL_DIR"
     for lit in ("open('$bs_tmp'", "open('$rc_file'", "open('$GK_DBG_LOG'"):
         assert lit not in TXT, "%s 仍内联（形态会随 bash 而非解释器）" % lit

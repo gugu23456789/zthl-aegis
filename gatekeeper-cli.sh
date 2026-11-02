@@ -6228,7 +6228,7 @@ cmd_advance() {
         # 2026-10-31（§9.2 单源落点）：阈值不再写字面量 —— 读 `gk_econ_params.T_API`
         #   （与 `_raise_entropy` / `_entropy_enforced` 同源；owner 已签 §8 #4）。
         #   本行在 PROTECTED_REGION::transition 内 ⟹ 改的是**取值来源**，语义保持 0.3 等价。
-        local _t_api; _t_api=$(python3 -c "import sys; sys.path.insert(0, '${SKILL_DIR}/scripts'); import gk_econ_params as e; print(e.T_API)" 2>/dev/null || echo "0.3")
+        local _t_api; _t_api=$(GK_PY_SD="$(_gk_py_path "$SKILL_DIR")" python3 -c "import sys,os; sys.path.insert(0, os.path.join(os.environ['GK_PY_SD'], 'scripts')); import gk_econ_params as e; print(e.T_API)" 2>/dev/null || echo "0.3")
         if python3 "$SKILL_DIR/scripts/gk_num.py" gt "${_er}" "${_t_api:-0.3}" 2>/dev/null; then
           _monitor_mode="--api"
         fi
@@ -6414,9 +6414,9 @@ print('ok' if d.get('ok') is True else ('skip' if str(d.get('error','')).startsw
         return 1
       fi
       local red_ledger
-      red_ledger=$(RED_RESULT="$red_result" GK_RED_STATE="${_CONV_STATE:-$STATE_FILE}" python3 -c "
+      red_ledger=$(RED_RESULT="$red_result" GK_RED_STATE="$(_gk_py_path "${_CONV_STATE:-$STATE_FILE}")" GK_PY_SD="$(_gk_py_path "$SKILL_DIR")" python3 -c "
 import json,os,sys
-sys.path.insert(0,'${SKILL_DIR}/scripts')
+sys.path.insert(0,os.path.join(os.environ['GK_PY_SD'],'scripts'))
 from gk_finding import upsert_red_findings
 new=json.loads(os.environ.get('RED_RESULT','') or '{}').get('ecc_findings',[])
 print(json.dumps(upsert_red_findings(os.environ.get('GK_RED_STATE',''), new), ensure_ascii=False))
@@ -10633,9 +10633,9 @@ _update_key_integrity() {
 # 幂等性：仅在 key-meta 存在且确有密钥过期时才触发；rotate 后再次调用无事发生。
 _key_rotate_if_expired() {
   [ -f "$_KEY_META" ] || return 0
-  local _expired; _expired=$(python3 -c "
-import json,datetime
-meta=json.load(open('$_KEY_META'))
+  local _expired; _expired=$(GK_PY_META="$(_gk_py_path "$_KEY_META")" python3 -c "
+import json,datetime,os
+meta=json.load(open(os.environ['GK_PY_META']))
 now=datetime.datetime.utcnow()
 for ktype,info in meta.items():
     exp=info.get('expires','')
@@ -10793,7 +10793,7 @@ cmd_audit() {
       # redteam 报告 Finding 1 恒空。改: state_data 落临时文件 + _state_write（内置 flock +
       # checksum 重算，规避直写导致 _checksum 失配误报篡改 + audit --all 并行写竞争）。
       echo "$state_data" > "$_tmp_state"
-      _state_write "d.setdefault('gate_data',{})['audit_state_result']=json.load(open('$_tmp_state'))"
+      GK_PY_TMP="$(_gk_py_path "$_tmp_state")" _state_write "d.setdefault('gate_data',{})['audit_state_result']=json.load(open(os.environ['GK_PY_TMP']))"
       rm -f "$_tmp_state"
       # 2026-10-28（B3b）：签发登记 sidecar（审计署登记双读）。失败不阻断本次审计，
       # 但下游 dual_read 会因摘要缺失/过期而拒 ⟹ fail-loud 在消费侧。
@@ -10814,7 +10814,7 @@ cmd_audit() {
       local docs_result; docs_result=$(SKILL_DIR="$(_gk_py_path "$SKILL_DIR")" python3 "$SKILL_DIR/scripts/gk_audit_docs.py" 2>>"$GK_DBG_LOG" || echo "{\"docs_checks\":[],\"summary\":{\"total\":0,\"matches\":0,\"failures\":1,\"heredoc_error\":\"$(tail -3 "$GK_DBG_LOG" 2>/dev/null | tr '\n' ' ' | head -c 200)\"}}")
       # Persist docs result for RED report consumption (2026-08-20: 改 _state_write, 同 --state)
       echo "$docs_result" > "$_tmp_docs"
-      _state_write "d.setdefault('gate_data',{})['audit_docs_result']=json.load(open('$_tmp_docs'))"
+      GK_PY_TMP="$(_gk_py_path "$_tmp_docs")" _state_write "d.setdefault('gate_data',{})['audit_docs_result']=json.load(open(os.environ['GK_PY_TMP']))"
       rm -f "$_tmp_docs"
       # 2026-10-28（B3b）：签发登记 sidecar（同 --state）。
       python3 "${SKILL_DIR}/scripts/gk_audit_registry.py" register --state "$STATE_FILE" \
@@ -10840,7 +10840,7 @@ cmd_audit() {
       #   --state/--docs 同构（临时文件 + `_state_write`，flock + checksum 重算）。
       local _tmp_mem; _tmp_mem=$(mktemp)
       echo "$result" > "$_tmp_mem"
-      _state_write "d.setdefault('gate_data',{})['audit_memory_result']=json.load(open('$_tmp_mem'))"
+      GK_PY_TMP="$(_gk_py_path "$_tmp_mem")" _state_write "d.setdefault('gate_data',{})['audit_memory_result']=json.load(open(os.environ['GK_PY_TMP']))"
       rm -f "$_tmp_mem"
       # 2026-10-28（B3b）：签发登记 sidecar。memory/crossr **不进**双读 required 域，
       # 但登记表按「当前存在的证据域」记账（后续升 required 时无需重跑登记）。
@@ -10866,7 +10866,7 @@ cmd_audit() {
       #   下面的 `llm_analysis` 是 LLM 注解（非确定性面），不进证据键。
       local _tmp_crossr; _tmp_crossr=$(mktemp)
       echo "$result" > "$_tmp_crossr"
-      _state_write "d.setdefault('gate_data',{})['audit_crossr_result']=json.load(open('$_tmp_crossr'))"
+      GK_PY_TMP="$(_gk_py_path "$_tmp_crossr")" _state_write "d.setdefault('gate_data',{})['audit_crossr_result']=json.load(open(os.environ['GK_PY_TMP']))"
       rm -f "$_tmp_crossr"
       # 2026-10-28（B3b）：签发登记 sidecar（只记确定性证据摘要，LLM 注解不入账）。
       python3 "${SKILL_DIR}/scripts/gk_audit_registry.py" register --state "$STATE_FILE" \
@@ -11639,9 +11639,9 @@ except:
         local _anchor="unchecked" _sig_final="$sig_valid"
         if [ "$sig_valid" = "true" ]; then
           local _embedded_fp
-          _embedded_fp=$(python3 -c "
-import base64,re,sys,hashlib
-content=open('$target_path').read()
+          _embedded_fp=$(GK_PY_TARGET="$(_gk_py_path "$target_path")" python3 -c "
+import base64,re,sys,hashlib,os
+content=open(os.environ['GK_PY_TARGET']).read()
 m=re.search(r'Public Key \(embedded\): \`(.+)\`',content)
 if not m: m=re.search(r'Public Key: \`(.+)\`',content)
 if not m: sys.exit(1)
@@ -12042,7 +12042,7 @@ print(json.dumps(res))
       #   聚合无（下游无法复核「最近一次全量审计」）。写法同 state/docs（_state_write 单出纳）。
       local _tmp_all; _tmp_all=$(mktemp)
       echo "$all_results" > "$_tmp_all"
-      _state_write "d.setdefault('gate_data',{})['audit_all_result']=json.load(open('$_tmp_all'))"
+      GK_PY_TMP="$(_gk_py_path "$_tmp_all")" _state_write "d.setdefault('gate_data',{})['audit_all_result']=json.load(open(os.environ['GK_PY_TMP']))"
       rm -f "$_tmp_all"
       python3 "${SKILL_DIR}/scripts/gk_audit_registry.py" register --state "$STATE_FILE" \
         ${_AUDIT_KEY_DIR:+--key-dir "$_AUDIT_KEY_DIR"} --source audit_all \
@@ -12170,7 +12170,7 @@ cmd_context() {
           rm -f "$tmpctx"
           # 2026-09-20（ECC-PLAN ②·归口）：rg 单源 "$RG"（原 bare rg）
           if echo "$verify_ok" | "$RG" -q "Verified"; then
-            python3 -c "import json;print(json.dumps(json.load(open('$ctx_file')),indent=2,ensure_ascii=False))" 2>/dev/null || echo '{"error":"read failed"}'
+            GK_PY_CTX="$(_gk_py_path "$ctx_file")" python3 -c "import json,os;print(json.dumps(json.load(open(os.environ['GK_PY_CTX'])),indent=2,ensure_ascii=False))" 2>/dev/null || echo '{"error":"read failed"}'
           else
             echo "{\"ok\":false,\"error\":\"context signature INVALID — file may be tampered. Run: gatekeeper-cli.sh context --update\"}"
           fi
