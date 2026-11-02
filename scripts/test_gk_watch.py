@@ -9,6 +9,7 @@
 """
 import hashlib
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -160,3 +161,57 @@ def test_default_skill_dir_is_not_cwd(tmp_path, monkeypatch):
     assert d != tmp_path.resolve()
     monkeypatch.setenv("GK_SKILL_DIR", str(tmp_path / "skill"))
     assert W._default_skill_dir() == str(tmp_path / "skill")
+
+
+# ── 实时面（2026-11-02）：默认不绑时间窗，看「此刻 + commit 记录 + gitnexus 基线」──
+def _init_repo(tmp_path):
+    env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.com",
+           "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.com"}
+    (tmp_path / "seed.txt").write_text("seed\n", encoding="utf-8")
+    for args in (["init", "-q", "-b", "master"], ["add", "-A"], ["commit", "-q", "-m", "init"]):
+        subprocess.run(["git", *args], cwd=tmp_path, capture_output=True, text=True,
+                       env=env, check=True)
+
+
+def _head(tmp_path):
+    return subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=tmp_path, text=True).strip()
+
+
+def test_live_snapshot_without_time_window(tmp_path):
+    """默认（无 `--hours`）= 实时：此刻的工作区 + 最近 commit 记录；不按 mtime 时间窗列举。"""
+    _init_repo(tmp_path)
+    (tmp_path / "dirty.txt").write_text("x", encoding="utf-8")
+    out = _run(tmp_path)
+    assert out["hours"] is None, out["hours"]
+    assert out["recent"] == [], out["recent"]           # 时间窗是可选过滤，缺省不启用
+    live = out["live"]
+    assert live["head"]["sha"] == _head(tmp_path)
+    assert live["head"]["short"] == _head(tmp_path)[:8]
+    assert [c["subject"] for c in live["commits"]][:1] == ["init"]
+    assert any(d["path"] == "dirty.txt" for d in live["dirty"]), live["dirty"]
+
+
+def test_live_gitnexus_baseline_tristate(tmp_path):
+    """gitnexus 基线：无索引 = absent；索引 HEAD 与当前 HEAD 相等 = fresh；否则 = stale。"""
+    _init_repo(tmp_path)
+    assert _run(tmp_path)["live"]["gitnexus"]["state"] == "absent"
+    gx = tmp_path / ".gitnexus"
+    gx.mkdir()
+    (gx / "gitnexus.json").write_text(json.dumps({"lastCommit": _head(tmp_path),
+                                                  "indexedAt": "2026-11-01T00:00:00Z"}),
+                                      encoding="utf-8")
+    fresh = _run(tmp_path)["live"]["gitnexus"]
+    assert fresh["state"] == "fresh" and fresh["last_commit"] == _head(tmp_path), fresh
+    (gx / "gitnexus.json").write_text(json.dumps({"lastCommit": "0" * 40}), encoding="utf-8")
+    stale = _run(tmp_path)["live"]["gitnexus"]
+    assert stale["state"] == "stale", stale
+
+
+def test_hours_remains_optional_filter(tmp_path):
+    """`--hours` 仍可选：给了才列 mtime 窗口（保留旧行为），不给就只看实时面。"""
+    _init_repo(tmp_path)
+    (tmp_path / "fresh.txt").write_text("y", encoding="utf-8")
+    out = _run(tmp_path, "--hours", "1")
+    assert out["hours"] == 1.0
+    assert any(r["path"] == "fresh.txt" for r in out["recent"]), out["recent"]
+

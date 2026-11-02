@@ -131,3 +131,13 @@ scripts/_papers.local
 # 2026-10-31（开源收尾）：MoA 聚合页是**运行期产物**（每次 chain 重写，含本地批指纹/路径），
 # 不是仓库资产 ⟹ 不入库（历史误入库的两份已 `git rm --cached`，文件保留在工作树）。
 moa-chain-*.html
+
+# 2026-11-01（跨平台批次 · 临时产物不入库）：单次诊断/修正用点脚本（`.` 前缀 = 临时）
+# 与 pytest 临时目录。trae 清单第 6 条。
+.extract_content.py
+.extract_rec.py
+.fix_sidecar.py
+.mk_domain_state.py
+_diag_*.py
+_env_chan.py
+.pytest-tmp/

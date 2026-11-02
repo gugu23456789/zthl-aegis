@@ -49,9 +49,17 @@ def test_monitor_guards_bare_plan_refinement():
 
 
 def test_preflight_baseline_covers_plan_refinement():
-    """arm3：质询通道须并入基线 status-fresh 门（B），stale 且刷新无效 ⟹ BASELINE_STALE。"""
+    """arm3：质询通道须并入基线 status-fresh 门（B）。
+
+    2026-11-02 语义变更（owner 裁定「并发质询永久卡死」）：`stale` 由 fail-closed 改 **advisory**
+    —— 索引落后于 HEAD 只告警放行；**只有 `unavailable`（根本没有索引）才阻断**。
+    本臂随之改判据：断言信源码里**仍有**门（不是被删），且阻断面已收窄到 unavailable。
+    """
     s = _src()
-    assert "BASELINE_STALE" in s, "质询通道缺基线新鲜度门判定（B 原仅 crossrev）"
+    assert "BASELINE_UNAVAILABLE" in s, \
+        "质询通道缺基线门判定（B 的 unavailable 分支被删 ⟹ 连没索引都放行）"
+    assert "advisory" in s and "图证据不完整" in s, \
+        "stale 未降级为 advisory（并发提交下会再次永久卡死）"
     assert "GK_ALLOW_STALE_BASELINE" in s, "缺逃生口（依赖不可用不得锁死序列）"
 
 

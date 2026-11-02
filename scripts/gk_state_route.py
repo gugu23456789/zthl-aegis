@@ -49,6 +49,7 @@ Exit codes: 0 = OK (JSON on stdout), 1 = error JSON,
 
 import json
 import os
+import re
 import sys
 import time
 from datetime import datetime, timezone
@@ -87,6 +88,46 @@ def _pointer_fresh(pdata: dict) -> bool:
 
 def _norm(p) -> str:
     return (str(p or "").replace("\\", "/")).rstrip("/")
+
+
+def _path_forms(p):
+    """跨运行时路径候选（`/mnt/c/x` ↔ `C:/x` ↔ `C:\\x`）—— 同一 state 的两种合法写法。
+
+    2026-10-18（跨平台 ①B 修复）：plan 指针的 `state_file` 由**写入侧**决定形态：
+      · WSL 侧 CLI 发现的 state ⟹ `str(Path(...))` = `<home>`（POSIX）；
+      · Windows 侧 CLI / `python3` 发现的 state ⟹ `str(Path(...))` = `<home>`。
+    读侧形态必须与写侧**归一**，否则 `Path(...).exists()` 恒 False。
+    本函数返回按「宿主原生形态优先」排序的候选列表，调用方**逐个试 exists**。
+
+    ⚠ 本函数只做**字符串**形态换算，不做任何 FS 访问（保持纯函数可单测）。
+    """
+    s = str(p or "").replace("\\", "/").rstrip("/")
+    if not s:
+        return []
+    out = [s]
+    m = re.match(r"^/mnt/([A-Za-z])/(.*)$", s)
+    if m:
+        # WSL 形态 → Windows 盘符形态
+        out.append(f"{m.group(1).upper()}:{'/' + m.group(2)}")
+    elif re.match(r"^[A-Za-z]:/", s):
+        # Windows 形态 → WSL 形态
+        out.append("/mnt/" + s[0].lower() + s[2:])
+    # 去重（保持首个 = 原样）
+    seen, uniq = set(), []
+    for x in out:
+        if x not in seen:
+            seen.add(x)
+            uniq.append(x)
+    return uniq
+
+
+def _exists_either(p) -> bool:
+    """跨运行时实存校验：任一形态 exists 即真。
+
+    先例：`pre_tool_hook._wsl_to_win`（L3036）、`gk_route_center._as_norm`（L1360）
+    都做过单向换算；本函数做**双向**且只关心「这个 state 真的在磁盘上吗」。
+    """
+    return any(Path(x).exists() for x in _path_forms(p))
 
 
 def _state_mtime(state_file: str):
@@ -386,6 +427,10 @@ def select_plan_pointer(skill_dir: str, session_id: str = "", cmd_target_plan: s
         （显式 `STATE_FILE` ⟹ `""`，对齐既有「不写不删」语义）；
       · `followed` = 是否采纳；`reason` ∈ {`explicit_state_file`, `no_pointer_file`, `stale`,
         `cmd_target_mismatch`, `strict`, `domain_route_off`, `dangling_pointer`, `""`}。
+    ⚠ **路径形态归一**（2026-10-18 实补）：`state_file` 的存在性判据走 `_exists_either`
+    （`/mnt/c/x` ↔ `C:/x` 双向候选）。此前 docstring 声称做了「双形态探测」但实现里
+    `Path(...).exists()` 只探单一形态 ⟹ 跨运行时写的指针被判 `dangling_pointer`
+    （**声明与实现脱节 = 假绿**，被 `test_gk_plan_pointer_select` 5 红抓到）。
     语义与既有 bash 启动块**逐字一致**（含「有身份但本会话无指针 ⟹ **不采纳全局**」的 2026-09-28 修复）。
     """
     if state_file_explicit:
@@ -418,7 +463,16 @@ def select_plan_pointer(skill_dir: str, session_id: str = "", cmd_target_plan: s
     if dom and (domain_route or os.environ.get("GK_STATE_DOMAIN_ROUTE", "1")) == "0":
         base.update({"followed": False, "reason": "domain_route_off"})
         return base
-    if not (d.get("state_file") and Path(str(d["state_file"])).exists()):
+    if not (d.get("state_file") and _exists_either(str(d["state_file"]))):
+        # 2026-10-18（跨平台 ①B 修复）：原判据 `Path(str(d["state_file"])).exists()`
+        #   **只探单一形态**——WSL 侧 CLI 写 `<home>` ⟹ Windows Python 下
+        #   `Path("/mnt/c/...")` 被读成 `C:\mnt\c\...` ⟹ 恒 False ⟹
+        #   **`dangling_pointer`** ⟹ `followed=False` ⟹ CLI 报 `STATE_POINTER_STALE`。
+        #   真因是「路径形态跨运行时不归一」，报错却说「指针悬空」（state 明明存在）。
+        #   docstring 早已声明做了 `/mnt↔C:` 双形态归一，但实现里 `_norm` **从未被调用**
+        #   —— 声明与实现脱节 = 假绿（`scripts/test_gk_plan_pointer_select.py` 5 红抓到）。
+        # 修法 = `_exists_either` 双向候选试 exists（与 `pre_tool_hook._wsl_to_win` L3036、
+        #   `gk_route_center._sf_exists` L305 同语义，但双向）。
         base.update({"followed": False, "reason": "dangling_pointer"})
         return base
     base.update({"followed": True, "reason": ""})

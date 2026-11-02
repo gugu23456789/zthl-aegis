@@ -415,7 +415,10 @@ def _gx_attr_harness() -> str:
     parts = []
     # `_gx_repo_root_of` 复用 `_gx_repo_name_for_dir` + `_gx_dir_for_repo_name`（⑰-7 交叉审查清理：
     # 禁第二份 registry「最长前缀」python）⟹ 抽取表须含全部被依赖函数
-    for fn in ("_gx_registry_path", "_gx_dir_for_repo_name",
+    # 2026-11-02（真因 D 第二轮）：`_gx_repo_dir_for_current` 的 state 读改走 env（`GK_PY_STATE`），
+    #   形态单源 `_gk_py_path` ⟹ 抽取表须连带其依赖（`_gk_py_form` / `_gx_to_win_path`）。
+    for fn in ("_gx_to_win_path", "_gk_py_form", "_gk_py_path",
+               "_gx_registry_path", "_gx_dir_for_repo_name",
                "_gx_repo_name_for_dir", "_gx_repo_root_of", "_gx_repo_dir_for_current"):
         m = re.search(r"\n(" + fn + r"\(\)\s*\{.*?\n\})\n", src, re.DOTALL)
         assert m, f"{fn} not found in gatekeeper-cli.sh（改名/结构变更后须同步本测试）"

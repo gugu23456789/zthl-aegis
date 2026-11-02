@@ -187,7 +187,9 @@ def _run_payload(tmp_path, ecc, extra_env=None):
                 .replace("$STATE_FILE", str(state).replace("\\", "/"))
                 .replace("$GK_DBG_LOG", str(tmp_path / "dbg.log").replace("\\", "/")))
     env = dict(os.environ, GK_TASK=ecc.get("task", ""), GK_HMAC_VALID="skip",
-               GK_OUTPUT_FILE=str(out), GK_REPORT_FILE=str(tmp_path / "sub-1.md"))
+               GK_OUTPUT_FILE=str(out), GK_REPORT_FILE=str(tmp_path / "sub-1.md"),
+               # 真因 D（2026-11-02）：路径经 env 传入（形态锚在解释器，见 `_gk_py_path`）
+               GK_PY_SCRIPTS=sd + "/scripts", GK_PY_STATE=str(state).replace("\\", "/"))
     env.update(extra_env or {})
     r = subprocess.run([sys.executable, "-c", body], input=json.dumps(ecc),
                        capture_output=True, text=True, env=env, timeout=90)
@@ -327,7 +329,9 @@ def test_history_payload_runs_under_real_bash(tmp_path):
     env = dict(os.environ, STATE_FILE=str(state), SKILL_DIR=str(CLI.parent),
                GK_DBG_LOG=str(tmp_path / "dbg.log"), GK_TASK=ecc["task"],
                GK_HMAC_VALID="skip", GK_OUTPUT_FILE=str(out),
-               GK_REPORT_FILE=str(tmp_path / "sub-1.md"))
+               GK_REPORT_FILE=str(tmp_path / "sub-1.md"),
+               # 真因 D（2026-11-02）：路径经 env 传入（形态锚在解释器，见 `_gk_py_path`）
+               GK_PY_SCRIPTS=str(CLI.parent / "scripts"), GK_PY_STATE=str(state))
     r = subprocess.run(["bash", "-c", script], input=json.dumps(ecc), capture_output=True,
                        text=True, env=env, cwd=str(CLI.parent), timeout=90)
     both = (r.stdout or "") + (r.stderr or "")

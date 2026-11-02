@@ -296,6 +296,7 @@ def check_provider() -> dict:
     """Check API provider connectivity via lightweight POST ping."""
     result = {"check": "provider"}
     api_key = os.environ.get("API_KEY", "") or os.environ.get("DEEPSEEK_API_KEY", "")
+    key_source = "env" if api_key else "none"
     if not api_key:
         # Resolve via gatekeeper env
         for k in ("GATEKEEPER_API_KEY", "DEEPSEEK_API_KEY"):
@@ -304,9 +305,21 @@ def check_provider() -> dict:
                 api_key = v
                 break
     if not api_key:
+        # 2026-11-02（开源包可用性）：key 文件（跨平台持久化）—— 与 CLI `_resolve_api_key` 同源。
+        try:
+            from gk_api_key import read_key
+            _skill = os.environ.get("GK_SKILL_DIR") or os.path.dirname(
+                os.path.dirname(os.path.abspath(__file__)))
+            api_key, key_source = read_key(_skill, os.environ.get("GATEKEEPER_PROVIDER", "deepseek"))
+            key_source = key_source or "none"
+        except Exception:  # noqa: BLE001 — 自检不得因 key 文件层故障而崩
+            key_source = "none"
+    if not api_key:
         result["status"] = "SKIP"
         result["detail"] = "No API key set"
+        result["key_source"] = "none"
         return result
+    result["key_source"] = key_source
     api_base = os.environ.get("API_BASE", "https://api.deepseek.com")
     api_model = os.environ.get("API_MODEL", "deepseek-flash")
     try:

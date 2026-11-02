@@ -108,7 +108,10 @@ def test_arm6_embeddings_single_source():
 
 
 def test_arm7_escape_hatch_preserved():
-    """arm7（守门）：基线门与逃生口不得被本刀破坏。"""
+    """arm7（守门）：基线门与逃生口不得被本刀破坏。
+
+    2026-11-02：门仍在，但阻断面收窄到 `unavailable`（`stale` → advisory）。
+    """
     s = _src()
-    assert "BASELINE_STALE" in s, "基线门判定被破坏"
+    assert "BASELINE_UNAVAILABLE" in s, "基线门判定被破坏（unavailable 分支被删）"
     assert "GK_ALLOW_STALE_BASELINE" in s, "逃生口被破坏（依赖不可用不得锁死序列）"

@@ -14,10 +14,16 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+# 运行时基线（2026-11-02）：Actions 已弃用 Node 20，默认强制 Node 24；
+# runner 侧固定 `ubuntu-24.04` —— `ubuntu-latest` 在 2026-10 起迁 Ubuntu 26，
+# 语义漂移会改变 apt/glibc 行为，发布门不该跟着漂。
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
 jobs:
   smoke:
     name: smoke (syntax / plan-lint / fast tests)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
         with:
@@ -39,7 +45,7 @@ jobs:
     # 不是仓库级文档 lint ⟹ 不进 push/PR 常规门，只按手填路径触发。
     name: plan-lint (pw-sn pre-gate)
     if: github.event_name == 'workflow_dispatch' && inputs.plan != ''
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -73,7 +79,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-24.04, windows-latest]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -108,7 +114,7 @@ jobs:
   security-audit:
     # workflow 供应链 + 危险命令静态扫描（2026-11-02 新增，**观察期** continue-on-error）。
     name: security audit (static)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4

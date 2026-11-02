@@ -24,18 +24,13 @@ from gk_host_paths import user_home as _user_home, win_abs_to_wsl  # noqa: E402
 
 PKG = "zthl_bashpy_migrate"
 # dev 源目录（环境变量优先 + 已知路径回退，Windows/WSL 双形态）。
-# 2026-08-29: 补 CCF-A-Skills（prompt-based skill，Downloads 参考项目）——
-# 修正 manifest 声明 dev:${CCF_A_SKILLS_DIR} 但环境变量未设导致 dev 源不可解析的配置缺口。
 # 2026-10-29 去硬编码：默认根由**用户目录**派生（`gk_host_paths.user_home`，不写死用户名）；
 # 两形态（`<home>/…` 与 `/mnt/c/Users/…`）由 `win_abs_to_wsl` 单源归一。
 _HOME = _user_home()
 _DEV_SOURCE_DIRS = (
     os.environ.get("ZTHL_BASHPY_DIR", ""),
-    os.environ.get("CCF_A_SKILLS_DIR", ""),
     os.path.join(_HOME, "zthl-bashpy-migrate"),
     win_abs_to_wsl(os.path.join(_HOME, "zthl-bashpy-migrate")),
-    os.path.join(_HOME, "Downloads", "CCF-A-Skills"),
-    win_abs_to_wsl(os.path.join(_HOME, "Downloads", "CCF-A-Skills")),
 )
 GK_DBG_LOG = Path(__file__).resolve().parent / "gk_dbg.log"
 
@@ -69,26 +64,6 @@ MANIFESTS = {
         "write": False,
         "undo": None,
     },
-    "swe-rb": {
-        "id": "swe-rb",
-        "name": "zthl-swe-rb",
-        "url": ("pip:zthl-swe-rb | dev:${ZTHL_SWE_RB_DIR} "),
-        "isolate": False,
-        # 2026-08-31 骨架登记：SWE-RB 重构契约验证引擎（analyze/verify/audit），
-        # 与 bashpy-migrate 同型统一安全网/注册/守护/类型格式；能力名 contract/
-        # behaviour/redteam 与 bashpy 同名不同 pid（cap 白名单按 pid 区分）。
-        # 信息边界（防 benchmark 卡 bug）：契约只来自 State A，tests/ 树与
-        # 评分手册信息永不进入（analyze _SKIP_DIRS 含 tests/）。
-        "intercept": ("analyze", "verify", "audit",
-                      "status", "check", "upgrade", "rollback"),
-        "config": {"dev_env": "ZTHL_SWE_RB_DIR",
-                   "entry": "zthl_swe_rb.audit:redteam_scan",
-                   "loader": "gk_swe_rb_loader.py",
-                   "taxonomy_ref": "zthl-swe-rb/docs/refactoring-taxonomy.md"},
-        "disabled": False,
-        "write": False,
-        "undo": None,
-    },
     "paper-review": {
         "id": "paper-review",
         "name": "gk_paper_review",
@@ -100,57 +75,7 @@ MANIFESTS = {
                    # （2026-10-27 起下沉为档案；脚本只留引擎 + 校验）。多会议准则按 venue 归档，
                    # 轨道政策随各会议 CFP 固化后版本化（档案随私仓保留）。
                    "policy_ref": "<venue-policy>",
-                   # 专业评审技能对接（2026-08-29）：CCF-A-Skills ccf-reviewer（拒稿点/补实验点/
-                   # 写作漏洞）+ ccf-citation（related work taxonomy / missing citation risk list）。
-                   # --subagent 评审 prompt 可引用其 reviewer_taxonomy/claim_evidence_matrix 深化。
-                   "skill_ref": "ccf-a-skills",
                    "dep": "markitdown(pipx, ~/.local/bin — read_doc_gk 转换用)"},
-        "disabled": False,
-        "write": False,
-        "undo": None,
-    },
-    "ccf-a-skills": {
-        "id": "ccf-a-skills",
-        "name": "CCF-A-Skills (kay-kuo, MIT)",
-        "url": ("dev:${CCF_A_SKILLS_DIR} "
-                "| git:https://github.com/kay-kuo/CCF-A-Skills.git"),
-        "isolate": False,
-        "intercept": ("ccf-reader", "ccf-writing", "ccf-figure-table", "ccf-citation",
-                      "ccf-reviewer", "ccf-rebuttal", "ccf-presentation"),
-        "config": {"dev_env": "CCF_A_SKILLS_DIR",
-                   "entry": "ccf-reviewer:SKILL.md + ccf-citation:SKILL.md（paper-review skill_ref）",
-                   "policy_ref": "CCF-A 评审政策（_shared/ reviewer_taxonomy + claim_evidence_matrix + evidence_policy + venue_profiles）",
-                   "dep": "无（prompt-based skill，零运行时依赖）",
-                   "shared": "_shared/（ccf_principles / output_schemas / reproducibility_checklist）"},
-        "disabled": False,
-        "write": False,
-        "undo": None,
-    },
-    "gitnexus-skills": {
-        "id": "gitnexus-skills",
-        "name": "gitnexus bundled skills (npm 包 gitnexus 自带 12 份)",
-        # 2026-09-17 登记（F-REV-101，用户裁定「101 可以」）。与 ccf-a-skills 同为**外部内容源**，
-        # 但性质不同：CCF-A 是 prompt-based skill（登记的是**能力**）；本项是 npm 包 gitnexus
-        # **自带的文档**（登记的是**内容源 + 消费方 + 能力面**）。
-        # 消费方 = `subagent_runner:gx_guide_gk`（按需拉取官方 skill 全文）；其 topic 白名单
-        # `_GX_SKILLS_TOPICS` 与本项 `intercept` **必须等值** —— 由 test_gk_plugin_manifest
-        # 的 TestGitnexusSkillsRegistration 强制（防"声明 vs 实际"两处事实源漂移，
-        # 同 TOOL_REGISTRY ↔ valid_tools 的既有守护模式）。
-        # ⚠ **供应链 pin 缺口（显式登记，不静默）**：技能内容随 npm 包 gitnexus 分发，
-        # 本机无法离线取得 tarball sha512 ⟹ 本项**未**登记 config.integrity（故 url **刻意
-        # 不写 `npm:` 段** —— 写了会被 validate 的门禁正确拒绝，不规避门禁）。
-        # 包级版本 pin 现归属 `<home>\.codex\state\reference-versions.yaml`（工具版本面）；
-        # 若要在**本 manifest** 落 tarball pin，须联网取 npm `dist.integrity` 后补登记。
-        "url": "dev:${GX_SKILLS_DIR} | pkg:gitnexus/skills (GX_JS 上溯 package.json 推导)",
-        "isolate": False,
-        "intercept": ("guide", "cli", "exploring", "debugging", "impact-analysis",
-                      "refactoring", "pdg-query", "taint-analysis",
-                      "plan", "review", "work", "lfg"),
-        "config": {"dev_env": "GX_SKILLS_DIR",
-                   "entry": "subagent_runner:gx_guide_gk",
-                   "topics_source": "subagent_runner._GX_SKILLS_TOPICS（等值由测试强制）",
-                   "dep": "npm 包 gitnexus（版本 pin 见 reference-versions.yaml）",
-                   "pinning_gap": "npm tarball sha512 未登记（需联网取 npm dist.integrity 后补）"},
         "disabled": False,
         "write": False,
         "undo": None,

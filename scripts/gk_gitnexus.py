@@ -251,6 +251,108 @@ def _cache_get(key: str) -> str | None:
     return d.get("out") if isinstance(d, dict) else None
 
 
+# ─── 进程树回收（2026-11-02）────────────────────────────────────────────────
+# 病象（实测）：杀掉 CLI/后台任务后，`node.exe` 仍挂着 —— 本机一度 12 个，其中 9 个是
+#   `D:\Program Files\nodejs\node.exe`（gitnexus 的 **worker 子进程**）。原因：
+#   ① `subprocess.run(timeout=)` 超时只杀**直接子进程**，杀不到 worker；
+#   ② 外部把 python 一起 kill 掉时，python 连清理都来不及跑 ⟹ 必然留孤儿。
+# 两条修法：
+#   ① spawn 时**独立进程组**（POSIX `start_new_session` / Windows `CREATE_NEW_PROCESS_GROUP`），
+#      超时走 `killpg` / `taskkill /T` **整棵树**；
+#   ② pidfile 记账（`~/.gatekeeper/gitnexus-workers.json`）：下次任何一次 spawn 前先 `reap()`，
+#      把上一次被外部 kill 留下的孤儿收掉（外部 kill 场景下这是唯一可行的兜底）。
+_WORKER_PIDFILE = Path(os.path.expanduser("~")) / ".gatekeeper" / "gitnexus-workers.json"
+
+
+def _pid_alive(pid: int) -> bool:
+    if not pid or pid <= 0:
+        return False
+    if os.name == "nt":
+        try:
+            r = subprocess.run(["tasklist", "/FI", "PID eq %d" % pid, "/NH"],
+                               capture_output=True, text=True, timeout=15)
+            return str(pid) in (r.stdout or "")
+        except Exception:
+            return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
+def _kill_tree(pid: int) -> None:
+    """整棵树杀（含 gitnexus worker 子进程）。"""
+    if not pid or pid <= 0:
+        return
+    try:
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)],
+                           capture_output=True, text=True, timeout=30)
+        else:
+            import signal
+            os.killpg(os.getpgid(pid), signal.SIGKILL)
+    except Exception:
+        pass
+
+
+def _pids_load() -> list:
+    """→ `[{"pid": int, "ts": float}]`（旧格式裸 int 列表自动兼容）。"""
+    try:
+        d = json.loads(_WORKER_PIDFILE.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    out = []
+    for x in d if isinstance(d, list) else []:
+        if isinstance(x, dict) and x.get("pid"):
+            out.append({"pid": int(x["pid"]), "ts": float(x.get("ts") or 0)})
+        elif isinstance(x, int):
+            out.append({"pid": x, "ts": 0.0})
+    return out
+
+
+def _pids_save(recs) -> None:
+    try:
+        _WORKER_PIDFILE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = _WORKER_PIDFILE.with_suffix(".tmp")
+        seen, out = set(), []
+        for r in recs:
+            pid = int(r.get("pid") if isinstance(r, dict) else r)
+            if pid and pid not in seen:
+                seen.add(pid)
+                out.append({"pid": pid, "ts": float(r.get("ts") if isinstance(r, dict) else 0)})
+        tmp.write_text(json.dumps(out), encoding="utf-8")
+        os.replace(tmp, _WORKER_PIDFILE)
+    except Exception:
+        pass
+
+
+#: 只回收「明显超期」的条目 —— 必须留足余量，否则会误杀**另一个进程正在跑**的 analyze。
+#: 实测 analyze 单次上限 600s（`GK_GX_ANALYZE_TIMEOUT`），取 2× + 余量 = 1800s。
+_REAP_MIN_AGE_S = 1800
+
+
+def reap_workers() -> int:
+    """收掉**上一次**被外部 kill 留下的孤儿。
+
+    ⚠ 不能见 pid 就杀：pidfile 是**跨进程**共享的，同时跑两个 analyze 时会把健康的那个杀掉。
+      故只回收 `ts` 超过 `_REAP_MIN_AGE_S` 且仍存活的条目；未超龄的原样保留。
+    """
+    recs = _pids_load()
+    if not recs:
+        return 0
+    now = time.time()
+    killed, keep = 0, []
+    for r in recs:
+        if (now - r["ts"]) > _REAP_MIN_AGE_S and _pid_alive(r["pid"]):
+            _kill_tree(r["pid"])
+            killed += 1
+        elif (now - r["ts"]) <= _REAP_MIN_AGE_S and _pid_alive(r["pid"]):
+            keep.append(r)          # 可能是并发进程的正常子进程，保留
+    _pids_save(keep)
+    return killed
+
+
 def _cache_put(key: str, out: str) -> None:
     d = _cache_dir()
     try:
@@ -292,6 +394,15 @@ def invalidate_cache() -> int:
 def _build_env(command: str) -> dict:
     env = dict(os.environ)
     env.setdefault("GITNEXUS_ANALYZER_IDENTITY_CACHE_DIR", IDENTITY_CACHE_DIR)
+    # 2026-11-01（实测）：gitnexus 对身份缓存目录是 **fail-closed** ——
+    #   `GITNEXUS_ANALYZER_IDENTITY_CACHE_DIR must name a pre-existing protected
+    #    non-symlink directory`，目录不在就直接抛（连 `analyze` 都进不去）。
+    #   原状靠 bash 侧 `mkdir -p` 兜，但凡是从 python 直接调、或目录被临时清理掉，
+    #   就变成「node 崩栈」这种与真因无关的报错。此处**自己保证目录存在**。
+    try:
+        Path(env["GITNEXUS_ANALYZER_IDENTITY_CACHE_DIR"]).mkdir(parents=True, exist_ok=True)
+    except OSError:
+        pass
     # F-REV-88：与 bash `_run_gitnexus_raw` 同策 —— 仅 `analyze*` 钉 cpu
     # （gitnexus `parseDevice` 对空串抛错，故其余子命令**不设**）。
     if command.strip().startswith("analyze"):
@@ -303,7 +414,12 @@ def _build_env(command: str) -> dict:
         #   ⟹ 技能侧 `_gx_analyze_embeddings` 反复重试 → 6 臂派发全部卡死。
         #   删除目标仅为 gitnexus **自有缓存目录**（非用户数据），故对 analyze 关闭该 shim。
         #   ⚠ 只对 analyze* 关闭，其余子命令保持保护。
-        env.setdefault("CODEBUDDY_SAFE_DELETE_ENABLED", "0")
+        #   2026-11-01 实测修正：原写 `setdefault` —— **父进程已注入 `=1`** ⟹ setdefault 是空操作
+        #     ⟹ shim 从未被关掉 ⟹ analyze 恒死在 `[safe-delete][SAFE_DELETE_INVALID_PATH]
+        #     embedded drive prefix is not allowed`（parsedfile-store 下按绝对路径命名的条目
+        #     含 `/C:` ⟹ 命中 shim 的 `*/[A-Za-z]:*` 判据）⟹ 自愈 analyze 恒失败 ⟹ 基线恒
+        #     `stale` ⟹ 质询 `BASELINE_STALE`。改**显式覆盖**（本函数的目的就是覆盖）。
+        env["CODEBUDDY_SAFE_DELETE_ENABLED"] = "0"
     # 2026-10-30（纠错回滚）：此处曾注入 GITNEXUS_EMBEDDING_MODEL / _DIMS=512 试图
     #   把 gitnexus 索引嵌入换成中文模型，**实测不可行且有害**：
     #   ① `GITNEXUS_EMBEDDING_MODEL` 只被 http-client 读取（远程 OpenAI 兼容端点用），
@@ -513,6 +629,125 @@ def fast_status(repo_dir: str) -> str:
     return "reusable" if n == 0 else "stale"
 
 
+# ─── 外置存储容量控制（2026-11-02）───────────────────────────────────────────
+# 病象：`GITNEXUS_STORAGE_ROOT` 下按 `<reponame>-<hash>` 一仓一个索引目录，**只增不减**
+#   （gitnexus 无 prune 子命令；实测两仓 883M，其中 lbug 图库 668M）⟹ 换分支 / 换 worktree /
+#   试验不同 max-file-size 都会留下整份旧索引。
+# 判据（owner 提问「要不要加 TTL」）：**TTL 与容量是两件事，缺一不可**。
+#   · 只用 TTL：一个仓 90 天没动但你还天天用它 ⟹ 被误删，代价是重跑一次全量（分钟级）；
+#   · 只用容量：小仓会无限堆积（每个几十 M，攒到几百个也是几个 G）。
+#   ⟹ 双阈值：先按 TTL 清「确实没人要的」，再按总容量 LRU 清「最久未构建的」，直到低于上限。
+#   ⚠ 三条豁免（防误删）：
+#     ① **当前仓**（`GX_REPO_DIR` 指向的那份）永不删 —— 正在用的索引被删 = 立即失效；
+#     ② `lbug.wal.dirty-recovery` 存在的（上次 analyze 被中断，残态修复中）不删；
+#     ③ 任何一步失败只记 warning，不阻断调用方（prune 是维护动作，不是判据）。
+PRUNE_TTL_DAYS_DEFAULT = 30
+PRUNE_MAX_GB_DEFAULT = 5.0
+_pruned_once = False
+
+
+def _store_roots() -> list:
+    """存储根候选：显式 `GITNEXUS_STORAGE_ROOT` 优先，否则 `~/.gitnexus-store` 下的形态子根。"""
+    base = (os.environ.get("GITNEXUS_STORAGE_ROOT") or "").strip()
+    if base:
+        # `C:\...` 形态在 POSIX 宿主下要转；本函数只在同形态宿主内用，故只做存在性判断
+        p = Path(base)
+        if p.is_dir():
+            return [p]
+    home = Path(os.path.expanduser("~")) / ".gitnexus-store"
+    return [x for x in sorted(home.glob("*")) if x.is_dir()] if home.is_dir() else []
+
+
+def _dir_size(p: Path) -> int:
+    tot = 0
+    for r, _ds, fs in os.walk(p):
+        for f in fs:
+            try:
+                tot += os.path.getsize(os.path.join(r, f))
+            except OSError:
+                pass
+    return tot
+
+
+def _index_entries() -> list:
+    """扫出所有索引目录 → [{path, size, indexed_at_epoch, repo_path, wal_dirty}]。"""
+    out = []
+    for root in _store_roots():
+        for meta in root.glob("*/meta.json"):
+            d = meta.parent
+            try:
+                m = json.loads(meta.read_text(encoding="utf-8"))
+            except Exception:
+                m = {}
+            out.append({
+                "path": d,
+                "size": _dir_size(d),
+                "indexed_at": _iso_epoch(str(m.get("indexedAt") or "")),
+                "repo_path": str(m.get("repoPath") or ""),
+                "wal_dirty": (d / "lbug.wal.dirty-recovery").exists(),
+            })
+    return out
+
+
+def prune_store(max_gb: float | None = None, ttl_days: float | None = None,
+                dry_run: bool = False) -> list:
+    """按 TTL + 容量双阈值清理旧索引；返回 `[(path, size_mb, reason)]`。
+
+    默认上限/期限可用 env 覆盖：`GK_GX_STORE_MAX_GB` / `GK_GX_STORE_TTL_DAYS`；
+    `GK_GX_NO_PRUNE=1` 关闭自动清理（`main` 的 `prune` 子命令仍可手动跑）。
+    """
+    try:
+        max_gb = PRUNE_MAX_GB_DEFAULT if max_gb is None else float(max_gb)
+        if os.environ.get("GK_GX_STORE_MAX_GB"):
+            max_gb = float(os.environ["GK_GX_STORE_MAX_GB"])
+        ttl_days = PRUNE_TTL_DAYS_DEFAULT if ttl_days is None else float(ttl_days)
+        if os.environ.get("GK_GX_STORE_TTL_DAYS"):
+            ttl_days = float(os.environ["GK_GX_STORE_TTL_DAYS"])
+    except Exception:
+        max_gb, ttl_days = PRUNE_MAX_GB_DEFAULT, PRUNE_TTL_DAYS_DEFAULT
+
+    keep = os.path.realpath(repo_dir()) if repo_dir() else ""
+    now = time.time()
+    ents = _index_entries()
+    removed = []
+
+    def _do(e, reason):
+        removed.append((str(e["path"]), round(e["size"] / 1048576.0, 1), reason))
+        if dry_run:
+            return
+        try:
+            shutil.rmtree(str(e["path"]))
+        except Exception:
+            pass
+
+    # ① TTL：过期且不豁免
+    survivors = []
+    for e in ents:
+        rp = os.path.realpath(e["repo_path"]) if e["repo_path"] else ""
+        if keep and rp and rp == keep:
+            survivors.append(e); continue
+        if e["wal_dirty"]:
+            survivors.append(e); continue
+        if e["indexed_at"] and (now - e["indexed_at"]) > ttl_days * 86400:
+            _do(e, "ttl>%gd" % ttl_days)
+        else:
+            survivors.append(e)
+
+    # ② 容量：仍超上限 ⟹ 按 indexedAt 升序（最久未构建）删
+    total = sum(e["size"] for e in survivors)
+    for e in sorted(survivors, key=lambda x: (x["indexed_at"] or 0)):
+        if total <= max_gb * 1073741824:
+            break
+        rp = os.path.realpath(e["repo_path"]) if e["repo_path"] else ""
+        if keep and rp and rp == keep:
+            continue
+        if e["wal_dirty"]:
+            continue
+        _do(e, "cap>%gGB" % max_gb)
+        total -= e["size"]
+    return removed
+
+
 def _to_wsl(path: str) -> str:
     """Windows 路径 → WSL 路径（已是 posix 形态则原样返回）。"""
     if len(path) > 1 and path[1] == ":":
@@ -536,6 +771,21 @@ def run_raw(args, *, timeout: int = 60, cache: bool | None = None, cwd: str = ""
     err = env_error()
     if err:
         return False, "", err, False
+    # 2026-11-02：analyze 前做一次**进程/容量**维护（每进程一次；`GK_GX_NO_PRUNE=1` 可关）。
+    #   reap：收掉上次被外部 kill 留下的 worker 孤儿（实测 9 个）；
+    #   prune：TTL + 容量双阈值清旧索引（当前仓豁免）。
+    global _pruned_once
+    if not _pruned_once and str(args[0] if args else "").startswith("analyze"):
+        _pruned_once = True
+        try:
+            reap_workers()
+        except Exception:
+            pass
+        if (os.environ.get("GK_GX_NO_PRUNE") or "").strip() not in ("1", "true", "yes"):
+            try:
+                prune_store()
+            except Exception:
+                pass
     argv = [node_exe(), js_path()] + [str(a) for a in args]
     _env = _build_env(str(args[0]) if args else "")
     _wrapped = _wrap_win_shell(argv[0], argv[1], [str(a) for a in args], cwd)
@@ -554,10 +804,27 @@ def run_raw(args, *, timeout: int = 60, cache: bool | None = None, cwd: str = ""
         # 2026-11-01：PowerShell 路由下 gitnexus 的中文表头按 **Windows 控制台编码**（cp936）
         #   输出 ⟹ 原 `text=True`（utf-8 严格）会抛 UnicodeDecodeError。改宽松解码：
         #   只影响非法字节（原本会整次调用失败），JSON 主体恒为 ASCII/UTF-8 可解析。
-        r = subprocess.run(argv, capture_output=True, text=True, errors="replace",
-                           timeout=timeout, cwd=(cwd or None), env=_env)
-    except subprocess.TimeoutExpired:
-        return False, "", "timeout after %ss" % timeout, False
+        # 2026-11-02：改 `Popen` + **独立进程组** —— 超时要能杀掉 gitnexus 的 worker 子进程
+        #   （`subprocess.run(timeout=)` 只杀直接子进程 ⟹ 实测留下 9 个 node 孤儿）。见 `_kill_tree`。
+        _cflags = 0
+        if os.name == "nt":
+            _cflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+        p = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                             text=True, errors="replace", cwd=(cwd or None), env=_env,
+                             start_new_session=(os.name != "nt"), creationflags=_cflags)
+        _pids_save(_pids_load() + [{"pid": p.pid, "ts": time.time()}])
+        try:
+            _out, _err = p.communicate(timeout=timeout)
+            r = subprocess.CompletedProcess(argv, p.returncode, _out, _err)
+        except subprocess.TimeoutExpired:
+            _kill_tree(p.pid)
+            try:
+                p.communicate(timeout=20)
+            except Exception:
+                pass
+            return False, "", "timeout after %ss" % timeout, False
+        finally:
+            _pids_save([x for x in _pids_load() if x["pid"] != p.pid])
     except Exception as e:  # 含 FileNotFoundError（node 缺失/形态不符）
         return False, "", str(e), False
     finally:
@@ -567,7 +834,20 @@ def run_raw(args, *, timeout: int = 60, cache: bool | None = None, cwd: str = ""
             except OSError:
                 pass
     out = r.stdout or ""
-    if out and use_cache:
+    # 2026-11-01（实测根因，基线 `unavailable` 粘滞）：**错误响应绝不入缓存**。
+    #   病象：`status --json` 曾回 `{"error":"not-indexed"}`（当时存储根被误判成 POSIX 形态，
+    #   Windows node 解析出 `<cwd>/mnt/c/...` 假路径）⟹ 该 62 字节错误体被写入跨进程缓存，
+    #   键 = repo + HEAD + argv，TTL 2h ⟹ **修好存储根后仍读回旧错误**，`_gitnexus_baseline_status`
+    #   恒解成 `unavailable` ⟹ `BASELINE_STALE` 派发阻断，且看起来"像另一个 bug"。
+    #   不变式：缓存只存**成功且非错误体**的只读输出（宁可不缓存，不返回粘滞错误）。
+    _err_payload = False
+    if out:
+        try:
+            _d = json.loads(out.strip().splitlines()[-1]) if out.strip() else None
+            _err_payload = isinstance(_d, dict) and bool(_d.get("error"))
+        except Exception:
+            _err_payload = False
+    if out and use_cache and r.returncode == 0 and not _err_payload:
         _cache_put(key, out)
     return r.returncode == 0, out, r.stderr or "", False
 
@@ -666,6 +946,26 @@ def main(argv=None) -> int:
             if a == "--cwd" and i + 1 < len(rest):
                 cwd = rest[i + 1]
         print(fast_status(cwd or os.getcwd()))
+        return 0
+    if av[0] == "prune":
+        # 手动维护入口：`gk_gitnexus.py prune [--max-gb N] [--ttl-days D] [--dry-run]`
+        _opt = {"max_gb": None, "ttl_days": None, "dry": False}
+        _r = av[1:]
+        i = 0
+        while i < len(_r):
+            a = _r[i]
+            if a == "--max-gb" and i + 1 < len(_r):
+                _opt["max_gb"] = float(_r[i + 1]); i += 2
+            elif a == "--ttl-days" and i + 1 < len(_r):
+                _opt["ttl_days"] = float(_r[i + 1]); i += 2
+            elif a == "--dry-run":
+                _opt["dry"] = True; i += 1
+            else:
+                i += 1
+        rm = prune_store(max_gb=_opt["max_gb"], ttl_days=_opt["ttl_days"], dry_run=_opt["dry"])
+        print(json.dumps({"ok": True, "dry_run": _opt["dry"], "removed": rm,
+                          "total_mb": round(sum(x[1] for x in rm), 1)},
+                         ensure_ascii=False))
         return 0
     if av[0] != "run":
         print("%s\nunknown subcommand: %s" % (_USAGE, av[0]), file=_sys.stderr)

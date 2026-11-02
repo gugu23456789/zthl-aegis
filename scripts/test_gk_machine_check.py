@@ -87,7 +87,9 @@ def _run_payload(tmp_path, ecc: dict) -> dict:
     body = (body.replace("$SKILL_DIR", sd).replace("$STATE_FILE", str(state))
                 .replace("$GK_DBG_LOG", str(tmp_path / "dbg.log")))
     env = dict(os.environ, GK_TASK=ecc.get("task", ""), GK_HMAC_VALID="skip",
-               GK_OUTPUT_FILE=str(out), GK_REPORT_FILE=str(tmp_path / "sub-1.md"))
+               GK_OUTPUT_FILE=str(out), GK_REPORT_FILE=str(tmp_path / "sub-1.md"),
+               # 真因 D（2026-11-02）：路径经 env 传入（形态锚在解释器，见 `_gk_py_path`）
+               GK_PY_SCRIPTS=str(CLI.parent / "scripts"), GK_PY_STATE=str(state))
     r = subprocess.run([sys.executable, "-c", body], input=json.dumps(ecc),
                        capture_output=True, text=True, env=env, timeout=90)
     assert r.returncode == 0, (r.returncode, r.stdout[-600:], r.stderr[-600:])

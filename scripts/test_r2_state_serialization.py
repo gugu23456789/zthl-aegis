@@ -135,9 +135,14 @@ def test_arm1_state_dump_sites_all_canonical():
 
 
 def test_arm1b_cli_read_lines_all_encoded():
-    """CLI 每一处 state 读点都显式 encoding —— 否则 ascii=False 落在非 UTF-8 locale 即崩。"""
+    """CLI 每一处 state 读点都显式 encoding —— 否则 ascii=False 落在非 UTF-8 locale 即崩。
+
+    2026-11-02（真因 D 第二轮）：state 读点的路径形态改经 env（`GK_PY_STATE`）传入，
+    扫描面随之扩展为两种形态（内联历史形态仍须满足，防回退）。
+    """
     lines = [ln.strip() for ln in CLI.read_text(encoding="utf-8").splitlines()
-             if "json.load(open('$STATE_FILE'" in ln]
+             if "json.load(open('$STATE_FILE'" in ln
+             or "open(os.environ['GK_PY_STATE']" in ln]
     assert lines, "未扫到任何 state 读点 —— 扫描式失效"
     bad = [ln for ln in lines if "encoding=" not in ln]
     assert not bad, "未带 encoding 的 CLI state 读点:\n" + "\n".join(bad)
@@ -213,6 +218,10 @@ def run_bash_writer(fn_name: str, seed: dict, tmp_path: Path, call: str = None):
     """在 tmp state 上跑 CLI 里的 bash 写原语，返回落盘字节。"""
     cli_src = CLI.read_text(encoding="utf-8")
     body = extract_fn(cli_src, fn_name)
+    # 2026-11-02（真因 D 第二轮）：写原语的 state / scripts 路径经 env 传入，形态单源
+    #   `_gk_py_path` ⟹ harness 须连同其依赖一起抽取（同 test_eco_integration 的抽取表）。
+    helpers = "\n".join(extract_fn(cli_src, n)
+                        for n in ("_gx_to_win_path", "_gk_py_form", "_gk_py_path"))
     state = tmp_path / "state.json"
     state.write_text(json.dumps(seed, ensure_ascii=False), encoding="utf-8")
     harness = tmp_path / "h.sh"
@@ -227,9 +236,10 @@ def run_bash_writer(fn_name: str, seed: dict, tmp_path: Path, call: str = None):
         #   刻意保留 fail-loud：被测函数若仍引用它 ⟹ `command not found` + `set -e` ⟹ rc!=0 ⟹ 本臂红。
         "gk_dbg() { :; }\n"
         "%s\n"
+        "%s\n"
         "%s\n" % (_sh_path(state).replace("'", "'\\''"),
                   _sh_path(SD).replace("'", "'\\''"),
-                  body, call or fn_name + ' "pass"'),
+                  helpers, body, call or fn_name + ' "pass"'),
         encoding="utf-8", newline="\n")
     r = subprocess.run(["bash", _sh_path(harness)], capture_output=True, text=True)
     assert r.returncode == 0, f"{fn_name} 执行失败 rc={r.returncode}\n{r.stderr[:800]}"

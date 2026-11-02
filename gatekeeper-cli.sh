@@ -104,6 +104,59 @@ if [ ! -f "$SKILL_DIR/scripts/gk_state.py" ]; then
   echo "{\"ok\":false,\"error\":\"SKILL_DIR_UNSAFE\",\"skill_dir\":\"$SKILL_DIR\",\"probe\":\"scripts/gk_state.py 不可解析\",\"fix\":\"SKILL_DIR 不像技能根（疑自指软链/空沙箱）；用 LOOKUP_DIRS 兜底或 install.sh 部署\"}"; exit 2
 fi
 unset _SCRIPT_DIR _d
+# ─── 路径形态转换单一事实源（2026-11-01，纯 bash 零外部依赖）──────────────────────
+# 病灶（MSYS 跨平台 bug 家族）：原 13 处 `wslpath -w` 把路径转 Windows 形态，但 `wslpath`
+#   **只在 WSL 存在** —— Git Bash(MSYS) 下恒空 ⟹ `|| echo ""` 产出空串 ⟹ fail-loud 拦停
+#   （`WARN[gx-env] 解析 gitnexus 入口失败` → `unavailable` → `BASELINE_STALE` 硬拦质询）。
+#   且同一语义散在 13 处手写、形态判断不一致（有的 `/mnt/*)` 守卫、有的无守卫裸调）。
+# 正解 = 单一函数（不引 wslpath/cygpath 外部依赖 —— 那只是把 MSYS 依赖换成 WSL/MSYS 双依赖；
+#   也不新增 inline_python bomb —— 纯 bash 字符串处理）：
+#   · 已是 Windows 形态（`C:/` 或 `C:\`）⟹ 原样返回（Git Bash 下 MAIN_REPO 解析即此形）
+#   · WSL 形态 `/mnt/<d>/…`              ⟹ `<D>:/…`
+#   · MSYS 形态 `/<d>/…`                 ⟹ `<D>:/…`
+#   · 其它（纯 POSIX `/home/…` 等）      ⟹ 原样（无法转换，交调用方 fail-loud，不臆造）
+# 归一后两侧（WSL/MSYS）产出**同一形态** ⟹ 下游拼接/比较不再分叉。
+# 2026-11-02（第二轮）：本组函数**前移**到启动块之前 —— 启动期的 state 路由
+#   （`gk_route_center.py resolve-state`）就要把 POSIX 形态换成解释器形态；原地定义在其后
+#   ⟹ 启动期调用 `_gk_py_path` 会 command not found（净效果 = 静默退回裸 POSIX）。
+_gx_to_win_path() {
+  local _p="${1:-}" _d
+  [ -n "$_p" ] || { printf ''; return 0; }
+  case "$_p" in
+    [A-Za-z]:[\\/]*) printf '%s' "$_p"; return 0 ;;        # 已是 Windows 形态
+    /mnt/[A-Za-z]/*)
+      # `${_p#/mnt/?}` 剥 `/mnt/c` 后余下 `/Users/…`（已含前导斜杠）⟹ 只补盘符，禁再加斜杠
+      _d="${_p#/mnt/}"; _d="${_d:0:1}"
+      printf '%s:%s' "${_d^^}" "${_p#/mnt/?}" ;;
+    /[A-Za-z]/*)
+      _d="${_p#/}"; _d="${_d:0:1}"
+      printf '%s:%s' "${_d^^}" "${_p#/?}" ;;
+    *) printf '%s' "$_p" ;;                               # 纯 POSIX：原样
+  esac
+}
+# ─── python 侧路径形态（2026-11-02，真因 D：解释器形态 ≠ bash 形态）──────────────
+# 病象（worktree `scripts/gk_dbg.log` 实测，6 臂全中）：
+#   · MSYS bash + **原生 Windows python** ⟹ `open('/c/Users/...')` → FileNotFoundError
+#     ⟹ 外层报 `DUMP_REPORT_INVALID`（真因被伪装成「报告缺字段」；该告警**不阻断**）；
+#   · 同一形态进 `sys.path.insert(0,'/c/.../scripts')` → ModuleNotFoundError
+#     ⟹ history 落库块整段未执行 ⟹ `HISTORY_WRITE_FAILED`（**真丢数据**）。
+# 口径 = **以解释器为锚**：Windows 原生解释器收 Windows 形态（复用 `_gx_to_win_path`
+#   单源，认 `/c/` 与 `/mnt/c/`）；WSL/MSYS 解释器原样（它们自己认得 POSIX 形态）。
+#   ⚠ 不用 `_gk_fwd`：它只把反斜杠转正斜杠，对 `/c/…` 是 no-op（实测修不动）。
+# `GK_PY_FORM=win|posix` 仅供诊断/测试显式覆盖，缺省按解释器自报 `os.name` 判定（只探一次）。
+_GK_PY_FORM_CACHE=""
+_gk_py_form() {
+  if [ -n "${GK_PY_FORM:-}" ]; then printf '%s' "$GK_PY_FORM"; return 0; fi
+  if [ -n "$_GK_PY_FORM_CACHE" ]; then printf '%s' "$_GK_PY_FORM_CACHE"; return 0; fi
+  local _f
+  _f=$(python3 -c "import os;print('win' if os.name=='nt' else 'posix')" 2>/dev/null) || _f=posix
+  case "$_f" in win|posix) ;; *) _f=posix ;; esac
+  _GK_PY_FORM_CACHE="$_f"
+  printf '%s' "$_f"
+}
+_gk_py_path() {
+  if [ "$(_gk_py_form)" = "win" ]; then _gx_to_win_path "${1:-}"; else printf '%s' "${1:-}"; fi
+}
 SCHEMA_DIR="${SKILL_DIR}/monitor-schemas"
 # ─── 子代理解释器 + 沙箱包裹（2026-10-31：**统一入口**，禁裸 python3 派发）────────────
 # 病象：沙箱包装只接在 `cmd_monitor` 的 `$subagent_python` 一处 ⟹ cron agent / audit --crossr
@@ -262,6 +315,40 @@ unset _KEYS_SRC
 # = **默认 state 同级** —— 落点 `.gatekeeper.state.<token>`，与 `gk_finding.resolve_domain_state`
 # 的 `Path(state_file).with_name(_STATE_PREFIX + "." + token)` 同源。改此常量即改全局基址；
 # 域块**不得**再内联此字面量（否则基址双份、判据不可判别）。
+# ─── 解释器引导：把**解析到的 python** 前置到 PATH（2026-11-02，owner「Windows 也要能用」）──
+# 病灶：CLI 内有大量**裸 `python3`** 调用（签名 `_sign_raw` / 路由 / 状态查询…）。它们吃的是
+#   PATH 上的解释器 —— 本机实测落到 WorkBuddy 自带 3.13（**无 `cryptography`**）⟹ 签名崩
+#   ⟹ `.sig` 空 ⟹ 前置门报 `CONTEXT_STALE_OR_UNSIGNED / sig_invalid`（真因被伪装成"上下文过期"）。
+# 正解：启动时**解析一次**（单一事实源 `scripts/py_resolve.sh`：env → 平台标记 pin → 仓内
+#   `.venv*`（含 worktree 的主树回落）→ 通配 → PATH），把其目录前置 ⟹ 之后所有裸 `python3`
+#   自动同源。**不改任何调用点**（32 处内联拼接维持原样，零漂移面）。
+# 兜底：解析失败/解释器不存在 ⟹ 不动 PATH（保持旧行为，不制造新的失败面）。
+_gk_py_boot=""
+_gk_py_boot=$(bash "$SKILL_DIR/scripts/py_resolve.sh" any 2>/dev/null || true)
+case "$_gk_py_boot" in
+  */*)
+    if [ -x "$_gk_py_boot" ]; then
+      _gk_py_dir="$(cd "$(dirname "$_gk_py_boot")" 2>/dev/null && pwd)" || _gk_py_dir=""
+      if [ -n "$_gk_py_dir" ]; then
+        case ":$PATH:" in
+          *":$_gk_py_dir:"*) : ;;                       # 已在 PATH 上，不重复前置
+          *) PATH="$_gk_py_dir:$PATH"; export PATH ;;
+        esac
+      fi
+      unset _gk_py_dir
+    fi ;;
+esac
+unset _gk_py_boot
+# ─── 路径形态归一：单一事实源（2026-11-02，真因 C）────────────────────────────
+# 病象：仓内 32 处 `python3 -c "... open('$STATE_FILE') ..."` 是**内联拼接**。值若含 Windows
+#   反斜杠，python 源码里就出现 `'<home>'` ⟹ `\U` 触发 `unicodeescape` SyntaxError。
+#   实测现场：`_lk=state_lock('<home>\...')` 整行语法错 ⟹ 锁没取到、state 没写，
+#   而症状被上层报成「域判定失败」（又一次真因被伪装）。
+#   逐个改成 env 传参的收益远小于风险（32 处，多数在无测试覆盖的审计/收口路径）。
+#   正解 = **一个变量只允许一种形态**：凡是**外部来源**（路由中枢 / 跨进程注入 / git 输出）
+#   进入 `STATE_FILE` / `SKILL_DIR`，在此归一为**正斜杠形态** ——
+#   Windows API、MSYS bash、python 三方都接受；反斜杠不是。
+_gk_fwd() { local _p="${1:-}"; printf '%s' "${_p//\\//}"; }
 _DEFAULT_STATE_FILE="${SKILL_DIR}/.gatekeeper.state"
 # 方案 A（2026-09-23 用户裁定，ECC-B8974A514E81）：技能仓的 **git worktree** 与主树是**同一
 # 治理对象** ⟹ 默认 state 落点归**主树**。与 `pre_tool_hook._resolve_state_by_target_path` 的
@@ -492,7 +579,7 @@ mapfile -t _gkr_envpairs < <(_gk_wenv_pairs)
 _gkr_parsed=$(_gk_wreq route_flat flat "skill_dir=$SKILL_DIR" "derive_domain=1" "${_gkr_envpairs[@]}") || _gkr_parsed=""
 unset _gkr_envpairs
 [ -n "$_gkr_parsed" ] && echo "INFO[state-routing]: worker fast path hit pidfile=$_wk_pidfile $GK_SID_TAG" >> "$GK_DBG_LOG"
-[ -z "$_gkr_parsed" ] && _gkr_route=$(SKILL_DIR="$SKILL_DIR" STATE_FILE="$STATE_FILE" STATE_FILE_EXPLICIT="${STATE_FILE_EXPLICIT:-0}" PLAN_POINTER="${PLAN_POINTER:-}" python3 "$SKILL_DIR/scripts/gk_route_center.py" resolve-state --derive-domain --skill-dir "$SKILL_DIR" 2>>"$GK_DBG_LOG" || echo '{}')
+[ -z "$_gkr_parsed" ] && _gkr_route=$(SKILL_DIR="$(_gk_py_path "$SKILL_DIR")" STATE_FILE="$(_gk_py_path "$STATE_FILE")" STATE_FILE_EXPLICIT="${STATE_FILE_EXPLICIT:-0}" PLAN_POINTER="${PLAN_POINTER:-}" python3 "$SKILL_DIR/scripts/gk_route_center.py" resolve-state --derive-domain --skill-dir "$SKILL_DIR" 2>>"$GK_DBG_LOG" || echo '{}')
 if [ -n "$_gkr_route" ] || [ -n "$_gkr_parsed" ]; then
   # 单次 spawn 解析全部字段（L2 交叉审查 2026-08-20: 原 5 次 spawn → 1 次；
   # 解析失败显式写 GK_DBG_LOG，不再静默失效）
@@ -541,7 +628,9 @@ print('|'.join([str(d.get('corrected',False)), d.get('expected',''), str(d.get('
     # False），但**必须被采用**——原条件只认 corrected=True ⟹ 1b 步在 CLI 链上是**静默 no-op**
     # （A6-P2「路由执行侧强制」实际未生效，F-REV-63 想修的"执行侧看不到域 findings"未修）。
     if [ "$_gkr_rc" = "True" ] || { { [ "$_gkr_src" = "state_domain" ] || [ "$_gkr_src" = "plan_pointer" ]; } && [ -n "$_gkr_rexp" ]; }; then
-      [ -n "$_gkr_rexp" ] && STATE_FILE="$_gkr_rexp"
+      # 真因 C 边界①（2026-11-02）：路由中枢回来的是**外部形态**（可能 `C:\...`）
+      #   ⟹ 必须归一再进 STATE_FILE，否则下方 32 处内联 python 全部语法错。
+      [ -n "$_gkr_rexp" ] && STATE_FILE="$(_gk_fwd "$_gkr_rexp")"
       if [ "$_gkr_src" = "worktree_match" ]; then
         # 2026-09-01: worktree 匹配路由（窄任务随 worktree 隔离 state）——静默切换，非冲突纠正
         echo "INFO[state-routing]: worktree state route -> $_gkr_rexp $GK_SID_TAG" >> "$GK_DBG_LOG"
@@ -645,6 +734,20 @@ _resolve_provider_config() {
   esac
 }
 
+# ─── API key 文件落点（2026-11-02，开源包可用性）────────────────────────────────
+# 背景：原解析链只有 env 与 Windows 用户环境（PowerShell）⟹ Linux/macOS 用户**没有**
+#   可持久化的配置入口（`set-key` 只 export 当前进程，重启即丢）。
+# 落点单源 = `scripts/gk_api_key.py`（禁 bash 再写一份路径逻辑）：
+#   `<skill>/.keys/api_key`（deepseek）/ `mimo_key`（mimo）/ `$GATEKEEPER_KEY_FILE`（显式）。
+# 本函数只负责"文件"这一档；优先级由 `_resolve_api_key` 保序（env → 文件 → Windows 环境）。
+_gk_key_file() {
+  python3 "$SKILL_DIR/scripts/gk_api_key.py" path --provider "${1:-deepseek}" \
+    --skill-dir "$SKILL_DIR" 2>/dev/null
+}
+_gk_key_file_read() {
+  python3 "$SKILL_DIR/scripts/gk_api_key.py" read --provider "${1:-deepseek}" \
+    --skill-dir "$SKILL_DIR" 2>/dev/null | tr -d '\r\n'
+}
 _resolve_api_key() {
   # Already resolved
   [ -n "$API_KEY" ] && return 0
@@ -667,6 +770,12 @@ _resolve_api_key() {
       ps_var="DEEPSEEK_API_KEY"
       ;;
   esac
+
+  # 2026-11-02（开源包可用性）：key 文件（跨平台持久化；非 Windows 的唯一持久入口）。
+  #   ⚠ 必须在 PowerShell 回退**之前** —— 否则 Linux/macOS 永远走不到这一档。
+  local _kf_key=""
+  _kf_key=$(_gk_key_file_read "$PROVIDER") || _kf_key=""
+  [ -n "$_kf_key" ] && { API_KEY="$_kf_key"; return 0; }
 
   # Cross-WSL-boundary key resolution via PowerShell
   # First try provider-specific key, then fallback to DEEPSEEK_API_KEY
@@ -871,7 +980,7 @@ _conv_state_path() {
   # n4-L1（2026-10-05 实测）：`resolve-state --derive-domain` 读的域来源是 env **`GK_PLAN_FILE`**
   #   （**非** `PLAN_FILE`），且须 `--derive-domain` 才启用该分支 ⟹ 两者缺一，中枢就收不到计划、
   #   域不可派生、**静默回落 base**（跨代混账 = F-REV-63）。此处与启动块（L297）**同口径**补齐。
-  _o=$(SKILL_DIR="$SKILL_DIR" STATE_FILE="$STATE_FILE" PLAN_FILE="$PLAN_FILE" \
+  _o=$(SKILL_DIR="$(_gk_py_path "$SKILL_DIR")" STATE_FILE="$(_gk_py_path "$STATE_FILE")" PLAN_FILE="$PLAN_FILE" \
        GK_PLAN_FILE="${GK_PLAN_FILE:-$PLAN_FILE}" \
        python3 "$SKILL_DIR/scripts/gk_route_center.py" resolve-state --derive-domain 2>>"$GK_DBG_LOG" || true)
   _p=$(python3 -c "
@@ -923,7 +1032,7 @@ _read_plan_metadata() {
   META_review=""
   META_state_domain=""
   local _meta_json
-  _meta_json=$(SKILL_DIR="$SKILL_DIR" MAIN_REPO_WSL="$MAIN_REPO_WSL" PLAN_FILE="$PLAN_FILE" \
+  _meta_json=$(SKILL_DIR="$(_gk_py_path "$SKILL_DIR")" MAIN_REPO_WSL="$MAIN_REPO_WSL" PLAN_FILE="$PLAN_FILE" \
     python3 "$SKILL_DIR/scripts/gk_route_center.py" resolve-plan 2>>"$GK_DBG_LOG" || echo '{}')
   # 2026-09-23（**ECC-084E37B42CFB 修复**）：原发射用 `repr()` —— **不是 shell 安全序列化器**：
   #   值含单引号时 repr 改用**双引号**包裹 ⟹ 值里的 `$(...)` / 反引号落在双引号内被 bash 展开
@@ -950,7 +1059,7 @@ _resolve_repo_path() {
   local repo_name="${1:-}"
   [ -z "$repo_name" ] && { echo "error: no repo specified"; return 1; }
   local _rp_json _rp_path _rp_err
-  _rp_json=$(SKILL_DIR="$SKILL_DIR" MAIN_REPO_WSL="$MAIN_REPO_WSL" \
+  _rp_json=$(SKILL_DIR="$(_gk_py_path "$SKILL_DIR")" MAIN_REPO_WSL="$MAIN_REPO_WSL" \
     python3 "$SKILL_DIR/scripts/gk_route_center.py" resolve-repo "$repo_name" 2>>"$GK_DBG_LOG" || echo '{}')
   _rp_path=$(echo "$_rp_json" | python3 "$SKILL_DIR/scripts/gk_json_utils.py" field path \
     --default '' 2>/dev/null || echo "")
@@ -1012,7 +1121,7 @@ cmd_calibrate() {
   # 计划上下文：不自动注入 PLAN_FILE（CLI 全局 PLAN_FILE = 历史锚点默认值，自动注入会把校准
   # 锁到错误计划）——缺省走 route center 5 层金字塔搜索（与 discover 同源）；需显式锚定计划时
   # 调用方传 --plan-file <p>（python 透传）。STATE_FILE 注入 CLI 启动已跟随的隔离 state。
-  SKILL_DIR="$SKILL_DIR" MAIN_REPO_WSL="$MAIN_REPO_WSL" \
+  SKILL_DIR="$(_gk_py_path "$SKILL_DIR")" MAIN_REPO_WSL="$MAIN_REPO_WSL" \
     python3 "$SKILL_DIR/scripts/gk_route_center.py" calibrate \
     ${STATE_FILE:+--state-file "$STATE_FILE"} "$@" 2>>"$GK_DBG_LOG"
 }
@@ -1133,7 +1242,7 @@ cmd_discover() {
       #   幂等：域 state 已存在 ⟹ `built=false`（单建者不覆盖）；失败 ⟹ 具名 fail-closed，禁静默绑定。
       if $build_state; then
         local _bs_json _bs_err
-        _bs_json=$(SKILL_DIR="$SKILL_DIR" python3 "$SKILL_DIR/scripts/gk_route_center.py" build-state \
+        _bs_json=$(SKILL_DIR="$(_gk_py_path "$SKILL_DIR")" python3 "$SKILL_DIR/scripts/gk_route_center.py" build-state \
                      --skill-dir "$SKILL_DIR" --state-file "$_DEFAULT_STATE_FILE" \
                      --plan-file "$plan_override" --main-repo "$MAIN_REPO_WSL" 2>>"$GK_DBG_LOG" || echo '{}')
         _bs_err=$(printf '%s' "$_bs_json" | python3 -c "
@@ -1152,7 +1261,7 @@ except Exception:
         echo "INFO[build-state]: 域 state 首建/确认 $_dom（$_bs_json）" >> "$GK_DBG_LOG"
       fi
       local _dom_json _dom_state _dom_err
-      _dom_json=$(SKILL_DIR="$SKILL_DIR" python3 "$SKILL_DIR/scripts/gk_route_center.py" resolve-state \
+      _dom_json=$(SKILL_DIR="$(_gk_py_path "$SKILL_DIR")" python3 "$SKILL_DIR/scripts/gk_route_center.py" resolve-state \
                     --state-file "$_DEFAULT_STATE_FILE" --plan-pointer /nonexistent \
                     --domain "$_dom" 2>>"$GK_DBG_LOG" || echo '{}')
       _dom_state=$(printf '%s' "$_dom_json" | python3 "$SKILL_DIR/scripts/gk_json_utils.py" \
@@ -1190,7 +1299,8 @@ except Exception:
           return 1
         fi
       else
-        STATE_FILE="$_dom_state"
+        # 真因 C 边界②（2026-11-02）：`build-state` 的域 state 路径同样是外部形态 ⟹ 归一。
+        STATE_FILE="$(_gk_fwd "$_dom_state")"
         _dom_bound="$_dom"
         echo "INFO[state-domain]: discover --plan 绑定域化 state -> $_dom_state（token=$_dom）" >> "$GK_DBG_LOG"
       fi
@@ -1220,7 +1330,7 @@ except Exception:
         [ -n "$_sid_own" ] && _PLAN_POINTER_OWN="$SKILL_DIR/.gatekeeper.plan.$_sid_own"
       fi
       _ptr_dom=""
-      [ -n "$_dom_bound" ] && _ptr_dom=",\"domain\":\"$_dom_bound\""
+      [ -n "$_dom_bound" ] && _ptr_dom="domain=$_dom_bound"
       # 2026-09-28（并发写修复）：**原子写**（tmp + rename）—— 原 `> "$_PLAN_POINTER_OWN"` 是
       #   非原子重定向，并发 `discover`（多会话 / sid-less 同写一路径）可致读者见**半行** ⟹
       #   `json.load` 失败（静默回落默认 state）或读到损坏绑定。先例 = `.gatekeeper.session`
@@ -1229,8 +1339,31 @@ except Exception:
       #   目标已是**目录**时 mv 会把文件**搬进目录里**（实测：`mkdir T; echo x > p; mv -f p T`
       #   ⟹ rc0 且 `T/p` 存在）⟹ 原「目录 ⟹ 重定向必失败」的 J17 语义被原子写**误判为成功**。
       #   故**先判目录** = 写失败（保 WARN + `pointer_written:false`），再走 tmp + rename。
+      # 2026-10-18（跨平台 ①A 修复）：**禁止手工拼 JSON**。原写法
+      #   `echo "{\"state_file\":\"$STATE_FILE\",\"plan\":\"...\"}"`
+      # 把 `$STATE_FILE` 的**原样字节**嵌进 JSON 字符串。Windows 侧解析出的 state 是
+      #   `<home>\.trae\skills\...\.gatekeeper.state.skill.xxx`
+      # ⟹ `\U` / `\H` / `\.`
+      #   均为**非法 JSON 转义**（JSON 只认 `\" \\ \/ \b \f \n \r \t \uXXXX`）。
+      # 后果链（**伪装成 stale**）：
+      #   整份指针不是合法 JSON ⟹ 读侧 `json.loads` 抛 `Invalid \escape` ⟹ 调用方
+      #   `except Exception: d = {}` ⟹ `d["updated"]` 缺失 ⟹ `_pointer_fresh` 返回 False
+      #   ⟹ `reason="stale"` ⟹ CLI 报 **`STATE_POINTER_STALE`**。
+      #   报错指向「指针过期」，真因是「JSON 写坏了」——跨平台静默降级 + 误导性诊断，
+      #   且诱使调用方去拿 `GK_ALLOW_STALE_BASELINE=1` 这类降级钥匙（见豁免机制审计）。
+      # 修法 = 走 `gk_json.py build`（**JSON 构造单一事实源**，`json.dumps` 正确转义路径）。
+      # 先例：gatekeeper-cli.sh L6085-6126 已用 `build` 构造含路径的 JSON（`diff_files=$_diff`）。
+      #   ⚠ 值经 argv 传入，路径里的空格/换行不再经过 shell 引号二次解释。
+      # 守卫：`scripts/test_xplat_harness.py::b1_manual_json_splices_forbidden`。
+      _ptr_json="$(python3 "$SKILL_DIR/scripts/gk_json.py" build \
+                     "state_file=$STATE_FILE" "plan=$_plan_basename" \
+                     "writer=discover" ${_ptr_dom:+"$_ptr_dom"} \
+                     "updated=$(date -u +%Y-%m-%dT%H:%M:%SZ)" 2>>"$GK_DBG_LOG")"
+      # `_ptr_json` 为空 = `gk_json.py` 自身失败（python 不在 PATH / 脚本缺失）——
+      # 不静默：走下方 else 分支（`pointer_written:false` + WARN），跨进程绑定**未生效**可见。
       if [ ! -d "$_PLAN_POINTER_OWN" ] \
-         && echo "{\"state_file\":\"$STATE_FILE\",\"plan\":\"$_plan_basename\",\"writer\":\"discover\"${_ptr_dom},\"updated\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}" > "${_PLAN_POINTER_OWN}.tmp" 2>/dev/null \
+         && [ -n "$_ptr_json" ] \
+         && printf '%s\n' "$_ptr_json" > "${_PLAN_POINTER_OWN}.tmp" 2>/dev/null \
          && mv -f "${_PLAN_POINTER_OWN}.tmp" "$_PLAN_POINTER_OWN" 2>/dev/null; then
         _bind_field="$_bind_field,\"pointer_written\":true"
       else
@@ -1289,7 +1422,7 @@ except Exception:
   # 仍以 GK_WORKTREE_REPO 语义限定"只列本仓库 feature worktree"（防他仓库最新顶替）；
   # GATEKEEPER_WORKTREE_ROOT env 显式前缀仍优先（python 白名单 + `..` 段拒绝）。
   local _wt_json
-  _wt_json=$(SKILL_DIR="$SKILL_DIR" MAIN_REPO_WSL="$MAIN_REPO_WSL" \
+  _wt_json=$(SKILL_DIR="$(_gk_py_path "$SKILL_DIR")" MAIN_REPO_WSL="$MAIN_REPO_WSL" \
     GK_WORKTREE_CWD="$(pwd)" GK_PLAN_FILE="$PLAN_FILE" \
     python3 "$SKILL_DIR/scripts/gk_route_center.py" resolve-worktree 2>>"$GK_DBG_LOG" || echo '{}')
   # 2026-09-23（**ECC-084E37B42CFB 修复**，同 META 块同根因）：`repr()` 非 shell 安全序列化器
@@ -1394,12 +1527,11 @@ print('detected='+shlex.quote(str(bool(d.get('detected')))))
     cat > "$STATE_FILE" << 'EOFSTATE'
 {"r_phase":null,"stage":"IDLE","branch":null,"worktree":null,"gate_data":{},"monitor_scores":{},"history":[]}
 EOFSTATE
-    _state_write "
-import sys as _s
-_s.path.insert(0, '$SKILL_DIR/scripts')
+    GK_PY_CARRY="$(_gk_py_path "$_idle_cf")" _state_write "
+import os
 from gk_discover_carry import carry_over
 try:
-    _old=json.load(open('$_idle_cf',encoding='utf-8'))
+    _old=json.load(open(os.environ['GK_PY_CARRY'],encoding='utf-8'))
 except Exception:
     _old={}
 carry_over(_old,d)
@@ -1442,7 +1574,7 @@ carry_over(_old,d)
   # 配合 gk_state_route T3 的候选描述，提示用 discover --plan 指定隔离 state）。
   local _owner_json="" _owner_field=""
   if [ -z "$plan_override" ]; then
-    _owner_json=$(SKILL_DIR="$SKILL_DIR" STATE_FILE="$STATE_FILE" python3 "$SKILL_DIR/scripts/gk_route_center.py" resolve-state 2>>"$GK_DBG_LOG" || echo '{}')
+    _owner_json=$(SKILL_DIR="$(_gk_py_path "$SKILL_DIR")" STATE_FILE="$(_gk_py_path "$STATE_FILE")" python3 "$SKILL_DIR/scripts/gk_route_center.py" resolve-state 2>>"$GK_DBG_LOG" || echo '{}')
     if echo "$_owner_json" | python3 "$SKILL_DIR/scripts/gk_json_utils.py" test conflict 2>/dev/null; then
       _owner_field=",\"state_ownership\":$(echo "$_owner_json" | python3 "$SKILL_DIR/scripts/gk_views.py" conflict-view 2>/dev/null || echo '{"conflict":true}')"
     fi
@@ -1458,17 +1590,59 @@ carry_over(_old,d)
   # 快照已在「state 存在」分支起取（先于 phase 归档）；此处仅兜底 state 缺失场景。
   _carry_f="${_carry_f:-${STATE_FILE}.discover-carry.$$}"
   [ -f "$_carry_f" ] || echo '{}' > "$_carry_f"
-  cat > "$STATE_FILE" << EOFSTATE
-{"r_phase":"$r_phase","stage":"$stage","branch":"$branch","worktree":"$worktree","main_repo":"$MAIN_REPO_WIN","gate_data":{},"monitor_scores":{},"history":$(python3 "$SKILL_DIR/scripts/gk_state.py" get history --path "$STATE_FILE" --json --default '[]' 2>/dev/null || echo "[]")}
-EOFSTATE
+  # 2026-11-01（跨平台 ①D 修复）：**禁止 heredoc 手工拼 state JSON**。原写法
+  #   cat > "$STATE_FILE" << EOFSTATE
+  #   {"r_phase":"$r_phase",...,"main_repo":"$MAIN_REPO_WIN",...}
+  #   EOFSTATE
+  # 把四个**外部来源**的字符串直接嵌进 JSON 字符串体：
+  #   · Windows 反斜杠路径（`<home>`）⟹ `\U` 非法转义（真因 A 同族）；
+  #   · **CRLF 泄漏** —— 实测 `MAIN_REPO_WIN` 值为**裸 `\r`**（字节 152）⟹
+  #     `json.loads` 抛 **`Invalid control character`** ⟹ **整份 state 不可读**
+  #     ⟹ 所有读点 `{"error":"json_decode_error"}` ⟹ 质询链在入队后 57s 处全线中断。
+  #     报错只说"解码失败"，真因是"写入时没剥 \r" —— 又一次**真因被伪装**。
+  #   · `$history` 是命令替换产物（可能含换行）。
+  # 修法 = **值经 env 传入 python，由 `json.dumps` 序列化**（本仓先例：`_budget_override_record`
+  #   的「reason 经 env 传入（而非拼进 python 源码）⟹ 规避引号/换行注入」）。
+  #   ⚠ 不能用 `gk_json.py build`：其 `_default_coerce` 把 `{}`/`[]` 当**字符串** ⟹
+  #     `gate_data`/`monitor_scores`/`history` 会从对象退化成字符串（语义破坏）。
+  #   ⚠ heredoc 用 `<<'PY'`（quoted）⟹ python 源码不经 shell 展开；值只走 env。
+  _hist_json="$(python3 "$SKILL_DIR/scripts/gk_state.py" get history --path "$STATE_FILE" --json --default '[]' 2>/dev/null || echo '[]')"
+  if GK_ST_R_PHASE="$r_phase" GK_ST_STAGE="$stage" GK_ST_BRANCH="$branch" \
+     GK_ST_WORKTREE="$worktree" GK_ST_MAIN_REPO="$MAIN_REPO_WIN" \
+     GK_ST_HISTORY="$_hist_json" \
+     python3 - > "${STATE_FILE}.tmp.$$" 2>>"$GK_DBG_LOG" <<'PY'
+import json, os, sys
+def g(k, d=""):
+    v = os.environ.get(k)
+    return d if v is None else v
+try:
+    hist = json.loads(g("GK_ST_HISTORY", "[]"))
+except Exception:
+    hist = []
+out = {
+    "r_phase": g("GK_ST_R_PHASE"), "stage": g("GK_ST_STAGE"),
+    "branch": g("GK_ST_BRANCH"), "worktree": g("GK_ST_WORKTREE"),
+    "main_repo": g("GK_ST_MAIN_REPO"), "gate_data": {}, "monitor_scores": {},
+    "history": hist,
+}
+sys.stdout.write(json.dumps(out, ensure_ascii=False) + "\n")
+PY
+  then
+    mv -f "${STATE_FILE}.tmp.$$" "$STATE_FILE" 2>/dev/null || cp -f "${STATE_FILE}.tmp.$$" "$STATE_FILE" 2>/dev/null
+  else
+    # python 自身失败（不在 PATH / 语法错）⟹ 不静默：WARN + 保持原 state 不覆盖
+    rm -f "${STATE_FILE}.tmp.$$" 2>/dev/null
+    echo "WARN[state-rebuild]: state JSON 构造失败（python env 通道），保持原 state 未覆盖" >&2
+    echo "WARN[state-rebuild]: state rebuild failed; state left untouched $GK_SID_TAG" >> "$GK_DBG_LOG"
+  fi
+  unset _hist_json
   # 保全回填：纯函数（`gk_discover_carry.carry_over`）+ **单一出纳** `_state_write`
   #   （flock + 原子写 + checksum）⟹ 不新增第二写者；保全失败绝不阻断 discover 主流程。
-  _state_write "
-import sys as _s
-_s.path.insert(0, '$SKILL_DIR/scripts')
+  GK_PY_CARRY="$(_gk_py_path "$_carry_f")" _state_write "
+import os
 from gk_discover_carry import carry_over as _carry
 try:
-    _old=json.load(open('$_carry_f',encoding='utf-8'))
+    _old=json.load(open(os.environ['GK_PY_CARRY'],encoding='utf-8'))
 except Exception:
     _old={}
 _carry(_old,d)
@@ -1533,14 +1707,14 @@ _detect_bare_run_gatekeeper() {
   # 2026-09-20（ECC-PLAN ②·归口）：rg 单源 "$RG"（原 bare rg）
   local r_commits; r_commits=$(git log -n 10 --oneline 2>/dev/null | "$RG" -c 'feat\(R|fix\(R' || echo "0")
   if [ "$r_commits" -gt 2 ] 2>/dev/null && [ -f "$STATE_FILE" ]; then
-    local shas; shas=$(STATE_FILE="$STATE_FILE" python3 "$SKILL_DIR/scripts/gk_state_query.py" --len gate_data.commit_shas --default 0 2>/dev/null)
+    local shas; shas=$(STATE_FILE="$(_gk_py_path "$STATE_FILE")" python3 "$SKILL_DIR/scripts/gk_state_query.py" --len gate_data.commit_shas --default 0 2>/dev/null)
     if [ "$shas" = "0" ]; then
       warnings=$(printf '%s["BARE RUN: git log has %s R-phase commits but commit_shas empty — governance skill likely bypassed. Run advance to re-sync."]' "${warnings:+,}" "$r_commits")
     fi
   fi
   # 检测 2: state 过期但 git 有新提交
   if [ -f "$STATE_FILE" ]; then
-    local last_upd; last_upd=$(STATE_FILE="$STATE_FILE" python3 "$SKILL_DIR/scripts/gk_state_query.py" --get current.last_updated --default "" 2>/dev/null)
+    local last_upd; last_upd=$(STATE_FILE="$(_gk_py_path "$STATE_FILE")" python3 "$SKILL_DIR/scripts/gk_state_query.py" --get current.last_updated --default "" 2>/dev/null)
     if [ -n "$last_upd" ] && [ "$r_commits" -gt 0 ] 2>/dev/null; then
       local days_since; days_since=$(( ($(date +%s) - $(date -d "$last_upd" +%s 2>/dev/null || echo 0)) / 86400 ))
       if [ "$days_since" -ge 1 ] 2>/dev/null; then
@@ -1582,17 +1756,22 @@ _state_write() {
   # `state_lock` 内完成「读-改-写」全程（`dump_state` 再取锁是**可重入**的，不自锁）。
   # ⚠ 载荷 `$1` **必须在行首**（不得缩进）⟹ 不能用 `with`（缩进会 IndentationError），
   #   故显式 `__enter__/__exit__`；进程退出即关 fd 释放锁 ⟹ 异常路径也不泄漏。
+  # 2026-11-02（真因 D 第二轮）：state / scripts 路径**经 env 传入**（形态锚 = 解释器，
+  #   见 `_gk_py_path`）。原内联 `'$STATE_FILE'` 在 MSYS bash + 原生 Windows python 下
+  #   直接 FileNotFoundError ⟹ 所有经本出纳的写通道整段失效，且被 `2>/dev/null` 吞成静默。
+  GK_PY_SCRIPTS="$(_gk_py_path "$SKILL_DIR/scripts")" \
+  GK_PY_STATE="$(_gk_py_path "$STATE_FILE")" \
   python3 -c "
-import sys,json,hashlib
-sys.path.insert(0,'$SKILL_DIR/scripts')
+import sys,json,hashlib,os
+sys.path.insert(0,os.environ['GK_PY_SCRIPTS'])
 from gk_json_utils import dump_state, state_lock
-_lk=state_lock('$STATE_FILE'); _lk.__enter__()
-d=json.load(open('$STATE_FILE',encoding='utf-8'))
+_lk=state_lock(os.environ['GK_PY_STATE']); _lk.__enter__()
+d=json.load(open(os.environ['GK_PY_STATE'],encoding='utf-8'))
 $1
 # checksum 更新与原子落盘由 dump_state 一并完成
 gd=json.dumps(d.get('gate_data',{}),sort_keys=True)
 d['_checksum']=hashlib.sha256(gd.encode()).hexdigest()[:16]
-dump_state('$STATE_FILE', d)
+dump_state(os.environ['GK_PY_STATE'], d)
 _lk.__exit__(None, None, None)
 " 2>/dev/null
 }
@@ -1697,7 +1876,7 @@ _EDIT_BUDGET_PER_LR=12
 _EDIT_BUDGET_HARD_CAP=24
 _grant_node_budget() {  # <source> <reason>
   local _lr
-  _lr=$(STATE_FILE="$STATE_FILE" python3 "$SKILL_DIR/scripts/gk_state_query.py" \
+  _lr=$(STATE_FILE="$(_gk_py_path "$STATE_FILE")" python3 "$SKILL_DIR/scripts/gk_state_query.py" \
         --get gate_data.scheduler.current_lr --default 1 2>/dev/null)
   case "$_lr" in ''|*[!0-9]*) _lr=1 ;; esac
   local _g=$(( _lr * _EDIT_BUDGET_PER_LR ))
@@ -1764,23 +1943,26 @@ _state_checksum_write() {
   _ela=$(ps -o etimes= -p $$ 2>/dev/null | tr -d ' ')
   case "$_ela" in ''|*[!0-9]*) _ela=0 ;; esac
   _inv=$(( $(date +%s) - _ela ))
-  GK_INVOKE_EPOCH="$_inv" python3 -c "
+  GK_INVOKE_EPOCH="$_inv" \
+  GK_PY_SCRIPTS="$(_gk_py_path "$SKILL_DIR/scripts")" \
+  GK_PY_STATE="$(_gk_py_path "$STATE_FILE")" \
+  python3 -c "
 import sys,json,hashlib,os
-sys.path.insert(0,'$SKILL_DIR/scripts')
+sys.path.insert(0,os.environ['GK_PY_SCRIPTS'])
 from gk_json_utils import dump_state, state_lock
-_lk=state_lock('$STATE_FILE'); _lk.__enter__()
-d=json.load(open('$STATE_FILE',encoding='utf-8'))
+_lk=state_lock(os.environ['GK_PY_STATE']); _lk.__enter__()
+d=json.load(open(os.environ['GK_PY_STATE'],encoding='utf-8'))
 gd=json.dumps(d.get('gate_data',{}),sort_keys=True)
 _new=hashlib.sha256(gd.encode()).hexdigest()[:16]
 _old=str(d.get('_checksum','') or '')
 _inv=int(os.environ.get('GK_INVOKE_EPOCH','0') or 0)
 if _new==_old:
     pass
-elif _inv and int(os.path.getmtime('$STATE_FILE'))<_inv-1:
+elif _inv and int(os.path.getmtime(os.environ['GK_PY_STATE']))<_inv-1:
     sys.stderr.write('[checksum] REFUSE 洗白未改动的 state（mtime<invoke）: new=%s old=%s\n' % (_new,_old))
 else:
     d['_checksum']=_new
-    dump_state('$STATE_FILE', d)
+    dump_state(os.environ['GK_PY_STATE'], d)
 _lk.__exit__(None, None, None)
 " 2>>"${GK_DBG_LOG:-/dev/null}" || true
 }
@@ -1989,8 +2171,10 @@ _review_channel_preflight() {
 
   # ── B: L3 基线 status-fresh 复用（crossrev ∪ plan-refinement；current 复用增量基线，stale 才 analyze）──
   # 2026-10-05（用户令「计划质询之前强制检测 gitnexus 新鲜度」）：原仅 crossrev ⟹ 质询绕过基线门
-  #   （node_guard 仅 advance 且默认 advisory）。现 plan-refinement 通道亦检，且**对质询 fail-closed**
-  #   （stale 刷新无效 / unavailable ⟹ BASELINE_STALE 阻断，逃生 GK_ALLOW_STALE_BASELINE=1）；
+  #   （node_guard 仅 advance 且默认 advisory）。现 plan-refinement 通道亦检。
+  # 2026-11-02（owner 裁定，**语义变更**）：plan-refinement 由 fail-closed 改 **advisory** ——
+  #   `stale`（索引落后于 HEAD）只告警放行；**只有 `unavailable`（根本没有索引）才阻断**。
+  #   理由：持续提交的仓库里 `stale` 是常态，把它当阻断条件 ⟹ 并发质询永久卡死。
   #   crossrev 维持原 WARN（零回归）。
   if [ "$channel" = "crossrev" ] || [ "$channel" = "plan-refinement" ]; then
     # F-REV-77/78 收敛（2026-09-16）：状态判定改走**单点** `_gitnexus_baseline_status`
@@ -1999,17 +2183,37 @@ _review_channel_preflight() {
     # **刷新后**真值（原实现读到缓存 stale → 恒 WARN 假警）。
     local _bl_dir gn_status _bl_ok=false
     _bl_dir=$(_gx_repo_dir_for_current)
-    # T7（2026-10-16，finding ECC-21AB384F03A9）：内联「先查旧才刷」**收敛为单一源**
-    #   `_gitnexus_refresh_if_stale`（与 `apply-worktree --close-out` 共用，禁第二实现）。
-    #   current/reusable ⟹ 复用（不 analyze）；stale ⟹ 自愈刷新（含 --drop-embeddings 残态修复 + 跨进程单飞）。
-    gn_status=$(_gitnexus_refresh_if_stale "$_bl_dir" "review-preflight")
+    # T7（2026-10-16）：原为 `_gitnexus_refresh_if_stale`（stale ⟹ 自愈 analyze）。
+    # 2026-11-02（owner 裁定「并发质询永久卡死」）：质询侧改**只读判定**，不再触发 analyze。
+    #   实测代价：`_gitnexus_refresh_if_stale` 撞 stale 会走 `_gx_analyze_embeddings`
+    #   ⟹ `analyze --embeddings`（本机 40min 级、写 ~300MB lbug）⟹ 每个计划、每次质询都付一遍，
+    #   而持续提交的仓库里 stale 是常态 ⟹ 追不上、还把 C 盘打满（实测 2.3G 沙箱日志 + 883M 索引）。
+    #   语义：质询要的是「有没有可用基线」这个**事实**，不是「基线必须最新」这个**目标**；
+    #   刷新是运维动作（`context --update` / `apply-worktree --close-out` 各有入口），不该挂在
+    #   每次质询的前置门里。
+    gn_status=$(_gitnexus_baseline_status "$_bl_dir")
     { [ "$gn_status" = "current" ] || [ "$gn_status" = "reusable" ]; } && _bl_ok=true
+    # 2026-11-02（owner 裁定）：**判据从 fail-closed 改 advisory** —— 只对 `unavailable` 阻断。
+    # 病象：`stale` 曾被当阻断条件 ⟹ 门槛要求索引与 HEAD 精确同步 ⟹ 在任何**持续提交**的仓库里
+    #   这是常态而非异常 ⟹ **并发质询永久卡死**（实测：主仓 HEAD `7aef9872`→`ab2f008c`→`ac0fb8c6`
+    #   连推三次，每次自愈 analyze 要 1.5–5min，跑的过程中 HEAD 又变，永远追不上）。
+    # 判据辨析（关键）：索引落后 = **图证据不完整**；图证据不完整 ≠ **不能质询**。
+    #   基线图在质询里是**辅助证据**（node_guard / impact 之类），缺几条边最坏是某臂少引一处代码
+    #   位置，不该让整轮跑不起来。真正的硬前提只有「根本没有可用索引」（`unavailable`）。
+    # ⚠ 与 `GK_ALLOW_STALE_BASELINE=1` 的区别：那是**逐次豁免**（人肉逃生口）；本处是**改判据
+    #   本身** —— 正常路径不再需要任何 env 开关。
     if ! $_bl_ok; then
-      if [ "$channel" = "plan-refinement" ] && [ "${GK_ALLOW_STALE_BASELINE:-0}" != "1" ]; then
-        echo "{\"ok\":false,\"error\":\"BASELINE_STALE\",\"channel\":\"plan-refinement\",\"status\":\"$gn_status\",\"hint\":\"质询前须刷新 gitnexus 基线（analyze 后重试）；或 GK_ALLOW_STALE_BASELINE=1 显式降级\"}"
-        return 1
-      fi
-      echo "{\"warning\":\"gitnexus baseline not current/reusable — degrade ($channel 无图级证据审查)\",\"channel\":\"$channel\"}" >&2
+      case "$gn_status" in
+        unavailable)
+          if [ "$channel" = "plan-refinement" ] && [ "${GK_ALLOW_STALE_BASELINE:-0}" != "1" ]; then
+            echo "{\"ok\":false,\"error\":\"BASELINE_UNAVAILABLE\",\"channel\":\"plan-refinement\",\"status\":\"$gn_status\",\"hint\":\"该 repo 没有可用 gitnexus 索引（不是过期）——先跑一次 analyze 建基线；或 GK_ALLOW_STALE_BASELINE=1 显式降级\"}"
+            return 1
+          fi ;;
+        *)
+          # stale：**放行**，但必须留痕（报文 + dbg 日志），防「静默降级」再犯。
+          echo "{\"warning\":\"baseline stale — degrade to advisory（图证据不完整，质询继续）\",\"channel\":\"$channel\",\"status\":\"$gn_status\"}" >&2
+          echo "[review-preflight] $channel baseline=$gn_status → advisory 放行（索引落后于 HEAD，图证据不完整但非阻断）$(date -u +%FT%TZ)" >> "$GK_DBG_LOG" ;;
+      esac
     fi
   fi
 
@@ -2063,15 +2267,48 @@ _gx_node_probe() {
   # 在 WSL 中恒命中 /usr/bin/node（linux）→ win 模式永远走不到 Windows node.exe 候选 →
   # _gx_subagent_gx_env win 分支恒 WARN（L1064 fail loudly）→ subagent gitnexus 工具不可用。
   local _mode="${1:-wsl}"
+  # 2026-11-01（跨平台真因 F，owner 清单第 2 条）：**候选必须同目录双形态并列**。
+  #   原实现只探 `/mnt/d/...`（**WSL 形态**）——在 Git Bash(MSYS) 里 `/mnt/d` **不存在**
+  #   ⟹ 三个候选全落空 ⟹ 回落 `command -v node` ⟹ 命中 WorkBuddy 自带
+  #   `/c/Users/HP/.workbuddy/binaries/node/versions/<v>/node`（**无 `.exe` 后缀**）。
+  #   后果链（实测）：① 该形态既非 `*.exe` 也非 `/mnt/*` ⟹ `_run_gitnexus_raw` 判成 wsl 侧
+  #   ⟹ 存储根取 POSIX `/mnt/c/.../.gitnexus-store/wsl` 交给 **Windows node** ⟹ node 按
+  #   相对路径解析 ⟹ 落 `<cwd>/mnt/c/...` 的**假路径** ⟹ `status --json` 回
+  #   `error:"not-indexed"` ⟹ 基线 `unavailable` ⟹ `BASELINE_STALE` 派发阻断；
+  #   ② 用户口径要求用系统装的那份 node（`D:\Program Files\nodejs\node.exe`），不用 WorkBuddy 运行时。
+  #   修：MSYS `/d/` 与 WSL `/mnt/d/` 同表并列；`.exe` 后缀显式补齐（`command -v` 在 MSYS 会剥后缀）。
   if [ "$_mode" = "win" ]; then
-    # Windows node.exe 候选（D 盘实测存在 2026-09-09；C 盘兜底）→ linux 兜底交给调用方 fail loudly
+    local _p _pz
     for _p in \
-      "/mnt/d/Program Files/nodejs/node.exe" \
-      "/mnt/c/Program Files/nodejs/node.exe" \
-      "/mnt/c/Program Files (x86)/nodejs/node.exe"; do
+      "/mnt/d/Program Files/nodejs/node.exe" "/d/Program Files/nodejs/node.exe" \
+      "/mnt/c/Program Files/nodejs/node.exe" "/c/Program Files/nodejs/node.exe" \
+      "/mnt/c/Program Files (x86)/nodejs/node.exe" "/c/Program Files (x86)/nodejs/node.exe"; do
       [ -x "$_p" ] && { echo "$_p"; return 0; }
     done
-    command -v node 2>/dev/null && return 0 || return 1
+    # 兜底：PATH 里的 node —— 但**跳过 WorkBuddy 自带运行时**（owner 口径：用系统那份）；
+    #   并把 MSYS 剥掉的 `.exe` 补回来（否则下游 `_gx_to_win_path` 产出无后缀的 Windows 路径）。
+    _p=""; _p=$(command -v node 2>/dev/null || true)
+    case "$_p" in
+      */.workbuddy/binaries/*|*/WorkBuddy/resources/*) _p="" ;;
+    esac
+    if [ -n "$_p" ]; then
+      case "$_p" in
+        *.exe) ;;
+        *) [ -x "${_p}.exe" ] && _p="${_p}.exe" ;;
+      esac
+      echo "$_p"; return 0
+    fi
+    # 最后兜底：连 WorkBuddy 运行时也收（但 `.exe` 后缀必须补齐 —— 否则下游把它判成 wsl 侧，
+    #   存储根取 POSIX 形态交给 Windows node ⟹ 假路径 `not-indexed`；见上）。
+    _p=$(command -v node 2>/dev/null || true)
+    if [ -n "$_p" ]; then
+      case "$_p" in
+        *.exe) ;;
+        *) [ -x "${_p}.exe" ] && _p="${_p}.exe" ;;
+      esac
+      echo "$_p"; return 0
+    fi
+    return 1
   fi
   local _node_cmd=""
   _node_cmd=$(command -v node || true)   # command -v 未命中零输出零 stderr（POSIX）→ 无需吞错
@@ -2117,33 +2354,10 @@ _user_home_wsl() {
     *) printf '%s' "${HOME:-/root}" ;;
   esac
 }
-# ─── 路径形态转换单一事实源（2026-11-01，纯 bash 零外部依赖）──────────────────────
-# 病灶（MSYS 跨平台 bug 家族）：原 13 处 `wslpath -w` 把路径转 Windows 形态，但 `wslpath`
-#   **只在 WSL 存在** —— Git Bash(MSYS) 下恒空 ⟹ `|| echo ""` 产出空串 ⟹ fail-loud 拦停
-#   （`WARN[gx-env] 解析 gitnexus 入口失败` → `unavailable` → `BASELINE_STALE` 硬拦质询）。
-#   且同一语义散在 13 处手写、形态判断不一致（有的 `/mnt/*)` 守卫、有的无守卫裸调）。
-# 正解 = 单一函数（不引 wslpath/cygpath 外部依赖 —— 那只是把 MSYS 依赖换成 WSL/MSYS 双依赖；
-#   也不新增 inline_python bomb —— 纯 bash 字符串处理）：
-#   · 已是 Windows 形态（`C:/` 或 `C:\`）⟹ 原样返回（Git Bash 下 MAIN_REPO 解析即此形）
-#   · WSL 形态 `/mnt/<d>/…`              ⟹ `<D>:/…`
-#   · MSYS 形态 `/<d>/…`                 ⟹ `<D>:/…`
-#   · 其它（纯 POSIX `/home/…` 等）      ⟹ 原样（无法转换，交调用方 fail-loud，不臆造）
-# 归一后两侧（WSL/MSYS）产出**同一形态** ⟹ 下游拼接/比较不再分叉。
-_gx_to_win_path() {
-  local _p="${1:-}" _d
-  [ -n "$_p" ] || { printf ''; return 0; }
-  case "$_p" in
-    [A-Za-z]:[\\/]*) printf '%s' "$_p"; return 0 ;;        # 已是 Windows 形态
-    /mnt/[A-Za-z]/*)
-      # `${_p#/mnt/?}` 剥 `/mnt/c` 后余下 `/Users/…`（已含前导斜杠）⟹ 只补盘符，禁再加斜杠
-      _d="${_p#/mnt/}"; _d="${_d:0:1}"
-      printf '%s:%s' "${_d^^}" "${_p#/mnt/?}" ;;
-    /[A-Za-z]/*)
-      _d="${_p#/}"; _d="${_d:0:1}"
-      printf '%s:%s' "${_d^^}" "${_p#/?}" ;;
-    *) printf '%s' "$_p" ;;                               # 纯 POSIX：原样
-  esac
-}
+# ─── 路径形态转换单一事实源 ───────────────────────────────────────────────────
+# 2026-11-02：`_gx_to_win_path` / `_gk_py_form` / `_gk_py_path`（含设计注释）已**前移**到
+#   启动块之前（见上方 SKILL_DIR 校验之后）—— 启动期 state 路由需要它们；此处不再重复定义
+#   （第二份实现 = 形态分叉源）。
 # 同上，**Windows 形态**（`C:\Users\<u>`；纯 bash 归一，Git Bash/WSL 双侧同结果）。
 _user_home_win() {
   _gx_to_win_path "$(_user_home_wsl)"
@@ -2161,8 +2375,25 @@ _gx_subagent_gx_env() {
     return 1
   }
   local _is_win_node=false
+  # 2026-11-01（跨平台 ①E 修复）：**补 MSYS 形态 `/[a-zA-Z]/*`**。
+  #   原判据只认 `*.exe`（Windows 直接路径）与 `/mnt/*`（WSL 形态）⟹ MSYS/Git Bash 形态
+  #   `/c/Users/HP/.workbuddy/binaries/node/versions/…/node` **两个都不匹配** ⟹ 被判成
+  #   **linux node** ⟹ 走 fail-loud 分支 ⟹ `GX_NODE/GX_JS` 全置空 ⟹ 图能力不可用
+  #   ⟹ `status` 输出恒空 ⟹ 基线判 `unavailable` ⟹ **`BASELINE_STALE` 阻断**（实测：
+  #   plan-refinement 派发 `dispatch_blocked`，且报错把真因说成"node 是 linux 形态"）。
+  #   实际该 node 是 **Windows 构建**（`status --json` 自报 `"platform":"win32"`）——
+  #   又一次**真因被伪装**（报"linux node"，实为"路径形态没认出来"）。
+  # ⚠ 不会误伤真 linux node：`/usr/bin/node` 的第三字符是 `s` 而非 `/` ⟹ 不匹配
+  #   `/[a-zA-Z]/*`（该模式要求单字母盘符后紧跟 `/`）。
+  # ⚠ 配对不变量（F-REV-73）不变：本机 gitnexus 包是 Windows 构建 ⟹ 只收 win node。
+  # ⚠ 2026-11-01 续修（真因 F）：再补 **Windows 直接形态 `[A-Za-z]:*`** ——
+  #   `_gx_node_probe win` 的 `command -v` 兜底会给出 `<home>/node`（**无 `.exe`**），
+  #   该形态既非 `*.exe` 也非 `/mnt/*` ⟹ 仍被判 wsl 侧 ⟹ 存储根走 POSIX 分支 ⟹
+  #   Windows node 按相对路径解析出 `<cwd>/mnt/c/...` 假路径 ⟹ `status` 回
+  #   `error:"not-indexed"` ⟹ 基线 `unavailable`（实测已复现到缓存文件里的 storagePath）。
+  #   即判据必须认「**路径形态**」而非「有没有 `.exe` 三个字母」。
   case "$_node" in
-    *.exe|/mnt/*) _is_win_node=true ;;
+    *.exe|[A-Za-z]:*|/mnt/*|/[A-Za-z]/*) _is_win_node=true ;;
   esac
   if ! $_is_win_node; then
     # F-REV-73（2026-09-16，用户裁定）：**配对不变量 = 「node 面」与「gitnexus 包的 native
@@ -2234,6 +2465,32 @@ _run_gitnexus() {
   printf '%s' "$_o"
   return 0
 }
+# ─── gitnexus 外置存储根：按 **node 形态**分根（单一事实源）─────────────────────────
+# 2026-11-01：抽成函数。原先这段分根逻辑只内联在 `_run_gitnexus_raw` 里 ⟹
+#   `_gitnexus_baseline_status` 调 `fast-status` 时**拿不到**它（只传 shell 里的空 env）⟹
+#   `fast-status` 的 `_meta_candidates` 只能看到 `<repo>/.gitnexus/meta.json`（外置存储下不存在）
+#   ⟹ 恒 `unavailable` ⟹ 回退 `gitnexus status`（Windows 上 >120s 或直接崩）⟹ 基线判 `stale`/`unavailable`
+#   ⟹ `BASELINE_STALE` 派发阻断。**这才是"自愈从未成功过"的真因**：自愈本身没坏，是它看不见索引。
+# 语义：`GITNEXUS_STORAGE_ROOT` 显式胜；否则 `<GK_GITNEXUS_STORE_BASE|~/.gitnexus-store>` 下
+#   按形态取 `win` / `wsl` 子根。⚠ 传的是**基根**，gitnexus 自己追加 `<reponame>-<hash>`。
+_gx_store_root_for_node() {
+  local _node="${1:-}"
+  local _base="${GK_GITNEXUS_STORE_BASE:-$(_user_home_wsl)/.gitnexus-store}"
+  local _sb=""
+  if [[ "$_node" == *.exe ]] || [[ "$_node" == /mnt/* ]] \
+     || [[ "$_node" == [A-Za-z]:* ]] || [[ "$_node" == /[A-Za-z]/* ]]; then
+    # Windows node ⟹ Windows 反斜杠形态 + `\win` 根
+    #   ⚠ 替换里必须**保留分隔符**（`\1:\\`）—— 只写 `\1:` 会吃掉 `/c/` 的尾斜杠 ⟹ `C:Users\...`
+    _sb=$(printf '%s' "$_base" \
+      | sed -e 's#^/mnt/\([a-zA-Z]\)/#\U\1:\\#' -e 's#^/\([a-zA-Z]\)/#\U\1:\\#' -e 's#/#\\#g')
+    printf '%s' "${GITNEXUS_STORAGE_ROOT:-${_sb}\\win}"
+  else
+    # WSL/linux node ⟹ POSIX 形态 + `/wsl` 根（认 `C:\` / `C:/` / `/c/` 三种输入）
+    _sb=$(printf '%s' "$_base" \
+      | sed -e 's#\\#/#g' -e 's#^\([a-zA-Z]\):/#/x\1/#' -e 's#^/\([a-zA-Z]\)/#/mnt/\L\1/#' -e 's#/x\([a-zA-Z]\)/#/mnt/\L\1/#')
+    printf '%s' "${GITNEXUS_STORAGE_ROOT:-${_sb}/wsl}"
+  fi
+}
 _run_gitnexus_raw() {
   local gx_args="$*"
   local gx_out=""
@@ -2279,7 +2536,8 @@ _run_gitnexus_raw() {
   # gitnexus analyze 身份缓存默认写 ProgramData 被拒 → 固化重定向到用户临时目录（2026-09-07 P1：按 node 类型选路径形态）
   local _gx_js_arg="$_win_gx_js"
   local _gx_identity_cache=""
-  if [[ "$_node_exe" == *.exe ]] || [[ "$_node_exe" == /mnt/* ]]; then
+  if [[ "$_node_exe" == *.exe ]] || [[ "$_node_exe" == /mnt/* ]] \
+     || [[ "$_node_exe" == [A-Za-z]:* ]] || [[ "$_node_exe" == /[A-Za-z]/* ]]; then
     _gx_identity_cache="${GITNEXUS_ANALYZER_IDENTITY_CACHE_DIR:-$(_user_home_win)\\AppData\\Local\\Temp\\gk-gitnexus-identity}"
     mkdir -p "$(_user_home_wsl)/AppData/Local/Temp/gk-gitnexus-identity" 2>/dev/null || true
   else
@@ -2315,9 +2573,30 @@ _run_gitnexus_raw() {
   #     在 `set -u` 下任何 gitnexus 调用都炸 `unbound variable` ⟹ `cmd_monitor --subagent`
   #     恒 rc=1（6 臂派发全部 `dispatch_blocked`，且 reason 为空）。改用全局 `SKILL_DIR`。
   local _gx_launcher="$SKILL_DIR/scripts/gk_gitnexus.py"
+  # ── 2026-11-01（跨平台 ①E 接线，trae 清单第 2/3 条）：gitnexus 存储根**按形态分根** ──
+  # 病象（实测）：Windows 侧 CLI 跑 gitnexus 时**未设** `GITNEXUS_STORAGE_ROOT` ⟹ gitnexus
+  #   回落 **repo-local `.gitnexus/`** ⟹ `status` 报 `error:"not-indexed"` ⟹ 质询链判
+  #   `BASELINE_STALE` fail-closed 阻断（本 worktree 实测：主仓索引已建、worktree 侧恒 not-indexed）。
+  #   同一仓在 WSL 侧建的索引落在 `/mnt/...`，Windows 侧 gitnexus 读不到 = **跨形态互斥**。
+  # 修法 = **按形态分根**（不是平台判断锁死调用路径）：Windows 形态 → `win` 根，WSL 形态 → `wsl` 根。
+  #   ⚠ 不硬编码用户路径 —— 根基由 env `GK_GITNEXUS_STORE_BASE` 提供，默认 = 用户主目录下
+  #   `.gitnexus-store`（与既有 `_user_home_wsl()` 同源）；**用户可自定义**（对齐 R0.16 的
+  #   「不硬编码、留可自定义配置」原则）。
+  # 三个旋钮（实测依据）：
+  #   · `GITNEXUS_MAX_FILE_SIZE` 默认 512KB ⟹ `gatekeeper-cli.sh`（821KB）被**跳过不索引**
+  #     （analyze 日志实证：`effective threshold 2048KB (default 512KB)`）；
+  #   · `GITNEXUS_WORKER_READY_TIMEOUT_MS` 默认过短 ⟹ worker 5s 即崩；
+  #   · 存储根必须与形态一致（否则 not-indexed）。
+  # 全部可用同名 env **覆盖**（`${VAR:-default}`），不夺用户控制权。
+  # 存储根 = 单源 `_gx_store_root_for_node`（按 node 形态分根；`GITNEXUS_STORAGE_ROOT` 显式胜）
+  local _gx_store_root=""
+  _gx_store_root=$(_gx_store_root_for_node "$_node_exe")
   gx_out=$(
     GX_NODE="$_node_exe" GX_JS="$_gx_js_arg" GX_REPO_DIR="$_repo_dir" \
     GITNEXUS_ANALYZER_IDENTITY_CACHE_DIR="$_gx_identity_cache" \
+    GITNEXUS_STORAGE_ROOT="$_gx_store_root" \
+    GITNEXUS_WORKER_READY_TIMEOUT_MS="${GITNEXUS_WORKER_READY_TIMEOUT_MS:-30000}" \
+    GITNEXUS_MAX_FILE_SIZE="${GITNEXUS_MAX_FILE_SIZE:-2048}" \
     python3 "$_gx_launcher" run --timeout "${GK_GX_TIMEOUT:-300}" --cwd "$_repo_dir" \
       -- $gx_args $_skip_git 2>/dev/null
   ) || true
@@ -2477,10 +2756,10 @@ _gx_repo_dir_for_current() {
   [ -n "${GK_GX_DIR:-}" ] && { echo "$GK_GX_DIR"; return 0; }
   if [ -f "$STATE_FILE" ]; then
     # 一次读取（target_repo + worktree）；⚠ 不再从 worktree 字符串反推 target_repo（病②）
-    _gx_pair=$(python3 -c "
-import json
+    _gx_pair=$(GK_PY_STATE="$(_gk_py_path "$STATE_FILE")" python3 -c "
+import json,os
 try:
-    d = json.load(open('$STATE_FILE',encoding='utf-8'))
+    d = json.load(open(os.environ['GK_PY_STATE'],encoding='utf-8'))
 except Exception:
     d = {}
 print(d.get('target_repo','') or '')
@@ -2521,7 +2800,13 @@ _gitnexus_baseline_status() {   # <dir> → echo current|reusable|stale|unavaila
   #   首选**零 spawn** 的 `fast-status`（读索引自记 lastCommit + `git diff` 代码后缀），
   #   四态语义不变；只有它判不出（无 meta / 解析失败）才回退原 node status 路径。
   local _fast=""
-  _fast=$(GITNEXUS_STORAGE_ROOT="${GITNEXUS_STORAGE_ROOT:-}" \
+  # ⚠ 2026-11-01（真因 G，实测）：**必须把外置存储根传进去**。原写 `${GITNEXUS_STORAGE_ROOT:-}`
+  #   ⟹ 取的是 shell 里的值（通常为空；真正的分根结果在 `_run_gitnexus_raw` 局部变量里）⟹
+  #   `fast_status._meta_candidates` 只看得见 `<repo>/.gitnexus/meta.json`（外置存储下不存在）
+  #   ⟹ 恒 `unavailable` ⟹ 回退 `gitnexus status`（Windows 上 >120s 或崩溃）⟹ 基线恒 `stale`。
+  local _sr=""
+  _sr=$(_gx_store_root_for_node "$(_gx_node_probe win 2>/dev/null)")
+  _fast=$(GITNEXUS_STORAGE_ROOT="$_sr" \
     python3 "$SKILL_DIR/scripts/gk_gitnexus.py" fast-status --cwd "$dir" 2>/dev/null | tr -d '\r' || true)
   case "$_fast" in
     current|reusable|stale) echo "$_fast"; return 0 ;;
@@ -2631,7 +2916,18 @@ _gx_analyze_embeddings() {  # <dir> → 0 = analyze 后 status 可复用（curre
       return 1
     fi
   fi
-  : >"$_gx_heal_marker" 2>/dev/null || true
+  # ⚠ 2026-11-01（实测）：marker 原在 **analyze 之前** 落盘 ⟹ 一次 5 秒即失败的 analyze
+  #   （如安全删除 shim 拦停）也会把 30min 冷静期点亮 ⟹ 之后 30 分钟**真 analyze 被跳过**
+  #   ⟹ 日志只剩「同目录 30min 内已自愈过 → 跳过」⟹ 真因被完全掩盖（本会话实测）。
+  #   修：成功 → 30min 冷静期（`$marker`）；失败 → 仅 5min（`$marker.fail`），失败不该锁死 30min。
+  if [ -f "${_gx_heal_marker}.fail" ]; then
+    local _gx_agef=$(( $(date +%s) - $(stat -c %Y "${_gx_heal_marker}.fail" 2>/dev/null || echo 0) ))
+    if [ "$_gx_agef" -lt 300 ] 2>/dev/null; then
+      echo "[gx-selfheal] 上次自愈失败仅 ${_gx_agef}s（<300s）→ 暂不重试 $(date -u +%FT%TZ)" >> "$GK_DBG_LOG"
+      [ -n "${_gx_lkfd:-}" ] && { flock -u "$_gx_lkfd" 2>/dev/null || true; eval "exec ${_gx_lkfd}>&-"; }
+      return 1
+    fi
+  fi
   local _gx_errf; _gx_errf=$(mktemp 2>/dev/null || echo /dev/null)
   GK_GX_DIR="$dir" GK_GX_TIMEOUT="${GK_GX_ANALYZE_TIMEOUT:-600}" \
     _run_gitnexus analyze --embeddings >"${GK_GX_KEEP_STDOUT:-/dev/null}" 2>"$_gx_errf" || true
@@ -2653,6 +2949,13 @@ _gx_analyze_embeddings() {  # <dir> → 0 = analyze 后 status 可复用（curre
     echo "[gx-selfheal] 复验未过但**无残态证据** → 不付全量重嵌（status=$_gx_st）$(date -u +%FT%TZ)" >> "$GK_DBG_LOG"
   fi
   [ "$_gx_errf" = "/dev/null" ] || rm -f "$_gx_errf" 2>/dev/null || true
+  # 结果落 marker：成功 ⟹ 30min 冷静期；失败 ⟹ 只记 5min（见上方注释）
+  if [ "$_gx_ok" = "0" ]; then
+    : >"$_gx_heal_marker" 2>/dev/null || true
+    rm -f "${_gx_heal_marker}.fail" 2>/dev/null || true
+  else
+    : >"${_gx_heal_marker}.fail" 2>/dev/null || true
+  fi
   if [ -n "$_gx_lkfd" ]; then flock -u "$_gx_lkfd" 2>/dev/null || true; eval "exec ${_gx_lkfd}>&-"; fi
   return "$_gx_ok"
 }
@@ -3142,7 +3445,7 @@ _collect_hard_evidence() {
   # Fallback: check state file for L4 record (allows documented L4 without committing)
   [ "$ev_l4_marker" = "false" ] && [ -f "$STATE_FILE" ] && {
     local l4_state
-    l4_state=$(STATE_FILE="$STATE_FILE" python3 "$SKILL_DIR/scripts/gk_state_query.py" --get gate_data.l4_review --default "" 2>/dev/null)
+    l4_state=$(STATE_FILE="$(_gk_py_path "$STATE_FILE")" python3 "$SKILL_DIR/scripts/gk_state_query.py" --get gate_data.l4_review --default "" 2>/dev/null)
     [ -n "$l4_state" ] && ev_l4_marker="true"
   }
 
@@ -3408,7 +3711,7 @@ except Exception: print("")' 2>/dev/null)
       #   读 `edit_budget.sessions.<sid>.remaining`；**新会话无条目** ⟹ 回退本节点允许值 `max`
       #   （= 该会话的新鲜额度），**绝不继承他人的消耗**。
       #   键缺失（老载荷 / 手工调 CLI）⟹ 回退全局口径 ⟹ 行为与修前一致（零回归）。
-      _budget_ptype=$(STATE_FILE="$STATE_FILE" python3 "$SKILL_DIR/scripts/gk_state_query.py" --get gate_data.project_type --default "" 2>/dev/null)
+      _budget_ptype=$(STATE_FILE="$(_gk_py_path "$STATE_FILE")" python3 "$SKILL_DIR/scripts/gk_state_query.py" --get gate_data.project_type --default "" 2>/dev/null)
       # 2026-09-28（**读数单源**）：原此处为**第二份内联实现**（会话隔离语义与 helper 重复）⟹
       #   正是「同一规则两消费点口径漂移」的结构性来源。现直接取上方 helper 的 `budget` 字段
       #   （helper = 判定单源；本函数 = **唯一扣费点** + 文案，职责分离）。语义**逐字同构**：
@@ -3452,8 +3755,8 @@ except Exception: print("")' 2>/dev/null)
         # 2026-09-28：会话口径定位改为**懒计算**（仅耗尽时读 used/max；原在读数块内无条件算）。
         [ -n "${GK_SESSION_ID:-}" ] && _b_ns="gate_data.edit_budget.sessions.${GK_SESSION_ID}"
         # 2026-09-25：会话隔离后报**本会话**的消耗（`_b_ns` 已按会话键定位；无会话 = 全局口径）。
-        _b_used=$(STATE_FILE="$STATE_FILE" python3 "$SKILL_DIR/scripts/gk_state_query.py" --get "$_b_ns.used" --default 0 2>/dev/null)
-        _b_max=$(STATE_FILE="$STATE_FILE" python3 "$SKILL_DIR/scripts/gk_state_query.py" --get "$_b_ns.max" --default 0 2>/dev/null)
+        _b_used=$(STATE_FILE="$(_gk_py_path "$STATE_FILE")" python3 "$SKILL_DIR/scripts/gk_state_query.py" --get "$_b_ns.used" --default 0 2>/dev/null)
+        _b_max=$(STATE_FILE="$(_gk_py_path "$STATE_FILE")" python3 "$SKILL_DIR/scripts/gk_state_query.py" --get "$_b_ns.max" --default 0 2>/dev/null)
         # ⚠ 计价单位（2026-10-23 订正）：两侧**已同单位**（`REV-15` 修订 X 归化，见区外的
         # 「计费单点」头部口径声明 —— 本注释**不**复述该字面锚，免与 arm27 的「声明须在区外」
         # 判据混淆）。原注释称「CLI 写类子命令仍**按次**计」= **过期** ⟹ 与
@@ -3541,13 +3844,13 @@ _sid = _os.environ.get('GK_SESSION_ID', '') or ''
 #   计数 ≥ K ⟹ 本次编辑 cost=2（覆盖 dedup 的 1/0）。判据单源 = gk_budget_ledger.edit_spam_flag（只读）。
 #   kill switch：GK_EDIT_LOG=0 关；GK_EDIT_LOG_N / GK_EDIT_LOG_K 覆盖窗口/阈值。
 #   ⚠ 异常 ⟹ 回落 cost=1（fail-open，防判据故障把合法编辑误加价）。
-#   ⚠ state 路径以字面量嵌入（同 _state_write 本体做法）；调用行首**逐字不动** ——
-#     test_gk_edit_budget_metering 的 _bill_payload1 以该行为锚反推 payload。
+#   ⚠ state 路径经 env（GK_PY_STATE，由 _state_write 统一注入，形态锚 = 解释器）；
+#     调用行首**逐字不动** —— test_gk_edit_budget_metering 的 _bill_payload1 以该行为锚反推 payload。
 _cost = 1
 if _os.environ.get('GK_EDIT_LOG', '1') != '0':
     try:
         from gk_budget_ledger import edit_spam_flag as _esf
-        _flag = _esf('$STATE_FILE', _p,
+        _flag = _esf(_os.environ['GK_PY_STATE'], _p,
                      window=(_os.environ.get('GK_EDIT_LOG_N') or None),
                      k=(_os.environ.get('GK_EDIT_LOG_K') or None))
         if _flag.get('flagged'):
@@ -3560,7 +3863,7 @@ if _os.environ.get('GK_EDIT_LOG', '1') != '0':
 if _cost == 1 and _os.environ.get('GK_T6', '1') != '0':
     try:
         from gk_budget_ledger import node_unverified_flag as _nuf
-        if _nuf('$STATE_FILE', session=_sid, node='$stage',
+        if _nuf(_os.environ['GK_PY_STATE'], session=_sid, node='$stage',
                 k=(_os.environ.get('GK_T6_K') or None)).get('flagged'):
             _cost = 2
     except Exception:
@@ -3591,7 +3894,7 @@ if _p:
     _batch_first = True
     try:
         from gk_budget_ledger import batch_open as _bo
-        _batch_first = _bo('$STATE_FILE', _sid, '$stage')
+        _batch_first = _bo(_os.environ['GK_PY_STATE'], _sid, '$stage')
     except Exception:
         _batch_first = True           # 判据故障 ⟹ 按首刀（多扣 1，保守方向）
     if _batch_first:
@@ -4555,7 +4858,7 @@ d.setdefault('gate_data', {})['gitnexus'] = _json.loads(_os.environ.get('GN_JSON
       #   对字符串插值不转 ⟹ Windows python 收到非法路径 ⟹ ModuleNotFoundError: gk_task_gate
       #   ⟹ _san_ok=false ⟹ fail-closed BARE_PLAN_REFINEMENT（WSL 下 /mnt/c 合法 ⟹ 从未暴露）。
       #   改 env 单源（os.environ 取值，同 L5508/9377 既有惯例）：
-      _san_ok=$(SKILL_DIR="$SKILL_DIR" STATE_FILE="$STATE_FILE" GK_PR_TASK="$task" python3 -c "
+      _san_ok=$(SKILL_DIR="$(_gk_py_path "$SKILL_DIR")" STATE_FILE="$(_gk_py_path "$STATE_FILE")" GK_PR_TASK="$task" python3 -c "
 import os,sys
 sys.path.insert(0, os.path.join(os.environ['SKILL_DIR'], 'scripts'))
 from gk_task_gate import task_in_pipeline
@@ -4931,9 +5234,9 @@ print('true' if task_in_pipeline(os.environ.get('STATE_FILE',''), os.environ.get
           --session "${GK_SESSION_ID:-}" >>"${GK_DBG_LOG:-/dev/null}" 2>&1 || true
         # C4①（ECC-D9D2382BB535，2026-09-28）：落盘**校验** —— 可解析 ∧ 关键机检键非缺席。
         #   仅告警不阻断（非 ECC 输出本就会被下方 pydantic VALID 门拒），但**不得静默**。
-        if ! python3 -c "
-import json,sys
-d=json.load(open('$sub_out_file',encoding='utf-8'))
+        if ! GK_PY_OUT_FILE="$(_gk_py_path "$sub_out_file")" python3 -c "
+import json,sys,os
+d=json.load(open(os.environ['GK_PY_OUT_FILE'],encoding='utf-8'))
 _m=[k for k in ('gx_status','verification','evidence_anchor') if k not in d]
 if _m:
   print('MISSING:'+','.join(_m)); sys.exit(4)
@@ -5011,9 +5314,15 @@ else: print('invalid')
       #   （**不内联到下方派发行** —— 该行是既有 3 条红先臂的锚点，改形态会连带打断它们；
       #   路径在外层 sub_out_file / sub_report_file 计算，含 subagent_id）。
       export GK_OUTPUT_FILE="$sub_out_file" GK_REPORT_FILE="$sub_report_file"
+      # 真因 D（2026-11-02）：python 侧路径形态以**解释器**为锚（见 `_gk_py_path` 段）。
+      #   原状把 bash 形态 `/c/…` / `/mnt/c/…` 内联进 `sys.path` / `state_lock` / `open`
+      #   ⟹ 原生 Windows python 直接 ImportError/FileNotFoundError ⟹ 整段落库未执行
+      #   （HISTORY_WRITE_FAILED）。经 env 传入还顺带消灭 `\U` unicodeescape 家族。
+      export GK_PY_SCRIPTS="$(_gk_py_path "$SKILL_DIR/scripts")" \
+             GK_PY_STATE="$(_gk_py_path "$STATE_FILE")"
       echo "$subagent_out" | GK_TASK="$task" GK_HMAC_VALID="$hmac_valid" python3 -c "
 import json,sys,os
-sys.path.insert(0,'$SKILL_DIR/scripts')
+sys.path.insert(0,os.environ['GK_PY_SCRIPTS'])
 from gk_json_utils import dump_state, state_lock
 from gk_subagent_report import normalize_evidence
 out=json.loads(sys.stdin.read())
@@ -5021,8 +5330,8 @@ out=json.loads(sys.stdin.read())
 # _sealed_agent_score → 写 state」的 RMW，此前**全程无锁** ⟹ 并发臂完成时互相覆盖
 # （subagent_history 条目静默丢失）。修法 = 取锁横跨读-写；dump_state 再取锁是**可重入**的、
 # 不自锁。进程退出即关 fd 释放锁（含下方 JTI_REPLAY 的早退 sys.exit）。
-_lk=state_lock('$STATE_FILE'); _lk.__enter__()
-d=json.load(open('$STATE_FILE',encoding='utf-8'))
+_lk=state_lock(os.environ['GK_PY_STATE']); _lk.__enter__()
+d=json.load(open(os.environ['GK_PY_STATE'],encoding='utf-8'))
 gd=d.setdefault('gate_data',{})
 hist=gd.setdefault('subagent_history',[])
 # ECC 4-field structured summary
@@ -5218,7 +5527,7 @@ if len(jti_store)>_JTI_MAX:
 nonce=out.get('nonce','')
 if _evicted or not nonce:
   try:
-    open('$GK_DBG_LOG','a',encoding='utf-8').write(
+    open(os.path.join(os.environ['GK_PY_SCRIPTS'],'gk_dbg.log'),'a',encoding='utf-8').write(
       '[jti] WARN %s pruned=%d evicted=%d size=%d nonce=%s %s\n'
       % ('nonce 缺失 → 本轮防重放未生效' if not nonce else '上限驱逐',
          len(expired), _evicted, len(jti_store), nonce or '<empty>',
@@ -5239,9 +5548,9 @@ hist.append(entry)
 #   ⚠ 本 payload 在 bash 双引号区内 ⟹ 禁 ASCII 反引号 + 禁 ASCII 双引号。
 try:
   import os as _os3
-  sys.path.insert(0,_os3.path.join('$SKILL_DIR','scripts'))
+  sys.path.insert(0,_os3.environ['GK_PY_SCRIPTS'])
   import gk_satellite as _sat4
-  _r4=_sat4.append('$STATE_FILE','history',[entry],
+  _r4=_sat4.append(_os3.environ['GK_PY_STATE'],'history',[entry],
                    batch_id=(entry.get('batch_id') or 'history-live'),
                    arm=(entry.get('subagent_id') or 'state'), gd=gd)
   if _r4.get('ok'):
@@ -5293,12 +5602,12 @@ if _hist_evicted:
   #   本段在 dump_state **之前** ⟹ 索引**必须 in-tx 并入 gd**（传 gd），禁另起 state 写。
   try:
     import os as _os2
-    sys.path.insert(0,_os2.path.join('$SKILL_DIR','scripts'))
+    sys.path.insert(0,_os2.environ['GK_PY_SCRIPTS'])
     import gk_satellite as _sat2
     for _e in _hist_evicted:
       if _e.get('spilled'):
         continue  # t4(a)：已在入库时全量落片 ⟹ 防同一条写两行
-      _r2=_sat2.append('$STATE_FILE','history',[_e],
+      _r2=_sat2.append(_os2.environ['GK_PY_STATE'],'history',[_e],
                        batch_id=(_e.get('batch_id') or 'history-overflow'),
                        arm=(_e.get('subagent_id') or 'state'), gd=gd)
       if not _r2.get('ok'):
@@ -5319,7 +5628,7 @@ if 'plan-refinement' in task_str:
   import time as _ts
   gd['_sealed_agent_score']=merge_sealed_agent_score(
     gd.get('_sealed_agent_score') or {}, out, _batch_id, _ts.time())
-if not dump_state('$STATE_FILE', d):
+if not dump_state(os.environ['GK_PY_STATE'], d):
   print(json.dumps({'ok':False,'error':'HISTORY_WRITE_FAILED','subagent_id':out.get('subagent_id','')}))
   sys.exit(3)
 _lk.__exit__(None, None, None)
@@ -5367,7 +5676,7 @@ _lk.__exit__(None, None, None)
     [ "$ev_worktree_exists" = "true" ] && { checks+='{"item":"feature_worktree_exists","status":"PASS","score":1.0,"evidence":"'"$worktree"' exists"},'; passed=$((passed+1)); } || checks+='{"item":"feature_worktree_exists","status":"FAIL","score":0.0,"evidence":"no worktree"},';
     [ "$ev_branch_not_main" = "true" ] && [ -n "$branch" ] && { checks+='{"item":"branch_not_main","status":"PASS","score":1.0,"evidence":"'"$branch"'"},'; passed=$((passed+1)); } || checks+='{"item":"branch_not_main","status":"FAIL","score":0.0,"evidence":"main or null"},';
     # F-09: Check actual guard-edit record in gate_data (not just stage check)
-    local ge_called; ge_called=$(STATE_FILE="$STATE_FILE" python3 "$SKILL_DIR/scripts/gk_state_query.py" --gt gate_data.guard_edit_count 0 2>/dev/null)
+    local ge_called; ge_called=$(STATE_FILE="$(_gk_py_path "$STATE_FILE")" python3 "$SKILL_DIR/scripts/gk_state_query.py" --gt gate_data.guard_edit_count 0 2>/dev/null)
     [ "$ge_called" = "yes" ] && { checks+='{"item":"guard_edit_called","status":"PASS","score":1.0,"evidence":"guard-edit recorded in gate_data"},'; passed=$((passed+1)); } || checks+='{"item":"guard_edit_called","status":"WARN","score":0.5,"evidence":"no guard-edit record — run guard-edit before coding"},';
     [ "$ev_build_exists" = "true" ] && { checks+='{"item":"compiled_and_tested","status":"PASS","score":1.0,"evidence":"build+ctest run"},'; passed=$((passed+1)); } || checks+='{"item":"compiled_and_tested","status":"FAIL","score":0.0,"evidence":"no build — run cmake+ctest"},';
     [ "${ev_commits_ahead}" -gt 0 ] 2>/dev/null && { checks+='{"item":"commits_ahead_of_main","status":"PASS","score":1.0,"evidence":"'"$ev_commits_ahead"' ahead"},'; passed=$((passed+1)); } || checks+='{"item":"commits_ahead_of_main","status":"FAIL","score":0.0,"evidence":"0 commits — nothing coded"},';
@@ -5379,7 +5688,7 @@ _lk.__exit__(None, None, None)
   if [ "$stage" = "STAGE_2" ]; then total_req=3
     [ "$ev_pushed" = "true" ] && { checks+='{"item":"pushed_to_remote","status":"PASS","score":1.0,"evidence":"SHA match"},'; passed=$((passed+1)); } || checks+='{"item":"pushed_to_remote","status":"FAIL","score":0.0,"evidence":"not pushed"},';
     # F-08: Check CI status from state file (not hardcoded)
-    local ci_status; ci_status=$(STATE_FILE="$STATE_FILE" python3 "$SKILL_DIR/scripts/gk_state_query.py" --get gate_data.ci_status --default unknown 2>/dev/null)
+    local ci_status; ci_status=$(STATE_FILE="$(_gk_py_path "$STATE_FILE")" python3 "$SKILL_DIR/scripts/gk_state_query.py" --get gate_data.ci_status --default unknown 2>/dev/null)
     if [ "$ci_status" = "green" ]; then
       checks+='{"item":"ci_triggered","status":"PASS","score":1.0,"evidence":"CI green"},'; passed=$((passed+1))
       checks+='{"item":"all_platforms_green","status":"PASS","score":1.0,"evidence":"all platforms green"},'; passed=$((passed+1))
@@ -5408,7 +5717,7 @@ _lk.__exit__(None, None, None)
 
   # STAGE_3 (REVIEW)
   if [ "$stage" = "STAGE_3" ]; then total_req=9
-    local sc; sc=$(STATE_FILE="$STATE_FILE" python3 "$SKILL_DIR/scripts/gk_state_query.py" --get gate_data.sprint_contract --default "" 2>/dev/null)
+    local sc; sc=$(STATE_FILE="$(_gk_py_path "$STATE_FILE")" python3 "$SKILL_DIR/scripts/gk_state_query.py" --get gate_data.sprint_contract --default "" 2>/dev/null)
     [ -n "$sc" ] && { checks+='{"item":"sprint_contract","status":"PASS","score":1.0,"evidence":"contract exists in gate_data"},'; passed=$((passed+1)); } || checks+='{"item":"sprint_contract","status":"FAIL","score":0.0,"evidence":"no sprint contract — declare scope+dimensions+failure_conditions BEFORE reviewing code"},';
     { [ "$ev_gitnexus_status" = "current" ] || [ "$ev_gitnexus_status" = "reusable" ]; } && { checks+='{"item":"l3_gitnexus_baseline","status":"PASS","score":1.0,"evidence":"gitnexus up to date"},'; passed=$((passed+1)); } || checks+='{"item":"l3_gitnexus_baseline","status":"FAIL","score":0.0,"evidence":"gitnexus stale"},';
     [ "$ev_l4_marker" = "true" ] && { checks+='{"item":"l4_niantic_reference","status":"PASS","score":1.0,"evidence":"L4 completed (commits or state)"},'; passed=$((passed+1)); } || checks+='{"item":"l4_niantic_reference","status":"FAIL","score":0.0,"evidence":"no L4 evidence"},';
@@ -5517,8 +5826,8 @@ _lk.__exit__(None, None, None)
       *)
         checks+='{"item":"gitnexus_current","status":"WARN","score":0.5,"evidence":"gitnexus '"$_eco_gx"' — run analyze"},' ;;
     esac
-    local eco_phase_progress; eco_phase_progress=$(python3 -c "
-import json; d=json.load(open('$STATE_FILE',encoding='utf-8'))
+    local eco_phase_progress; eco_phase_progress=$(GK_PY_STATE="$(_gk_py_path "$STATE_FILE")" python3 -c "
+import json,os; d=json.load(open(os.environ['GK_PY_STATE'],encoding='utf-8'))
 ec=d.get('gate_data',{}).get('eco_completions',{})
 print(len(ec))
 " 2>/dev/null || echo "0")
@@ -5538,7 +5847,7 @@ print(len(ec))
         # 审查产物：subagent 分析留痕 —— **union 读面**（主 state ⊕ 卫星 history 片，
         #   卫星计划对齐：写侧溢出已落片，只读 live 会误报空历史）；读失败 fail-loud 进 WARN。
         local eco_read_art
-        eco_read_art=$(STATE_FILE="$STATE_FILE" python3 "$SKILL_DIR/scripts/gk_state_query.py" --history-len 2>>"$GK_DBG_LOG")
+        eco_read_art=$(STATE_FILE="$(_gk_py_path "$STATE_FILE")" python3 "$SKILL_DIR/scripts/gk_state_query.py" --history-len 2>>"$GK_DBG_LOG")
         if ! [[ "$eco_read_art" =~ ^[0-9]+$ ]]; then
           checks+='{"item":"analysis_artifact","status":"WARN","score":0.5,"evidence":"history unreadable — see GK_DBG_LOG"},'
         elif [ "$eco_read_art" -gt 0 ]; then
@@ -5573,7 +5882,7 @@ print(len(ec))
     # F-23: ECC monitor — check actual analysis doc and adjudication record
     local ecc_doc; ecc_doc=$(ls "${MAIN_REPO_WSL}"/references/ecc-*.md 2>/dev/null | head -1)
     [ -n "$ecc_doc" ] && { checks+='{"item":"analysis_doc_exists","status":"PASS","score":1.0,"evidence":"ECC analysis document present"},'; passed=$((passed+1)); } || checks+='{"item":"analysis_doc_exists","status":"FAIL","score":0.0,"evidence":"no ecc-*.md found"},';
-    local ecc_adj; ecc_adj=$(python3 -c "import json;d=json.load(open('$STATE_FILE',encoding='utf-8'));cl=d.get('gate_data',{}).get('human_calibration_log',[]);print('yes' if any(e.get('stage','').startswith('ECC-') for e in cl) else 'no')" 2>/dev/null || echo "no")
+    local ecc_adj; ecc_adj=$(GK_PY_STATE="$(_gk_py_path "$STATE_FILE")" python3 -c "import json,os;d=json.load(open(os.environ['GK_PY_STATE'],encoding='utf-8'));cl=d.get('gate_data',{}).get('human_calibration_log',[]);print('yes' if any(e.get('stage','').startswith('ECC-') for e in cl) else 'no')" 2>/dev/null || echo "no")
     [ "$ecc_adj" = "yes" ] && { checks+='{"item":"adjudication_recorded","status":"PASS","score":1.0,"evidence":"Human calibration logged for ECC"},'; passed=$((passed+1)); } || checks+='{"item":"adjudication_recorded","status":"FAIL","score":0.0,"evidence":"no ECC adjudication record"},';
   fi
 
@@ -5585,8 +5894,8 @@ print(len(ec))
   # 2026-08-23 bomb 消解: 2>/dev/null → GK_DBG_LOG（扫描器崩溃不能静默降级为"0 issues"假干净）
   python3 "${SKILL_DIR}/scripts/gk_bash_static_scan.py" --json --skill-dir "${SKILL_DIR}" > "$bs_tmp" 2>>"$GK_DBG_LOG" \
     || echo '{"issues":0,"checks":[]}' > "$bs_tmp"
-  local bs_fails; bs_fails=$(python3 -c "import json;d=json.load(open('$bs_tmp'));print(sum(1 for c in d.get('checks',[]) if c['status']=='FAIL'))" 2>>"$GK_DBG_LOG" || echo 0)
-  local bs_warns; bs_warns=$(python3 -c "import json;d=json.load(open('$bs_tmp'));print(sum(1 for c in d.get('checks',[]) if c['status']=='WARN'))" 2>>"$GK_DBG_LOG" || echo 0)
+  local bs_fails; bs_fails=$(GK_PY_FILE="$(_gk_py_path "$bs_tmp")" python3 -c "import json,os;d=json.load(open(os.environ['GK_PY_FILE']));print(sum(1 for c in d.get('checks',[]) if c['status']=='FAIL'))" 2>>"$GK_DBG_LOG" || echo 0)
+  local bs_warns; bs_warns=$(GK_PY_FILE="$(_gk_py_path "$bs_tmp")" python3 -c "import json,os;d=json.load(open(os.environ['GK_PY_FILE']));print(sum(1 for c in d.get('checks',[]) if c['status']=='WARN'))" 2>>"$GK_DBG_LOG" || echo 0)
   rm -f "$bs_tmp"
   if [ "${bs_fails:-0}" -gt 0 ] 2>/dev/null; then
     # FAIL（LLM 注入等）→ 仅标记 + 自动进 violations（_monitor_finalize 提取 FAIL 项）；不稀释 score
@@ -5602,7 +5911,7 @@ print(len(ec))
   # 检测面 = state gate_data.hook_block_log（pre_tool_hook block() 持久化被禁意图）。
   # TTL 窗口内存在提权绕过（kind=escalation: Edit/Write 被 BLOCK 后经 RunCommand 直写同文件）
   # → 必检 FAIL 计入 total_req（拉低 score → advance 拦截）；仅普通 BLOCK → WARN 标记不阻断。
-  local hook_snap; hook_snap=$(python3 -c "import sys,json;sys.path.insert(0,'${SKILL_DIR}/scripts');import pre_tool_hook as h;print(json.dumps(h._block_log_snapshot('${STATE_FILE}')))" 2>>"$GK_DBG_LOG" || echo '{"blocks":0,"escalations":0,"chains":[]}')
+  local hook_snap; hook_snap=$(GK_PY_SCRIPTS="$(_gk_py_path "$SKILL_DIR/scripts")" GK_PY_STATE="$(_gk_py_path "$STATE_FILE")" python3 -c "import sys,json,os;sys.path.insert(0,os.environ['GK_PY_SCRIPTS']);import pre_tool_hook as h;print(json.dumps(h._block_log_snapshot(os.environ['GK_PY_STATE'])))" 2>>"$GK_DBG_LOG" || echo '{"blocks":0,"escalations":0,"chains":[]}')
   local hook_esc hook_blk
   hook_esc=$(echo "$hook_snap" | python3 "$SKILL_DIR/scripts/gk_json_utils.py" field escalations --default 0 2>>"$GK_DBG_LOG" || echo 0)
   hook_blk=$(echo "$hook_snap" | python3 "$SKILL_DIR/scripts/gk_json_utils.py" field blocks --default 0 2>>"$GK_DBG_LOG" || echo 0)
@@ -5626,7 +5935,7 @@ print(len(ec))
   #   · 逃生舱 GK_ASK_HOLD_KILL=0 → 放行（显式人工放行，与 edit_budget 逃生舱同调）。
   total_req=$((total_req+1))
   local _ah_snap _ah_hit _ah_ev
-  _ah_snap=$(SKILL_DIR="$SKILL_DIR" python3 -c "import json, os, sys
+  _ah_snap=$(SKILL_DIR="$(_gk_py_path "$SKILL_DIR")" python3 -c "import json, os, sys
 sys.path.insert(0, os.path.join(os.environ['SKILL_DIR'], 'scripts'))
 import pre_tool_hook as h
 print(json.dumps(h._ask_hold_snapshot(os.environ['SKILL_DIR']), ensure_ascii=False))" 2>>"$GK_DBG_LOG" || echo '{"pending_s":0,"max_s":0,"violations":[]}')
@@ -5655,15 +5964,15 @@ print(json.dumps(h._ask_hold_snapshot(os.environ['SKILL_DIR']), ensure_ascii=Fal
       *'"status":"FAIL"'*)
         _l9_fail_names="${_l9_fail_names:+$_l9_fail_names,}$(printf '%s' "$_l9_line" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("item",""))' 2>/dev/null)";;
     esac
-  done <<< "$(SKILL_DIR="$SKILL_DIR" STATE_FILE="$STATE_FILE" python3 -c "
+  done <<< "$(SKILL_DIR="$(_gk_py_path "$SKILL_DIR")" STATE_FILE="$(_gk_py_path "$STATE_FILE")" GK_PY_SD="$(_gk_py_path "$SKILL_DIR")" GK_PY_STATE="$(_gk_py_path "$STATE_FILE")" python3 -c "
 import json, os, sys
-sys.path.insert(0, os.path.join('$SKILL_DIR', 'scripts'))
+sys.path.insert(0, os.path.join(os.environ['GK_PY_SD'], 'scripts'))
 try:
     import gk_self_check as sc
-    rows = [sc.check_l9_runtime_safenet('$SKILL_DIR'),
-            sc.check_l9_gatechain_prereq('$STATE_FILE'),
-            sc.check_l9_entropy_appeal('$STATE_FILE'),
-            sc.check_ecc_form('$STATE_FILE')]
+    rows = [sc.check_l9_runtime_safenet(os.environ['GK_PY_SD']),
+            sc.check_l9_gatechain_prereq(os.environ['GK_PY_STATE']),
+            sc.check_l9_entropy_appeal(os.environ['GK_PY_STATE']),
+            sc.check_ecc_form(os.environ['GK_PY_STATE'])]
 except Exception as e:
     rows = [{'check': 'l9_runtime_safenet', 'status': 'WARN',
              'detail': 'gk_self_check 调用异常: ' + type(e).__name__ + ': ' + str(e)}]
@@ -5679,7 +5988,7 @@ for r in rows:
   # register 幂等（同标题不重复登记，见 gk_finding.register L174-176）；GK_L9_AUTO_E2=0 可关闭。
   if [ "${GK_L9_AUTO_E2:-1}" = "1" ] && [ -n "$_l9_fail_names" ]; then
     local _l9_ctx; _l9_ctx="$(json_val "$STATE_FILE" stage 'IDLE')/$(json_val "$STATE_FILE" r_phase '')"
-    STATE_FILE="$STATE_FILE" python3 "$SKILL_DIR/scripts/gk_finding.py" register "$STATE_FILE" \
+    STATE_FILE="$(_gk_py_path "$STATE_FILE")" python3 "$SKILL_DIR/scripts/gk_finding.py" register "$STATE_FILE" \
       "L9 gate FAIL (monitor @ $_l9_ctx): $_l9_fail_names" monitor \
       --family MONITOR-LOCAL --cover-layers L9 >/dev/null 2>>"$GK_DBG_LOG" || true
   fi
@@ -5980,7 +6289,7 @@ cmd_advance() {
     # META source_docs 恒空、本前置等价 no-op（接源管道接上但源侧永无数据）。委托路由中枢
     # resolve-bound-plan（唯一事实源），未绑定 → 保持原 PLAN_FILE。
     local _bound_plan _saved_plan="$PLAN_FILE"
-    _bound_plan=$(SKILL_DIR="$SKILL_DIR" STATE_FILE="$STATE_FILE" PLAN_POINTER="${_PLAN_POINTER:-}" \
+    _bound_plan=$(SKILL_DIR="$(_gk_py_path "$SKILL_DIR")" STATE_FILE="$(_gk_py_path "$STATE_FILE")" PLAN_POINTER="${_PLAN_POINTER:-}" \
       python3 "$SKILL_DIR/scripts/gk_route_center.py" resolve-bound-plan 2>>"$GK_DBG_LOG" \
       | python3 "$SKILL_DIR/scripts/gk_json_utils.py" field plan_file --default '' 2>/dev/null || echo "")
     [ -n "$_bound_plan" ] && PLAN_FILE="$_bound_plan"
@@ -6015,7 +6324,7 @@ print('ok' if d.get('ok') is True else ('skip' if str(d.get('error','')).startsw
   $dry_run && _adv_args="$_adv_args --check"
   $force && _adv_args="$_adv_args --force"
   local result
-  result=$(STATE_FILE="$STATE_FILE" SKILL_DIR="$SKILL_DIR" python3 "$SKILL_DIR/scripts/gk_advance.py" "$to_stage" $_adv_args --env-json "$env_json" --monitor-json "$monitor_json" --cc-json "$cc_json" --remote-json "$remote_json" 2>>"$GK_DBG_LOG" || echo '{"error":"gk_advance_py_failed"}')
+  result=$(STATE_FILE="$(_gk_py_path "$STATE_FILE")" SKILL_DIR="$(_gk_py_path "$SKILL_DIR")" python3 "$SKILL_DIR/scripts/gk_advance.py" "$to_stage" $_adv_args --env-json "$env_json" --monitor-json "$monitor_json" --cc-json "$cc_json" --remote-json "$remote_json" 2>>"$GK_DBG_LOG" || echo '{"error":"gk_advance_py_failed"}')
 
   local _allowed _ok
   _allowed=$(echo "$result" | python3 "$SKILL_DIR/scripts/gk_json.py" get allowed false 2>/dev/null || echo "False")
@@ -6039,7 +6348,7 @@ print('ok' if d.get('ok') is True else ('skip' if str(d.get('error','')).startsw
       local retrospect_json="" cur_score=0.5
       _write_gate_data "$current_stage" "$worktree" "$branch"
       if [ "$to_stage" = "DONE" ]; then retrospect_json=$(_generate_retrospect "$current_stage"); fi
-      cur_score=$(STATE_FILE="$STATE_FILE" python3 "$SKILL_DIR/scripts/gk_state_query.py" --get "monitor_scores.$current_stage.score" --default 0.5 2>/dev/null)
+      cur_score=$(STATE_FILE="$(_gk_py_path "$STATE_FILE")" python3 "$SKILL_DIR/scripts/gk_state_query.py" --get "monitor_scores.$current_stage.score" --default 0.5 2>/dev/null)
       # best 增量更新（2026-08-25 迁移自内联 python，r_phase 脚本内自动提取，消除 rg 依赖）
       python3 "$SKILL_DIR/scripts/gk_state_patch.py" update-best "$STATE_FILE" "$cur_score" "$to_stage" "" "$(date -Iseconds)" >/dev/null 2>&1 || true
       _write_context_file
@@ -6237,9 +6546,9 @@ _generate_retrospect() {
 
   # Read current state data
   local monitor_scores rejected_edits edit_count
-  monitor_scores=$(STATE_FILE="$STATE_FILE" python3 "$SKILL_DIR/scripts/gk_state_query.py" --dump monitor_scores --default "{}" 2>/dev/null || echo "{}")
-  rejected_edits=$(STATE_FILE="$STATE_FILE" python3 "$SKILL_DIR/scripts/gk_state_query.py" --dump gate_data.rejected_edits --default "[]" 2>/dev/null || echo "[]")
-  edit_count=$(STATE_FILE="$STATE_FILE" python3 "$SKILL_DIR/scripts/gk_state_query.py" --get gate_data.edit_count --default 0 2>/dev/null)
+  monitor_scores=$(STATE_FILE="$(_gk_py_path "$STATE_FILE")" python3 "$SKILL_DIR/scripts/gk_state_query.py" --dump monitor_scores --default "{}" 2>/dev/null || echo "{}")
+  rejected_edits=$(STATE_FILE="$(_gk_py_path "$STATE_FILE")" python3 "$SKILL_DIR/scripts/gk_state_query.py" --dump gate_data.rejected_edits --default "[]" 2>/dev/null || echo "[]")
+  edit_count=$(STATE_FILE="$(_gk_py_path "$STATE_FILE")" python3 "$SKILL_DIR/scripts/gk_state_query.py" --get gate_data.edit_count --default 0 2>/dev/null)
 
   # Find previous retrospect
   local prev_retrospect="(no previous retrospect)"
@@ -6361,7 +6670,7 @@ cmd_appeal() {
   _tx_env=$(_collect_advance_env "$_cur_st" "$gate" "$worktree" "$branch" 2>/dev/null || echo "{}")
   [ -z "$_tx_env" ] && _tx_env="{}"
   local _ap_out _ap_rc
-  _ap_out=$(STATE_FILE="$STATE_FILE" python3 "$SKILL_DIR/scripts/gk_appeal.py" \
+  _ap_out=$(STATE_FILE="$(_gk_py_path "$STATE_FILE")" python3 "$SKILL_DIR/scripts/gk_appeal.py" \
     --gate "$gate" --notes "$notes" --api-key "$api_key" \
     --worktree "$worktree" --branch "$branch" --path "$STATE_FILE" \
     --base "${API_BASE:-}" --model "${API_MODEL:-deepseek-flash}" \
@@ -6409,7 +6718,7 @@ cmd_escalate() {
   # Check: was this gate's appeal denied?
   # 2026-08-31 修复: 与 cmd_appeal 写入对齐 —— appeal_denied_gates 在顶层，
   # 原查 gate_data.appeal_denied_gates（嵌套）永不命中 → 误报 APPEAL_NOT_DENIED。
-  local denied; denied=$(STATE_FILE="$STATE_FILE" python3 "$SKILL_DIR/scripts/gk_state_query.py" --contains appeal_denied_gates "$gate" 2>/dev/null)
+  local denied; denied=$(STATE_FILE="$(_gk_py_path "$STATE_FILE")" python3 "$SKILL_DIR/scripts/gk_state_query.py" --contains appeal_denied_gates "$gate" 2>/dev/null)
   [ "$denied" != "yes" ] && { echo "{\"allowed\":false,\"reason\":\"APPEAL_NOT_DENIED\",\"detail\":\"Gate $gate has not been denied on appeal. Appeal must be denied BEFORE escalating.\"}"; return 1; }
 
   local report="${MAIN_REPO_WSL}/.gatekeeper_escalation_${gate}_$(date +%Y%m%d_%H%M).md"
@@ -6427,11 +6736,11 @@ $(cat "$STATE_FILE" 2>/dev/null | python3 "$SKILL_DIR/scripts/gk_json.py" pretty
 
 ## Gate Data
 \`\`\`json
-$(STATE_FILE="$STATE_FILE" python3 "$SKILL_DIR/scripts/gk_state_query.py" --dump gate_data 2>/dev/null)
+$(STATE_FILE="$(_gk_py_path "$STATE_FILE")" python3 "$SKILL_DIR/scripts/gk_state_query.py" --dump gate_data 2>/dev/null)
 \`\`\`
 
 ## Appeal Record
-$(STATE_FILE="$STATE_FILE" python3 "$SKILL_DIR/scripts/gk_state_query.py" --dump "appeal_records.$gate" 2>/dev/null)
+$(STATE_FILE="$(_gk_py_path "$STATE_FILE")" python3 "$SKILL_DIR/scripts/gk_state_query.py" --dump "appeal_records.$gate" 2>/dev/null)
 
 ## Git Diff (uncommitted + recent)
 \`\`\`
@@ -6486,7 +6795,7 @@ cmd_resolve() {
   fi
   # G-18: Block resolve when appeal was permanently denied (fail-closed)
   # 2026-08-31 修复: appeal_denied_gates 在顶层（cmd_appeal 写入段），原查嵌套路径永不命中。
-  local _appeal_denied; _appeal_denied=$(STATE_FILE="$STATE_FILE" python3 "$SKILL_DIR/scripts/gk_state_query.py" --contains appeal_denied_gates "$gate" 2>/dev/null)
+  local _appeal_denied; _appeal_denied=$(STATE_FILE="$(_gk_py_path "$STATE_FILE")" python3 "$SKILL_DIR/scripts/gk_state_query.py" --contains appeal_denied_gates "$gate" 2>/dev/null)
   [ -z "$_appeal_denied" ] && _appeal_denied="yes"  # Python failed → deny (fail-closed)
   if [ "$_appeal_denied" = "yes" ]; then
     rm -f "$_tmp_reason"
@@ -6646,12 +6955,12 @@ cmd_cron() {
     start)
       echo '{"ok":true,"message":"Starting cron scheduler (background)"}'
       # Cross-platform: use Python subprocess instead of nohup (Windows compat)
-      python3 -c "
+      GK_PY_SD="$(_gk_py_path "$SKILL_DIR")" python3 -c "
 import subprocess,os,sys
-log=open('${SKILL_DIR}/scripts/cron.log','a')
-p=subprocess.Popen([sys.executable,'${SKILL_DIR}/scripts/cron_scheduler.py','--interval','60'],
+log=open(os.path.join(os.environ['GK_PY_SD'],'scripts','cron.log'),'a')
+p=subprocess.Popen([sys.executable,os.path.join(os.environ['GK_PY_SD'],'scripts','cron_scheduler.py'),'--interval','60'],
     stdout=log,stderr=log,stdin=subprocess.DEVNULL,
-    start_new_session=True,cwd='${SKILL_DIR}')
+    start_new_session=True,cwd=os.environ['GK_PY_SD'])
 print('{\"ok\":true,\"pid\":%d}' % p.pid)
 " 2>/dev/null || echo '{"ok":false,"error":"Failed to start cron scheduler"}'
       ;;
@@ -6712,7 +7021,7 @@ print('{\"ok\":true,\"pid\":%d}' % p.pid)
       local rc_file="${1:-}"
       [ -f "$STATE_FILE" ] || { echo '{"ok":false,"error":"No state file"}'; return 1; }
       [ ! -f "$rc_file" ] && { echo '{"ok":false,"error":"report file required: cron health <json-file>"}'; return 1; }
-      _state_write "d.setdefault('gate_data',{})['cron_health']={'last_tick_at':'$(date -u +%Y-%m-%dT%H:%M:%SZ)','last_tick_ok':True,'source':'cron'}; d.setdefault('gate_data',{})['_latest_release_check']=json.load(open('$rc_file'))" 2>/dev/null || true
+      GK_PY_RC="$(_gk_py_path "$rc_file")" _state_write "d.setdefault('gate_data',{})['cron_health']={'last_tick_at':'$(date -u +%Y-%m-%dT%H:%M:%SZ)','last_tick_ok':True,'source':'cron'}; d.setdefault('gate_data',{})['_latest_release_check']=json.load(open(os.environ['GK_PY_RC']))" 2>/dev/null || true
       local ptype; ptype=$(python3 "${SKILL_DIR}/scripts/gk_gate_project_type.py" "$STATE_FILE" 2>/dev/null || echo "standard")
       echo "{\"ok\":true,\"state_file\":\"$STATE_FILE\",\"project_type\":\"$ptype\"}"
       ;;
@@ -6722,12 +7031,31 @@ print('{\"ok\":true,\"pid\":%d}' % p.pid)
 
 # ---------- set-key (standardized API key management) ----------
 cmd_set_key() {
-  local provider="${1:-}" key="${2:-}"
+  local provider="${1:-}" key="${2:-}" _kf="" _file_ok=false
+
+  # 2026-11-02（开源包可用性）：`set-key status` = 只读面，报来源与掩码，**不回显完整 key**。
+  if [ "$provider" = "status" ] || [ "$provider" = "--status" ]; then
+    local _src="unset" _mask=""
+    _kf=$(_gk_key_file "$PROVIDER")
+    _mask=$(_gk_key_file_read "$PROVIDER") || _mask=""
+    if [ -n "$_mask" ]; then _src="file"; else _mask=""; fi
+    if [ "$_src" = "unset" ] && \
+       [ -n "${GATEKEEPER_API_KEY:-}${DEEPSEEK_API_KEY:-}${MIMO_API_KEY:-}" ]; then
+      _src="env"
+    fi
+    _mask=$(python3 "$SKILL_DIR/scripts/gk_api_key.py" mask --provider "$PROVIDER" \
+              --skill-dir "$SKILL_DIR" 2>/dev/null || true)
+    python3 -c 'import json,sys
+print(json.dumps({"ok": True, "provider": sys.argv[1], "key_source": sys.argv[2],
+                  "key_file": sys.argv[3], "masked": sys.argv[4]}, ensure_ascii=False))' \
+      "$PROVIDER" "$_src" "$_kf" "$_mask"
+    return 0
+  fi
 
   case "$provider" in
     deepseek|mimo) ;;
     *)
-      echo '{"error":"Usage: set-key <deepseek|mimo> <key>","providers":["deepseek","mimo"]}'
+      echo '{"error":"Usage: set-key <deepseek|mimo> <key> | set-key status","providers":["deepseek","mimo"]}'
       return 1
       ;;
   esac
@@ -6741,24 +7069,36 @@ cmd_set_key() {
     env_var="DEEPSEEK_API_KEY"
   fi
 
+  # 持久化（跨平台，2026-11-02）：`.keys/<provider>` 以 0600 写入 —— 这是 Linux/macOS 上
+  #   唯一重启后仍生效的入口；路径单源 = `scripts/gk_api_key.py`（`$GATEKEEPER_KEY_FILE` 可覆盖）。
+  _kf=$(_gk_key_file "$provider")
+  mkdir -p "$(dirname "$_kf")" 2>/dev/null || true
+  if ( umask 077; printf '%s\n' "$key" > "$_kf" ) 2>/dev/null; then
+    chmod 600 "$_kf" 2>/dev/null || true
+    _file_ok=true
+  fi
+
   # Set for current session (WSL)
   export "${env_var}=${key}"
 
-  # Persist to Windows User environment (cross-session)
-  # 2026-08-09: powershell.exe 绝对路径兜底（同 _resolve_api_key L156-164，wslsh -c/cron PATH 边界）
+  # Persist to Windows User environment (cross-session) —— best-effort；非 Windows 自动跳过。
   local _ps_exe=""
   if [ -x "/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe" ]; then
     _ps_exe="/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"
   elif command -v powershell.exe >/dev/null 2>&1; then
     _ps_exe="powershell.exe"
   fi
+  local _note="Key set for current session; persisted to key file (cross-platform)."
   if [ -n "$_ps_exe" ]; then
     local safe_key; safe_key=$(printf '%s' "$key" | sed "s/'/''/g")
-    "$_ps_exe" -NoProfile -Command "[System.Environment]::SetEnvironmentVariable('${env_var}', '${safe_key}', 'User')" 2>/dev/null
-    echo "{\"ok\":true,\"provider\":\"${provider}\",\"env_var\":\"${env_var}\",\"persisted\":true,\"note\":\"Key set for current WSL session + Windows User env (cross-session). Restart IDE for Process scope.\"}"
-  else
-    echo "{\"ok\":true,\"provider\":\"${provider}\",\"env_var\":\"${env_var}\",\"persisted\":false,\"note\":\"PowerShell not available. Key set for current WSL session only.\"}"
+    "$_ps_exe" -NoProfile -Command "[System.Environment]::SetEnvironmentVariable('${env_var}', '${safe_key}', 'User')" 2>/dev/null \
+      && _note="Key set for current session + key file + Windows User env (restart IDE for Process scope)."
   fi
+  python3 -c 'import json,sys
+print(json.dumps({"ok": True, "provider": sys.argv[1], "env_var": sys.argv[2],
+                  "key_file": sys.argv[3], "file_persisted": sys.argv[4] == "1",
+                  "session_env": True, "note": sys.argv[5]}, ensure_ascii=False))' \
+    "$provider" "$env_var" "$_kf" "$( [ "$_file_ok" = true ] && echo 1 || echo 0 )" "$_note"
 }
 
 # ---------- balance (DeepSeek API balance query, MiMo 无此 endpoint) ----------
@@ -7503,7 +7843,7 @@ else:
 PYEOF
 
   local output
-  output=$(SKILL_DIR="$SKILL_DIR" DOCGEN_CHECK="$([ "$check_mode" = true ] && echo 'true' || echo 'false')" python3 "$gen_script" 2>&1)
+  output=$(SKILL_DIR="$(_gk_py_path "$SKILL_DIR")" DOCGEN_CHECK="$([ "$check_mode" = true ] && echo 'true' || echo 'false')" python3 "$gen_script" 2>&1)
   local rc=$?
   rm -f "$gen_script"
   [ $rc -ne 0 ] && [ "$check_mode" = false ] && { echo "$output"; return 1; }
@@ -7529,11 +7869,11 @@ cmd_reflect() {
   [ -z "$stage" ] && { echo '{"error":"reflect <stage> required"}'; return 1; }
   [ ! -f "$STATE_FILE" ] && { echo '{"error":"No state file"}'; return 1; }
 
-  local rejected; rejected=$(STATE_FILE="$STATE_FILE" python3 "$SKILL_DIR/scripts/gk_state_query.py" --tail gate_data.rejected_edits 5 --indent 2 2>/dev/null || echo '[]')
+  local rejected; rejected=$(STATE_FILE="$(_gk_py_path "$STATE_FILE")" python3 "$SKILL_DIR/scripts/gk_state_query.py" --tail gate_data.rejected_edits 5 --indent 2 2>/dev/null || echo '[]')
 
   local best; best=$(python3 "$SKILL_DIR/scripts/gk_state.py" get gate_data.best --path "$STATE_FILE" --json --indent 2 --default '{}' 2>/dev/null || echo '{}')
 
-  local human_cal; human_cal=$(STATE_FILE="$STATE_FILE" python3 "$SKILL_DIR/scripts/gk_state_query.py" --tail gate_data.human_calibration_log 5 --indent 2 2>/dev/null || echo '[]')
+  local human_cal; human_cal=$(STATE_FILE="$(_gk_py_path "$STATE_FILE")" python3 "$SKILL_DIR/scripts/gk_state_query.py" --tail gate_data.human_calibration_log 5 --indent 2 2>/dev/null || echo '[]')
 
   # Read cross-R history for longitudinal analysis
   local cross_r_context
@@ -7634,10 +7974,10 @@ cmd_check_changes() {
 
   # 4. Push failures from state
   local push_fail_count=0
-  [ -f "${STATE_FILE:-}" ] && push_fail_count=$(python3 -c "
-import json
+  [ -f "${STATE_FILE:-}" ] && push_fail_count=$(GK_PY_STATE="$(_gk_py_path "$STATE_FILE")" python3 -c "
+import json,os
 try:
-    d=json.load(open('$STATE_FILE',encoding='utf-8'))
+    d=json.load(open(os.environ['GK_PY_STATE'],encoding='utf-8'))
     pf=d.get('gate_data',{}).get('push_failures',[])
     print(len(pf))
 except: print(0)
@@ -7776,9 +8116,9 @@ cmd_push() {
     # F-15: Previous push failures from state
     local _status_push_failures=""
     if [ -f "${STATE_FILE:-}" ]; then
-      _status_push_failures=$(python3 -c "
-import json,sys
-s=json.load(open('$STATE_FILE',encoding='utf-8'))
+      _status_push_failures=$(GK_PY_STATE="$(_gk_py_path "$STATE_FILE")" python3 -c "
+import json,sys,os
+s=json.load(open(os.environ['GK_PY_STATE'],encoding='utf-8'))
 pf=s.get('gate_data',{}).get('push_failures',[])
 if pf:
     print(json.dumps({'count':len(pf),'last_error':pf[-1].get('error',''),'last_attempt':pf[-1].get('timestamp','')}))
@@ -7805,7 +8145,7 @@ ENDJSON
   # ─── Phase 1: confirm → 校验 token + 推送 ───
   # Stage gate: confirm 有副作用，必须在活跃 R-phase 内
   local _cur_stage
-  _cur_stage=$(STATE_FILE="$STATE_FILE" python3 "$SKILL_DIR/scripts/gk_state_query.py" --get stage --default IDLE 2>/dev/null)
+  _cur_stage=$(STATE_FILE="$(_gk_py_path "$STATE_FILE")" python3 "$SKILL_DIR/scripts/gk_state_query.py" --get stage --default IDLE 2>/dev/null)
   if [ "$_cur_stage" = "IDLE" ] || [ "$_cur_stage" = "DONE" ]; then
     _log_block "push" "confirm rejected: stage=$_cur_stage"
     echo "{\"ok\":false,\"phase\":\"confirm\",\"error\":\"Push requires active R-phase (current stage: $_cur_stage). Start with spz-gatekeeper-r-sequence skill first.\"}"
@@ -8352,7 +8692,7 @@ _gk_repo_label() {   # --repo 别名（与 META `target_repo: skill|gatekeeper` 
 }
 
 _gk_trash_dir() {    # 回收落点**单源**（`gk_route_center.trash_dir`）；禁第二份路径推算
-  python3 -c "import sys;sys.path.insert(0,'$SKILL_DIR/scripts');import gk_route_center as r;print(r.trash_dir('$SKILL_DIR'))" 2>/dev/null \
+  GK_PY_SD="$(_gk_py_path "$SKILL_DIR")" python3 -c "import sys,os;sys.path.insert(0,os.path.join(os.environ['GK_PY_SD'],'scripts'));import gk_route_center as r;print(r.trash_dir(os.environ['GK_PY_SD']))" 2>/dev/null \
     || printf '%s' "${SKILL_DIR%/*}/../.gk-trash"
 }
 
@@ -9110,12 +9450,13 @@ PY
     _co_verdict=$(ACCEPT_JSON="$_co_acc" python3 "$SKILL_DIR/scripts/gk_apply_worktree_cli.py" closeout-verdict 2>>"$GK_DBG_LOG") || _co_verdict="unknown"
     if [ "${GK_CLOSEOUT_NO_CLOSE:-0}" != "1" ] && [ "$_co_verdict" = "pass" ] && [ -n "$fid" ]; then
       local _co_prev_st="${STATE_FILE:-}" _co_ok=true _cid
-      STATE_FILE="$_co_st"
+      # 真因 C 边界③（2026-11-02）：`_co_st` 可能来自 `--state` 参数（Windows 形态）⟹ 归一
+      STATE_FILE="$(_gk_fwd "$_co_st")"
       for _cid in $(printf '%s' "$fid" | tr ',' ' '); do
         [ -n "$_cid" ] || continue
         cmd_finding close "$_cid" --verify-source tests:accept-pass >>"$GK_DBG_LOG" 2>&1 || _co_ok=false
       done
-      STATE_FILE="$_co_prev_st"
+      STATE_FILE="$(_gk_fwd "$_co_prev_st")"
       _co_cl="{\"auto_closed\": $_co_ok, \"all_ok\": $_co_ok}"
     fi
     if [ "$no_gitnexus" != "1" ]; then
@@ -9477,7 +9818,7 @@ cmd_plan_refinement() {
     # 2026-11-01（跨平台修复）：sys.path 原为 bash 插值 SKILL_DIR（裸美元形态进 python 字符串）
     #   ⟹ MSYS /c/ 路径不被 Windows python 识别（env 传递才转换）⟹ ModuleNotFoundError
     #   ⟹ 证据校验误报。改 env 单源（同 BARE 守卫修法）。
-    _wev_json=$(SKILL_DIR="$SKILL_DIR" python3 -c "
+    _wev_json=$(SKILL_DIR="$(_gk_py_path "$SKILL_DIR")" python3 -c "
 import json, os, sys
 sys.path.insert(0, os.path.join(os.environ['SKILL_DIR'], 'scripts'))
 import gk_evidence as E
@@ -9513,7 +9854,7 @@ print(json.dumps(recs, ensure_ascii=False))
       [ -f "$_c" ] && { _pr_plan="$_c"; break; }
     done
     if [ -n "$_pr_plan" ]; then
-      _pr_dom_state=$(SKILL_DIR="$SKILL_DIR" STATE_FILE="$STATE_FILE" PR_PLAN="$_pr_plan" \
+      _pr_dom_state=$(SKILL_DIR="$(_gk_py_path "$SKILL_DIR")" STATE_FILE="$(_gk_py_path "$STATE_FILE")" PR_PLAN="$_pr_plan" \
         python3 -c "
 import os, sys
 sys.path.insert(0, os.path.join(os.environ['SKILL_DIR'], 'scripts'))
@@ -9533,7 +9874,8 @@ except Exception as e:
     sys.stderr.write('WARN[pr-route] resolve_domain_state(%s): %s\n' % (dom, e))
 " 2>>"$GK_DBG_LOG" || true)
       if [ -n "$_pr_dom_state" ] && [ -f "$_pr_dom_state" ] && [ "$_pr_dom_state" != "$STATE_FILE" ]; then
-        STATE_FILE="$_pr_dom_state"
+        # 真因 C 边界④（2026-11-02）：`resolve_domain_state` 由 python 返回（可能是 `C:\…`）⟹ 归一
+        STATE_FILE="$(_gk_fwd "$_pr_dom_state")"
         export STATE_FILE
         STATE_FILE_EXPLICIT=1
         export STATE_FILE_EXPLICIT
@@ -9726,7 +10068,7 @@ except Exception:
         # 组别**单源** = full_task 内嵌标记（入队时由 `_group_expand_records` 写入）。
         # 原 `G$((_idx/_K+1))` 假设 `_adj_ids` 与入队序一致；L0 实跑中 n3 因此被标成 G2
         # ⟹ 仅在没有标记（无清单/显式回退）时才用下标兜底。
-        _ag=$(SKILL_DIR="$SKILL_DIR" FULL_TASK="$_aft" python3 -c 'import os,sys
+        _ag=$(SKILL_DIR="$(_gk_py_path "$SKILL_DIR")" FULL_TASK="$_aft" python3 -c 'import os,sys
 sys.path.insert(0, os.path.join(os.environ["SKILL_DIR"], "scripts"))
 from gk_task_gate import group_label_of_full_task
 print(group_label_of_full_task(os.environ.get("FULL_TASK", "")))' 2>>"$GK_DBG_LOG" | tr -d '\r') || _ag=""   # CRLF 净化（2026-11-01）：G1\r 污染 --arm-group/临时文件名
@@ -9735,8 +10077,8 @@ print(group_label_of_full_task(os.environ.get("FULL_TASK", "")))' 2>>"$GK_DBG_LO
       done
       # batch-narrow = 3 组窄任务**并集**（全批逐字相同 ⟹ 同一 batch_id；disp-plan §3）
       # 2026-10-21（`ECC-81883BA000AB`）：与入队端**同源** —— sidecar 优先；无 sidecar 按 plan 归属过滤。
-      _bnarrow=$(STATE_FILE="$STATE_FILE" GK_K="$_K" GK_NARROW_SIDECAR="$_narrow_sidecar" \
-        GK_NARROW_SCOPE="$plan_path" SKILL_DIR="$SKILL_DIR" python3 -c '
+      _bnarrow=$(STATE_FILE="$(_gk_py_path "$STATE_FILE")" GK_K="$_K" GK_NARROW_SIDECAR="$_narrow_sidecar" \
+        GK_NARROW_SCOPE="$plan_path" SKILL_DIR="$(_gk_py_path "$SKILL_DIR")" python3 -c '
 import json,os,sys
 sys.path.insert(0, os.path.join(os.environ["SKILL_DIR"], "scripts"))
 import gk_task_gate as G
@@ -9853,7 +10195,7 @@ for ln in io.open(sys.argv[1], encoding="utf-8"):
   # subagent 点检历史（最近一条是否 plan-refinement）—— **union 读面**（主 state ⊕ 卫星 history 片）；
   #   读失败 fail-loud（ckpt=unreadable ⟹ 进 missing），禁 `2>/dev/null` 静默当空历史。
   local last_task="" ckpt="absent"
-  if ! last_task=$(STATE_FILE="$STATE_FILE" python3 "$SKILL_DIR/scripts/gk_state_query.py" --history-last-task --max 120 2>>"$GK_DBG_LOG"); then
+  if ! last_task=$(STATE_FILE="$(_gk_py_path "$STATE_FILE")" python3 "$SKILL_DIR/scripts/gk_state_query.py" --history-last-task --max 120 2>>"$GK_DBG_LOG"); then
     ckpt="unreadable"
   else
     case "$last_task" in *plan-refinement*) ckpt="present" ;; esac
@@ -9866,10 +10208,10 @@ for ln in io.open(sys.argv[1], encoding="utf-8"):
   #   （阻断面仍只有 plan_doc/meta）⟹ 对齐本仓「依赖不可用不得锁死序列」fail-soft 纪律。
   # ⚠ `adjudicate_seal` 为**存在性**校验（`gk_adjudicate.py` 的 entry 不含计划路径字段 ⟹ 归属须人工核对）。
   local adjudicate_seal="absent"
-  adjudicate_seal=$(STATE_FILE="$STATE_FILE" python3 -c "
-import json
+  adjudicate_seal=$(GK_PY_STATE="$(_gk_py_path "$STATE_FILE")" python3 -c "
+import json,os
 try:
-    d=json.load(open('$STATE_FILE',encoding='utf-8'))
+    d=json.load(open(os.environ['GK_PY_STATE'],encoding='utf-8'))
     cl=d.get('gate_data',{}).get('human_calibration_log') or []
     print('present' if any((e.get('verdicts_json') or e.get('decision')) for e in cl) else 'absent')
 except Exception:
@@ -9982,7 +10324,7 @@ except Exception:
   _pr_ptype=$(python3 "$SKILL_DIR/scripts/gk_state.py" get gate_data.project_type --path "$STATE_FILE" --default '' --default-falsy '' 2>>"$GK_DBG_LOG") || true
   [ "$_pr_ptype" = "standing" ] && _pr_channel="standing"
   [ -n "${GATEKEEPER_PREFLIGHT_CHANNEL:-}" ] && _pr_channel="${GATEKEEPER_PREFLIGHT_CHANNEL}"
-  pr_evidence=$(SKILL_DIR="$SKILL_DIR" STATE_FILE="$STATE_FILE" python3 "${SKILL_DIR}/scripts/gk_doc_align.py" \
+  pr_evidence=$(SKILL_DIR="$(_gk_py_path "$SKILL_DIR")" STATE_FILE="$(_gk_py_path "$STATE_FILE")" python3 "${SKILL_DIR}/scripts/gk_doc_align.py" \
     preflight-evidence --task-text "$full_task" --plan-path "$plan_path" \
     --state-file "$STATE_FILE" --channel "$_pr_channel" 2>>"$GK_DBG_LOG") || true
   if [ -n "$pr_evidence" ]; then
@@ -10444,7 +10786,7 @@ cmd_audit() {
       export _AUDIT_PUB_KEY _CONTEXT_PUB_KEY
       # 2026-08-13: stderr 追加到 GK_DBG_LOG（此前 2>/dev/null 吞错→heredoc 异常静默失败输出空 JSON，如 divergence=None 崩溃）；
       # 失败时把最近日志尾部嵌入错误 JSON 便于诊断
-      local state_data; state_data=$(STATE_FILE="$STATE_FILE" SKILL_DIR="$SKILL_DIR" python3 "$SKILL_DIR/scripts/gk_audit_state.py" --state 2>>"$GK_DBG_LOG" || echo "{\"state_checks\":[],\"audit_summary\":{\"total_fields\":0,\"heredoc_error\":\"$(tail -3 "$GK_DBG_LOG" 2>/dev/null | tr '\n' ' ' | head -c 200)\"}}")
+      local state_data; state_data=$(STATE_FILE="$(_gk_py_path "$STATE_FILE")" SKILL_DIR="$(_gk_py_path "$SKILL_DIR")" python3 "$SKILL_DIR/scripts/gk_audit_state.py" --state 2>>"$GK_DBG_LOG" || echo "{\"state_checks\":[],\"audit_summary\":{\"total_fields\":0,\"heredoc_error\":\"$(tail -3 "$GK_DBG_LOG" 2>/dev/null | tr '\n' ' ' | head -c 200)\"}}")
       # Persist state result for RED report consumption
       # 2026-08-20 (交叉审查): 原 `['audit_state_result']=$state_data` 字面量嵌入——JSON 的
       # true/false/null 非合法 Python 字面量 → NameError → 被 `|| true` 吞 → 持久化恒失败，
@@ -10469,7 +10811,7 @@ cmd_audit() {
       # 路径参数化 (原 heredoc 硬编码 /mnt/c/...) + 持久化走 _state_write
       # (原 `['audit_docs_result']=$docs_result` 字面量嵌入——JSON 含引号破坏 python -c, 同 --state 修复)
       local _tmp_docs; _tmp_docs=$(mktemp)
-      local docs_result; docs_result=$(SKILL_DIR="$SKILL_DIR" python3 "$SKILL_DIR/scripts/gk_audit_docs.py" 2>>"$GK_DBG_LOG" || echo "{\"docs_checks\":[],\"summary\":{\"total\":0,\"matches\":0,\"failures\":1,\"heredoc_error\":\"$(tail -3 "$GK_DBG_LOG" 2>/dev/null | tr '\n' ' ' | head -c 200)\"}}")
+      local docs_result; docs_result=$(SKILL_DIR="$(_gk_py_path "$SKILL_DIR")" python3 "$SKILL_DIR/scripts/gk_audit_docs.py" 2>>"$GK_DBG_LOG" || echo "{\"docs_checks\":[],\"summary\":{\"total\":0,\"matches\":0,\"failures\":1,\"heredoc_error\":\"$(tail -3 "$GK_DBG_LOG" 2>/dev/null | tr '\n' ' ' | head -c 200)\"}}")
       # Persist docs result for RED report consumption (2026-08-20: 改 _state_write, 同 --state)
       echo "$docs_result" > "$_tmp_docs"
       _state_write "d.setdefault('gate_data',{})['audit_docs_result']=json.load(open('$_tmp_docs'))"
@@ -10486,13 +10828,13 @@ cmd_audit() {
       # Phase 4c-4f (2026-08-20): CLI 接线 — gk_audit_state.py 扩展检查链
       # (check_hint/check_self/check_hook/check_red 已在 Phase 4a 实现, run_all 可调)
       local _amode="${1#--}"; shift || true
-      local _aresult; _aresult=$(STATE_FILE="$STATE_FILE" SKILL_DIR="$SKILL_DIR" python3 "$SKILL_DIR/scripts/gk_audit_state.py" "--$_amode" 2>>"$GK_DBG_LOG" || echo "{\"error\":\"$(tail -3 "$GK_DBG_LOG" 2>/dev/null | tr '\n' ' ' | head -c 200)\"}")
+      local _aresult; _aresult=$(STATE_FILE="$(_gk_py_path "$STATE_FILE")" SKILL_DIR="$(_gk_py_path "$SKILL_DIR")" python3 "$SKILL_DIR/scripts/gk_audit_state.py" "--$_amode" 2>>"$GK_DBG_LOG" || echo "{\"error\":\"$(tail -3 "$GK_DBG_LOG" 2>/dev/null | tr '\n' ' ' | head -c 200)\"}")
       echo "{\"ok\":true,\"audit_mode\":\"$_amode\",\"result\":$_aresult}" ;;
     --memory|memory)
       # R-T6 Phase 4b 补课 (2026-08-23): 原 bash heredoc (L4628-4650, 硬编码 ECC 路径)
       # 迁移为独立 gk_audit_memory.py — 输出契约不变 (history_count/ecc_files_found/
       # calibration_trend/calibration_samples/history_entries), SKILL_DIR 参数化
-      local result; result=$(STATE_FILE="$STATE_FILE" SKILL_DIR="$SKILL_DIR" python3 "$SKILL_DIR/scripts/gk_audit_memory.py" 2>>"$GK_DBG_LOG" || echo "{\"history_count\":0,\"ecc_files_found\":0,\"calibration_trend\":\"stable\",\"calibration_samples\":0,\"history_entries\":[],\"error\":\"$(tail -3 "$GK_DBG_LOG" 2>/dev/null | tr '\n' ' ' | head -c 200)\"}")
+      local result; result=$(STATE_FILE="$(_gk_py_path "$STATE_FILE")" SKILL_DIR="$(_gk_py_path "$SKILL_DIR")" python3 "$SKILL_DIR/scripts/gk_audit_memory.py" 2>>"$GK_DBG_LOG" || echo "{\"history_count\":0,\"ecc_files_found\":0,\"calibration_trend\":\"stable\",\"calibration_samples\":0,\"history_entries\":[],\"error\":\"$(tail -3 "$GK_DBG_LOG" 2>/dev/null | tr '\n' ' ' | head -c 200)\"}")
       # 2026-10-28（E2 覆盖率）：原只 echo ⟹ `audit_memory_result` 被 deny 集合声明为
       #   「审计侧单一写者落库」却**零生产者**（判据侧永远读不到）。补真落盘，写法与
       #   --state/--docs 同构（临时文件 + `_state_write`，flock + checksum 重算）。
@@ -10519,7 +10861,7 @@ cmd_audit() {
       # （gk_git_workflow_check.py：protected/detached/merge/dirty/unpushed/stale/worktree/hooks/loader）
       local gitscan; gitscan=$(python3 "${SKILL_DIR}/scripts/gk_git_concurrency_check.py" "$SKILL_DIR" 2>>"$GK_DBG_LOG" || echo '{"ok":false}')
       local gwscan; gwscan=$(python3 "${SKILL_DIR}/scripts/gk_git_workflow_check.py" "$SKILL_DIR" 2>>"$GK_DBG_LOG" || echo '{"ok":false}')
-      local result; result=$(STATE_FILE="$STATE_FILE" GITSCAN="$gitscan" GWSCAN="$gwscan" SKILL_DIR="$SKILL_DIR" python3 "$SKILL_DIR/scripts/gk_audit_crossr.py" 2>>"$GK_DBG_LOG" || echo "{\"rejected_count\":0,\"rejection_convergence\":\"stable\",\"error\":\"$(tail -3 "$GK_DBG_LOG" 2>/dev/null | tr '\n' ' ' | head -c 200)\"}")
+      local result; result=$(STATE_FILE="$(_gk_py_path "$STATE_FILE")" GITSCAN="$gitscan" GWSCAN="$gwscan" SKILL_DIR="$(_gk_py_path "$SKILL_DIR")" python3 "$SKILL_DIR/scripts/gk_audit_crossr.py" 2>>"$GK_DBG_LOG" || echo "{\"rejected_count\":0,\"rejection_convergence\":\"stable\",\"error\":\"$(tail -3 "$GK_DBG_LOG" 2>/dev/null | tr '\n' ' ' | head -c 200)\"}")
       # 2026-10-28（E2 覆盖率）：补真落盘（同 --memory 注释）。**只落确定性结果** ——
       #   下面的 `llm_analysis` 是 LLM 注解（非确定性面），不进证据键。
       local _tmp_crossr; _tmp_crossr=$(mktemp)
@@ -11148,7 +11490,7 @@ CROSSFULL_PY
       # 2026-11-01（跨平台修复）：sys.path 与 STATE_FILE 原均为 bash 插值 ⟹ MSYS /c/ 绝对路径
       #   不被 Windows python 识别（env 传递才做 /c/→C:/ 转换）⟹ ModuleNotFoundError / 打不开
       #   state ⟹ report_evidence_ok 误判 no ⟹ seal 收口误锁。改 env 单源（同 BARE 守卫修法）。
-      local audit_state_done; audit_state_done=$(SKILL_DIR="$SKILL_DIR" STATE_FILE="$STATE_FILE" python3 -c "
+      local audit_state_done; audit_state_done=$(SKILL_DIR="$(_gk_py_path "$SKILL_DIR")" STATE_FILE="$(_gk_py_path "$STATE_FILE")" python3 -c "
 import json,os,sys
 sys.path.insert(0, os.path.join(os.environ['SKILL_DIR'], 'scripts'))
 from gk_node_guard import report_evidence_ok
@@ -11560,7 +11902,7 @@ PYEOF
             echo "{\"ok\":false,\"error\":\"KEY INTEGRITY COMPROMISED: $integ\"}"
           elif [ -f "$_KEY_META" ]; then
             # 2026-08-13: 追加密钥生命周期事件摘要（BP.08.04 审计密码实施运行——rotate/revoke/destroy 事件尾部）
-            local _kl_tail; _kl_tail=$(STATE_FILE="$STATE_FILE" python3 "$SKILL_DIR/scripts/gk_state_query.py" --tail gate_data.key_rotation_log 3 2>/dev/null || echo '[]')
+            local _kl_tail; _kl_tail=$(STATE_FILE="$(_gk_py_path "$STATE_FILE")" python3 "$SKILL_DIR/scripts/gk_state_query.py" --tail gate_data.key_rotation_log 3 2>/dev/null || echo '[]')
             cat "$_KEY_META" | KL_TAIL="$_kl_tail" python3 "$SKILL_DIR/scripts/gk_views.py" key-meta-tail 2>>"$GK_DBG_LOG" || cat "$_KEY_META"
           else
             echo '{"error":"no key-meta.json found"}'
@@ -11717,7 +12059,7 @@ print(json.dumps(res))
       fi
       # Gate 2: detect-changes (if in active R-phase)
       local gn_detect=""
-      local r_phase; r_phase=$(STATE_FILE="$STATE_FILE" python3 "$SKILL_DIR/scripts/gk_state_query.py" --get r_phase --default "" 2>/dev/null)
+      local r_phase; r_phase=$(STATE_FILE="$(_gk_py_path "$STATE_FILE")" python3 "$SKILL_DIR/scripts/gk_state_query.py" --get r_phase --default "" 2>/dev/null)
       if [ -n "$r_phase" ] && [ "$r_phase" != "IDLE" ] && [ "$r_phase" != "DONE" ]; then
         gn_detect=$(_run_gitnexus detect-changes --repo "$(_gx_repo_name_for_dir "$(_gx_repo_dir_for_current)")" --scope compare 2>/dev/null || echo "unavailable")
       fi
@@ -11738,7 +12080,7 @@ print(json.dumps(res))
       fi
       depth_result=$(GN_CTX="$gn_context" GN_DET="$gn_detect" GN_TARGET="$target" GN_PROD="$prod_scan" python3 "$SKILL_DIR/scripts/gk_views.py" depth-result 2>>"$GK_DBG_LOG" || echo '{"ok":false,"error":"depth analysis failed"}')
       # R-T6 Phase 6 (2026-08-20): 追加 Python/脚本级死代码检测（gk_audit_depth.py）
-      local py_depth; py_depth=$(SKILL_DIR="$SKILL_DIR" python3 "$SKILL_DIR/scripts/gk_audit_depth.py" 2>>"$GK_DBG_LOG" || echo '{}')
+      local py_depth; py_depth=$(SKILL_DIR="$(_gk_py_path "$SKILL_DIR")" python3 "$SKILL_DIR/scripts/gk_audit_depth.py" 2>>"$GK_DBG_LOG" || echo '{}')
       depth_result=$(echo "$depth_result" | PY_DEPTH="$py_depth" python3 "$SKILL_DIR/scripts/gk_views.py" depth-merge 2>>"$GK_DBG_LOG" || echo "$depth_result")
       echo "$depth_result" ;;
     *) echo "{\"ok\":false,\"error\":\"Usage: audit [--state|--docs|--memory|--crossr|--coverage [--base <ref>]|--crossfull [--base <ref>] [--repo <name>] [--state <path>] [--isolate]|--pdg [--symbol <fn>] [--repo <name>] [--supply]|--pr --base <ref> [--symbol <fn>]|--depth <symbol>] [--red <phase>|--hint|--self|--hook] [--report [--type <type>] [--force]] [--verify <path>] [--init-keys] [--key rotate|revoke|destroy|export-pub|fingerprint|status] [--all]}\"}" ;;
@@ -11991,7 +12333,7 @@ _dispatch() {
   # stage gate: active-r 约束
   if [ "$stage_constraint" = "active-r" ]; then
     local cur_stage
-    cur_stage=$(STATE_FILE="$STATE_FILE" python3 "$SKILL_DIR/scripts/gk_state_query.py" --get stage --default IDLE 2>/dev/null)
+    cur_stage=$(STATE_FILE="$(_gk_py_path "$STATE_FILE")" python3 "$SKILL_DIR/scripts/gk_state_query.py" --get stage --default IDLE 2>/dev/null)
     if [ "$cur_stage" = "IDLE" ] || [ "$cur_stage" = "DONE" ]; then
       _log_block "$cmd" "command router rejected: stage=$cur_stage"
       echo "{\"ok\":false,\"error\":\"Command $cmd requires active R-phase (current stage: $cur_stage). Start with spz-gatekeeper-r-sequence skill first.\"}"

@@ -23,7 +23,11 @@
   case_sensitivity     大小写变体路径是否可解析（Windows 不敏感 / WSL 敏感）
   interpreter          本侧解释器 + pytest 可用性（分档测试腿的真假 SKIP 判据）
 
-用法：`gatekeeper-cli.sh state --watch [--hours 6] [--limit 30] [--save <json>] [--compare <json>]`
+用法：`gatekeeper-cli.sh state --watch [--hours <h>] [--commits 10] [--limit 30]
+      [--save <json>] [--compare <json>]`
+
+口径（2026-11-02 起）：**缺省 = 实时**——`live` 段给「此刻工作区 + 最近 commit 记录 +
+gitnexus 索引基线」，不依赖时间窗；`--hours` 只是可选过滤（给才按 mtime 列 `recent`）。
 """
 import argparse
 import fnmatch
@@ -370,6 +374,65 @@ def _buddy(hours, limit=10):
     return {"roots": roots, "recent": _walk_files(roots, time.time() - hours * 3600, limit)}
 
 
+def _live(skill_dir, commits=10, dirty_limit=200):
+    """实时面：**此刻**的工作区 + 最近 commit 记录 + gitnexus 索引基线（不绑时间窗）。
+
+    与 `recent` 分工：`recent` 回答「N 小时内 mtime 动过哪些文件」（可选过滤）；
+    `live` 回答「现在什么状态 / 刚提交了什么 / 索引还跟不跟得上 HEAD」。
+    """
+    head = _git(["rev-parse", "HEAD"], skill_dir).strip()
+    branch = _git(["rev-parse", "--abbrev-ref", "HEAD"], skill_dir).strip()
+    upstream = _git(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+                    skill_dir).strip()
+    ahead = behind = 0
+    if upstream:
+        cnt = _git(["rev-list", "--left-right", "--count", "@{u}...HEAD"], skill_dir).split()
+        if len(cnt) == 2 and all(x.isdigit() for x in cnt):
+            behind, ahead = int(cnt[0]), int(cnt[1])
+
+    dirty = []
+    for line in _git(["status", "--porcelain"], skill_dir).splitlines():
+        if not line.strip():
+            continue
+        dirty.append({"status": line[:2].strip() or "?", "path": line[3:].strip()})
+        if len(dirty) >= dirty_limit:
+            break
+
+    rows = []
+    for line in _git(["log", "-n", str(max(int(commits), 1)),
+                      "--format=%H%x1f%h%x1f%an%x1f%aI%x1f%s"], skill_dir).splitlines():
+        parts = line.split("\x1f")
+        if len(parts) == 5:
+            rows.append({"sha": parts[0], "short": parts[1], "author": parts[2],
+                         "date": parts[3], "subject": parts[4]})
+
+    idx = os.path.join(skill_dir, ".gitnexus", "gitnexus.json")
+    gx = {"state": "absent", "index": idx, "last_commit": "", "indexed_at": "", "head": head}
+    try:
+        d = json.load(open(idx, encoding="utf-8"))
+        last = str(d.get("lastCommit") or "")
+        gx.update({"last_commit": last, "indexed_at": str(d.get("indexedAt") or "")})
+        if not head or not last:
+            gx["state"] = "unknown"
+        elif last.lower() == head.lower():
+            gx["state"] = "fresh"
+        else:
+            gx["state"] = "stale"
+            n = _git(["rev-list", "--count", "%s..HEAD" % last], skill_dir).strip()
+            gx["commits_behind"] = int(n) if n.isdigit() else None
+    except (OSError, ValueError):
+        pass
+
+    return {
+        "realtime": True,
+        "head": {"sha": head, "short": head[:8], "branch": branch, "upstream": upstream,
+                 "ahead": ahead, "behind": behind},
+        "dirty": dirty,
+        "commits": rows,
+        "gitnexus": gx,
+    }
+
+
 def _save_allowed(path, skill_dir) -> bool:
     """写入边界：只允许 `.zthl/watch/**`（技能仓内，导出面已排除）或 `~/.trae/watch/**`。"""
     p = _canon(os.path.abspath(path))
@@ -432,7 +495,9 @@ def _default_skill_dir() -> str:
 def main():
     ap = argparse.ArgumentParser(add_help=False)
     ap.add_argument("--skill-dir", default=_default_skill_dir())
-    ap.add_argument("--hours", type=float, default=6.0)
+    # 实时为默认：`--hours` 缺省 = None（不启用 mtime 时间窗）；显式给出才退回旧口径。
+    ap.add_argument("--hours", type=float, default=None)
+    ap.add_argument("--commits", type=int, default=10)   # 实时面：最近 N 条 commit
     ap.add_argument("--limit", type=int, default=30)
     ap.add_argument("--save", default="")
     ap.add_argument("--compare", default="")
@@ -451,9 +516,9 @@ def main():
     skill_dir = os.path.abspath(a.skill_dir)
     wts = _worktrees(skill_dir)
     roots = [skill_dir] + [w["path"] for w in wts if w["path"] and _canon(w["path"]) != _canon(skill_dir)]
-    cutoff = time.time() - max(a.hours, 0.1) * 3600
     states = _states(roots, skill_dir)
     files = _tracked(skill_dir)
+    live = _live(skill_dir, commits=a.commits)
 
     probes = {
         "path_forms": {f: sum(1 for s in states if s.get("form") == f)
@@ -489,20 +554,31 @@ def main():
         if w["dotgit"] and not w["dotgit_resolvable"]:
             issues.append({"id": "dotgit_unresolvable", "severity": "warn",
                            "detail": {"path": w["path"], "dotgit": w["dotgit"]}, "os_ref": "OS-6"})
+    if live["gitnexus"]["state"] in ("stale", "absent"):
+        # 信息级（不拦）：索引落后 ⟹ 依赖图查询会给出旧结论；先 `analyze` 再谈 impact。
+        issues.append({"id": "gitnexus_baseline_%s" % live["gitnexus"]["state"],
+                       "severity": "info",
+                       "detail": {"head": live["head"]["short"],
+                                  "indexed": (live["gitnexus"]["last_commit"] or "")[:8],
+                                  "commits_behind": live["gitnexus"].get("commits_behind")},
+                       "os_ref": "OS-5"})
 
     out = {
         "ok": True, "read_only": not bool(a.save), "side": SIDE,
         "generated_at": _iso(time.time()), "hours": a.hours,
         "skill_dir": skill_dir, "skill_dir_canon": _canon(skill_dir),
         "roots": roots, "worktrees": wts,
-        "recent": _walk_files(roots, cutoff, a.limit),
+        # `recent` = 可选时间窗（`--hours` 才启用）；`live` = 实时面（缺省）。
+        "recent": (_walk_files(roots, time.time() - max(a.hours, 0.1) * 3600, a.limit)
+                   if a.hours is not None else []),
+        "live": live,
         "scratch": _scratch(roots), "states": states,
         "cross_os": {"forms": probes["path_forms"],
                      "mismatch": [s["path"] for s in states
                                   if s.get("owner") in ("mismatch", "missing")]},
         "probes": probes, "issues": issues,
         "os_refs": _summary_os_refs(probes, states, issues),
-        "buddy": (_buddy(max(a.hours, 1)) if a.cross_side else
+        "buddy": (_buddy(max(a.hours or 1, 1)) if a.cross_side else
                   {"roots": [], "recent": [],
                    "gated": "另一侧目录属跨边界观测：需 --cross-side + hook 准入（GK_WATCH_APPROVED=1）"}),
     }
@@ -514,7 +590,8 @@ def main():
               "reveal": bool(a.reveal), "save": a.save,
               "skill_dir": skill_dir, "cwd": os.getcwd(),
               "counts": {"states": len(states), "worktrees": len(wts),
-                         "recent": len(out["recent"]), "issues": len(issues)},
+                         "recent": len(out["recent"]), "issues": len(issues),
+                         "dirty": len(live["dirty"]), "commits": len(live["commits"])},
               "snapshot_sha256": _digest}
     _visit.update(_identity_fields())
     out["visit_log"] = _append_visit(skill_dir, _visit)
