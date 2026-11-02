@@ -1,0 +1,29 @@
+{
+  "family": "F-oss-test-portability",
+  "match": {
+    "any": [
+      "test portability",
+      "硬编码外部论文路径",
+      "U15",
+      "PUBLIC_TEST_PORTABILITY",
+      "公开前测试去本机路径"
+    ]
+  },
+  "anchor_symbols": ["test_secret_forms_are_detected", "test_export_commit_creates_single_orphan_commit"],
+  "tier": 3,
+  "edit_quota": 6,
+  "allowed_paths": ["scripts/test_oss_scrub.py"],
+  "forbidden_paths": [
+    "scripts/oss_scrub.py",
+    "scripts/gk_doc_align.py",
+    "scripts/gk_paper_spec.py",
+    "scripts/test_gk_paper_review.py",
+    "gatekeeper-cli.sh",
+    "references/",
+    "docs/"
+  ],
+  "narrow_task_template": "把 `scripts/test_oss_scrub.py` 的导出面测试保持**可移植**（U15 在公开面的等价物）。\n\n## 目标 finding\n{anchor}\n\n## 落点（唯一允许面）\n只改 `scripts/test_oss_scrub.py`。**禁止**改任何生产脚本、`references/`、`docs/`。\n\n## 设计（权威源 = 本清单）\n1. 文件内**不得**出现本机绝对路径（Windows 用户目录形态、WSL 挂载形态、`Downloads`、具体用户名）；一律用 `tmp_path` / `monkeypatch` 构造。\n2. 不得为过测而放宽断言：秘密形态、身份残差、单 commit、author 必填等判据只许保持或加强。\n3. 需要外部论文仓的臂不得写死路径：走 `GK_PAPERS_DIR` → 仓内 `papers/` → 具名 skip。\n\n## 判据自检（落刀前实跑）\n- `rg -n 'Downloads|Users' scripts/test_oss_scrub.py` 必须零命中（本机路径/用户名面）；\n- `rg -n 'test_secret_forms_are_detected|test_export_commit_creates_single_orphan_commit' scripts/test_oss_scrub.py` 确认符号锚仍在。\n\n## 验收\n{verify_cmd}\n\n## 你不需要做的\n合入 / 提交由主 agent 负责；你只改文件并跑验收命令。",
+  "test_first": "scripts/test_oss_scrub.py::test_whitelist_every_rule_has_reason_and_is_unique",
+  "verify_cmd": "bash -c 'cd \"$PWD\" && bash scripts/_accept_cli.sh scripts/test_oss_scrub.py'",
+  "affected_tests": ["scripts/test_oss_scrub.py"]
+}

@@ -1,0 +1,1170 @@
+{
+  "_comment": "红先测试模版登记表（单一事实源）。2026-09-23 用户裁定「扩展红先测试模版」。本表只登记**形态**（怎么写出一个会红的臂），不登记**具体断言**——具体断言由 family 的 test_first/verify_cmd/anchor 填入。消费方 = scripts/gk_red_arm_gen.py（**唯一实现**，禁第二份模版名清单）；漂移由 gk_doc_align.py 的 red_arm_templates 检查项守护。",
+  "_source": "本表 5 个形态全部取自 2026-09-23 本会话**实际写出并跑到红**的臂（非设想）：A/B/C/C1/C3 落刀时的臂。",
+  "version": 1,
+  "placeholders_common": ["{target}", "{anchor}", "{expected}", "{verify_cmd}"],
+  "templates": [
+    {
+      "id": "source-absence",
+      "desc": "源码形态缺席臂：断言「落刀后必须存在的串」在**函数体**内存在／「必须消失的串」不存在。配『HEAD 计数』对照行 ⟹ 落刀前必红。",
+      "when": "改动是**源码结构**变更（新增分支/撤掉裸调用/改接线）时",
+      "placeholders": ["{target}", "{func}", "{must_have}", "{must_absent}", "{head_count_cmd}"],
+      "body": "def test_{target}_source_shape():\n    seg = _{func}_seg()\n    assert \"{must_have}\" in seg\n    assert \"{must_absent}\" not in seg\n    # 红先对照：{head_count_cmd}"
+    },
+    {
+      "id": "func-boundary-slice",
+      "desc": "函数边界切片辅助：从 `<fn>() {` 切到下一个**列 0** 的 `}`（bash）或 `\\ndef `（python）。根治「固定字符窗口」随函数增长而假红。",
+      "when": "臂的判据面是「某函数体内的一条串」时（与函数长度必须解耦）",
+      "placeholders": ["{func}"],
+      "body": "def _{func}_seg():\n    \"\"\"`{func}` 整函数体（切到下一个列 0 的边界，与长度解耦）。\"\"\"\n    rest = _txt({func}_src())[_txt({func}_src()).index(\"{func}() {{\"):]\n    m = re.search(r\"(?m)^\\}\\s*$\", rest)\n    return rest[: m.end()] if m else rest"
+    },
+    {
+      "id": "api-absent",
+      "desc": "API 缺席臂：单测直接调「尚未存在的函数/子命令」⟹ AttributeError / rc≠0 ⟹ 落刀前必红。",
+      "when": "新增 python 函数或 CLI 子命令时（最廉价的红先）",
+      "placeholders": ["{module}", "{symbol}", "{call_args}"],
+      "body": "def test_{symbol}_exists():\n    out = {module}.{symbol}({call_args})\n    assert out[\"ok\"] is True"
+    },
+    {
+      "id": "fail-loud-rc",
+      "desc": "功能臂（真跑 CLI）：断言 rc 与关键串。用于「超限/非法输入必须 fail-loud」一类判据。",
+      "when": "判据是**行为**（退出码 + 可读错误）而非源码形态时",
+      "placeholders": ["{cli}", "{argv}", "{expect_rc}", "{expect_substr}"],
+      "body": "def test_{cli}_fail_loud():\n    r = subprocess.run([\"bash\", \"-lc\", 'bash \"%s\" {argv}' % _wsl(CLI)],\n                       capture_output=True, text=True, timeout=120)\n    out = r.stdout + r.stderr\n    assert r.returncode == {expect_rc}, out[:300]\n    assert \"{expect_substr}\" in out, out[:300]"
+    },
+    {
+      "id": "negative-arm",
+      "desc": "负臂：断言**禁令成立**（不得越界/不得下放/不得重复计费）。防「实现顺手扩大授权面」。",
+      "when": "任何安全/边界落刀都必须配一条——只测正臂等于没测边界",
+      "placeholders": ["{target}", "{forbidden}", "{why}"],
+      "body": "def test_{target}_must_not():\n    \"\"\"负臂：{why}\"\"\"\n    seg = _seg()\n    assert \"{forbidden}\" not in seg"
+    },
+    {
+      "id": "guard-rejects-key",
+      "desc": "写面拒键臂（2026-10-04 扩 §19.7 host-3）：向某**写面**（如 `set-nested`/`append-list`）投递**禁键** ⟹ 断言 fail-loud（`ok is False` + 文案含关键词）；**必配负臂**：合规键（如同级索引键）**须仍放行**，防判据退化成「全禁」。",
+      "when": "落刀是「某写面**不得**接受某些键」时（授权面 / 写面白名单收口）",
+      "placeholders": ["{write_fn}", "{forbidden_key}", "{allowed_key}", "{kw}"],
+      "body": "def test_{write_fn}_rejects_forbidden_key():\n    out = {write_fn}(state, \"{forbidden_key}\", val)\n    assert out[\"ok\"] is False and \"{kw}\" in out[\"error\"]\n\n\ndef test_{write_fn}_allows_allowed_key():\n    # 负臂：合规键须仍可写（防过度收紧成「全禁」）\n    assert {write_fn}(state, \"{allowed_key}\", val)[\"ok\"] is True"
+    },
+    {
+      "id": "audit-flags-combination",
+      "desc": "审计组合旗标臂（2026-10-04 扩 §18.2 判据 9）：向**只读审计**投递「违规**字段组合**」的台账 ⟹ 断言 `FAIL` + detail 含旗标词；**必配** escape 标签臂（合法出口 → 放行）与零回归臂（不相关组合 / 未终态 → 不误伤）。",
+      "when": "落刀是「某字段组合须被判违规」时（如『终态 + 无据 + 非显式标签』＝洗白形状）",
+      "placeholders": ["{audit_fn}", "{bad_entry}", "{escape_entry}", "{flag}"],
+      "body": "def test_{audit_fn}_flags_bad_combination():\n    out = {audit_fn}(state_with({bad_entry}))\n    assert out[\"status\"] == \"FAIL\" and \"{flag}\" in out[\"detail\"]\n\n\ndef test_{audit_fn}_honors_escape_and_regression():\n    assert {audit_fn}(state_with({escape_entry}))[\"status\"] == \"PASS\""
+    },
+    {
+      "id": "contract-impl-set-equality",
+      "desc": "契约↔实现集合等价臂（2026-10-04 扩 §2.3 P0）：正本含**枚举契约**（rc 表 / 状态集合 / 命令集合）时，臂须断言「契约宣告集合 == 实现产者集合」（**集合相等**，非『表存在』『实现含 N 处』）。反模式 = 只测一侧 ⟹ 漏掉任一产者即假绿（本批 rc=3 四产者无表行无臂即此类）。",
+      "when": "落刀面是「某张枚举表须与实现**逐项等价**」时（rc 表 / 允许集 / 命令注册表）",
+      "placeholders": ["{contract_seg_fn}", "{src_fn}", "{declared_re}", "{produced_re}"],
+      "body": "def test_contract_set_equals_impl_producers():\n    declared = set(re.findall(r\"{declared_re}\", {contract_seg_fn}()))\n    produced = set(re.findall(r\"{produced_re}\", {src_fn}()))\n    assert declared == produced, \"契约 %s != 实现 %s\" % (sorted(declared), sorted(produced))"
+    },
+    {
+      "id": "fixture-truth-behavior",
+      "desc": "夹具真值行为臂（2026-10-04 扩 §3-T2 P0）：计划声称「某判据已落刀」时，臂须**真跑**被测入口（真 git 夹具 + **构造先验**期望值，禁回读被测输出），并配 **≥2 必失败负样本** 与 **元判据**（对夹具施加已知篡改 ⟹ 期望断言必须失败；若仍绿 = 判据同源恒过 = 判据本身不合格）。反模式 = 静态串断言（『含某串』/『函数存在』）冒充行为臂。",
+      "when": "计划/文书声称某**行为**判据「已落刀」，而现有臂只是静态串断言时",
+      "placeholders": ["{target}", "{env_fn}", "{run_fn}", "{prior}", "{negative1}", "{tamper}"],
+      "body": "def test_{target}_fixture_truth(tmp_path):\n    fx = {env_fn}(tmp_path)              # 真 git 夹具\n    assert {run_fn}(fx) == {prior}        # 构造先验（禁回读）\n\n\ndef test_{target}_negative_missing(tmp_path):\n    assert {run_fn}({negative1}) == \"fail-loud\"\n\n\ndef test_{target}_meta_tamper_must_deviate(tmp_path):\n    fx = {env_fn}(tmp_path)\n    {tamper}(fx)                          # 已知篡改\n    assert {run_fn}(fx) != {prior}         # 元判据：篡改后必偏离"
+    },
+    {
+      "id": "gate-load-bearing",
+      "desc": "空转闸机臂（2026-10-04 扩 `BLUE-FAT-FISH-IDLE-GATE` / `ECC-2C7BEBA09A84`）：对**已知违规输入**真跑被测闸门，断言判决**可判定且命中该违规**（detail 含旗标词），并对**合规输入**断言相反判决 ⟹ 好/坏两输入判决**必须不同**。治「真·空转」三类：① 硬编码假证据（判决恒定 ⟹ 差异臂红）；② 检测器正则恒不触发（坏样本不命中 ⟹ 正控臂红）；③ 检查器未接线（判据在源码却不可达 ⟹ 接线臂红）。",
+      "when": "落刀是「新增或修改一个**闸门 / 检查器 / 检测器**」时（防纸老虎：判据在源码、却结构性不可达 / 未接线 / 被魔法串旁路）",
+      "placeholders": ["{gate_fn}", "{bad_input}", "{good_input}", "{flag}", "{gate_name}", "{agg_fn}"],
+      "body": "def test_{gate_fn}_fires_on_known_violation():\n    bad = {gate_fn}({bad_input})\n    assert bad[\"status\"] == \"FAIL\" and \"{flag}\" in bad[\"detail\"]\n\n\ndef test_{gate_fn}_good_and_bad_differ():\n    # 差异臂：好/坏输入判决**必须不同**（治硬编码假证据 / 恒不触发）\n    assert {gate_fn}({good_input})[\"status\"] == \"PASS\"\n    assert {gate_fn}({bad_input})[\"status\"] != {gate_fn}({good_input})[\"status\"]\n\n\ndef test_{gate_name}_is_wired_into_{agg_fn}():\n    # 接线臂：闸门须被聚合入口真调用（防『部分模组未接线』）\n    assert \"{gate_fn}\" in _{agg_fn}_seg()"
+    },
+    {
+      "id": "timeout-arm",
+      "desc": "超时臂（2026-10-29）：用**替身命令**（sleep）注入被测 runner 的可配置入口，断言①有限时间内返回、②报**具名**超时错误、③不再无界阻塞。治「子进程调用点无 timeout ⟹ 挂了也不知道」（实测：`moa-aggregate --chain --from-plan` 派发无界阻塞，外层只见空回执）。",
+      "when": "新增/修改任何**外部命令或子进程**调用点（`subprocess` / `bash <cli>` / 网络派发）时",
+      "placeholders": ["{target}", "{runner_fn}", "{stub_env}", "{expect_error}", "{max_s}"],
+      "body": "def test_{runner_fn}_times_out_and_names_error(tmp_path, monkeypatch):\n    stub = tmp_path / \"stub.sh\"\n    stub.write_text(\"#!/usr/bin/env bash\\nsleep 30\\n\", encoding=\"utf-8\")\n    monkeypatch.setenv(\"{stub_env}\", str(stub))\n    t0 = time.time()\n    r = {target}.{runner_fn}(\"x\")\n    assert r[\"ok\"] is False and r[\"error\"] == \"{expect_error}\", r\n    assert time.time() - t0 < {max_s}, \"超时后必须立即返回（禁继续阻塞）\""
+    },
+    {
+      "id": "single-source-wiring",
+      "desc": "单源接线臂（2026-10-29）：静态断言两个消费者都**真的引用**共享实现（如 `adaptive_workers`），且旧的各自计算标记已消失。治「docstring 声称一律挂单源，实际各算各的」（实测：`gk_hub_scheduler` 声称 accept/redfirst 均挂，两个 `.sh` 却各自 `nproc×2`）。",
+      "when": "把某策略/常数从多处自算**收敛到单一源**时（含只改文档承诺、未接线的情形）",
+      "placeholders": ["{target}", "{consumer_a}", "{consumer_b}", "{shared_symbol}", "{old_marker}"],
+      "body": "def test_{target}_uses_single_source():\n    for name in (\"{consumer_a}\", \"{consumer_b}\"):\n        txt = (SCRIPT_DIR / name).read_text(encoding=\"utf-8\")\n        assert \"{shared_symbol}\" in txt, \"%s 未接单一源\" % name\n        assert \"{old_marker}\" not in txt, \"%s 仍有旧的自算路径\" % name"
+    }
+  ],
+  "_templates_extended_20261029": "新增 timeout-arm（超时臂）与 single-source-wiring（单源接线臂）两形态 —— 取自 2026-10-29 本会话 `test_gk_moa_chain_from_plan.py`（派发超时/具名错误）与 `test_gk_accept_cli.py`（adaptive_workers 单源接线）**实际写出并跑绿**的臂；如实标注：timeout 臂是落刀后补写（非严格红先），single-source 臂为静态机检臂。",
+  "_templates_extended_20261004": "新增 guard-rejects-key（写面拒键臂）与 audit-flags-combination（审计组合旗标臂）两形态 —— 来自 §19.7 host-3 与 §18.2 判据 9 的实际落刀（非设想）；消费方 `scripts/test_gk_host_write_surface.py` / `scripts/test_gk_ecc_closure_basis.py`。",
+  "_templates_extended_20261004b": "再增 contract-impl-set-equality（契约↔实现集合等价臂，来自 §2.3 rc 表 P0）与 fixture-truth-behavior（夹具真值行为臂，来自 §3-T2 判据载体 P0）两形态 —— 取自本会话**实际落刀**（`scripts/test_gk_receive_check.py` 臂 ⑬–⑰ / `scripts/test_agent_cli_wiring.py` T2 三臂），非设想。",
+  "_templates_extended_20261004c": "再增 gate-load-bearing（空转闸机臂）—— 来自并发红队 finding `ECC-2C7BEBA09A84`（family `BLUE-FAT-FISH-IDLE-GATE`：A1-A3 真·空转 / B1-B4 纸老虎 / C1-C2 后门魔法串）三类攻击源；与 c9 v3 加固红先臂（`scripts/test_gk_ecc_closure_basis.py`：坏组合→FAIL + 好输入→PASS + `register-only` escape）**实际落刀**同形（非设想）。新增维度 = **差异断言**（好/坏判决须不同 ⟹ 治硬编码假证据 / 恒不触发）与**接线臂**（闸门须被聚合入口真调用 ⟹ 治未接线 / 纸老虎）—— 此二者为本族特有，`audit-flags-combination` 不含。",
+  "finding_arms": [
+    {
+      "finding": "ECC-42B4A6E15927",
+      "note": "探针（**可执行件**）错落论文仓（owner 2026-10-12 裁定：论文仓只记录、机制实装全在技能仓）：相位扫描驱动（论文仓私有复现包）迁入 `scripts/gk_phase_probe.py`（+ 必要依赖 `gk_phase_sensitivity` / `gk_phase_formats`）。臂 ×5（source_shape 源码形态 / candidate_strides / build_variants 密集+两形态 / one_sweep 一次表服务所有 stride / underpowered 标注）",
+      "test_file": "scripts/test_gk_phase_probe.py",
+      "shape_k": "source_shape",
+      "full_k": "candidate_strides or build_variants or one_sweep or underpowered",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-ED024EBFE4B9",
+      "note": "W2A-P2 采集接线（W1-W4）：gk_phase_probe --real 驱动在、五载体已落但**零调用点**，且 runner 无 per-call usage 出口 ⟹ 采集未接入。落刀 = runner 逐响应 usage_calls + probe 把 gk_cache_observe / gk_defect_gen+gk_moa_judge / per_arm_phases 接进 --real sweep。臂 ×5（cache_observation / defect_judge / per_arm_phases / run_arms_records / runner_percall_usage）",
+      "test_file": "scripts/test_gk_phase_probe.py",
+      "shape_k": "cache_observation",
+      "full_k": "cache_observation or defect_judge or per_arm_phases or run_arms_records or runner_percall_usage",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-4805712A0A98",
+      "note": "探针迁移后指针/措辞未同步（跨仓双源）：`scripts/gk_model_probe.py` 仍以论文仓 `repro/phase_probe.py::CANDIDATE_STRIDES` 为「同集」源（迁移后那份只是记录副本）⟹ 指针须改指技能仓正本 `gk_phase_probe.py::CANDIDATE_STRIDES`；D 计划 §1.1/§2/§4 措辞与状态同步。臂 ×1（model_probe_pointer 源码形态）",
+      "test_file": "scripts/test_gk_model_probe.py",
+      "shape_k": "model_probe_pointer",
+      "full_k": "model_probe_pointer",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-82C90896751F",
+      "note": "D 计划「无节点」：`phases: W2A-P2` 未在 `gk_node_guard._ROUTES` 注册 ⟹ `discover --plan` unknown R-phase + `advance W2A-P2` UNKNOWN_NODE 硬阻断。修 = 补登记 route `w2a-p2`（nodes=[W2A-P2]）+ `_CHECKLISTS['W2A-P2']`。臂 ×1（路由注册）",
+      "test_file": "scripts/test_gk_node_guard.py",
+      "shape_k": "w2a_p2_route",
+      "full_k": "w2a_p2_route",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-D59A6171817B",
+      "note": "SUBA_TIERS 迁家（2026-10-08 / 3f2807b / ECC-46C8BF837715）后**陈旧读取点**类（二轮穷尽）：① test_gk_node_guard.py::TestSubagentTiers 夹具（一轮已修）② test_gk_dispatch_budget_single_source.py::test_arm53 硬 FAIL（RUNNER 指旧家）③ _red_attacks.py::_load_tiers 静默返回 None ⟹ RED-GHOST 预算域 DoS 校验整段失效。修 = 3 处读取点全部指向 gk_suba_tiers.py + 类级读取点台账守卫。臂 ×4（red1/red2 红先 + inv/reg 非红）",
+      "test_file": "scripts/test_gk_suba_tiers.py",
+      "shape_k": "stale_reader_red",
+      "full_k": "stale_reader_red",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-A34A8540151B",
+      "note": "provider 输出上限回归：档位 `max_output_tokens`（tier4=160000）超所用模型硬上限（MiMo 131072）且**无 provider 级钳制** ⟹ `400 Param Incorrect` / 6 臂 `empty_ecc`；回归源 = 2026-10-03 撤销 plan-refinement 的 16000 硬覆盖后档位值直通模型。修：`gk_suba_tiers` 加 `MODEL_MAX_OUTPUT_TOKENS` + `provider_of` + `clamp_max_output_tokens`，`subagent_runner` 档位解析处消费。臂 ×5（arm1 tier4→MiMo 钳 131072 / arm2 DS 不钳 / arm3 未知 provider fail-open / arm4 provider 推断 / arm5 接线）",
+      "test_file": "scripts/test_gk_mimo_max_output_cap.py",
+      "shape_k": "arm1",
+      "full_k": "arm1 or arm2 or arm3 or arm4 or arm5",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-CA582C23D36A",
+      "note": "三面一致性闸（A8 熔断后治本项）：plan 文本 / family narrow_task_template / finding_arms 可三处分裂（_live_title 剥离 vs old->new 替换即活样本，2 轮 6/6 BLOCKED 的自伤根因）；写面靠手抄（真实写面由 save_findings 调用点枚举为 9-10 面）；_VERDICT_ORDER 值域二源 ⟹ 立 gk_tri_consistency。臂 ×3（arm_a 写面枚举单源 / arm_b 族自洽差异臂 / arm_c verdict 值域覆盖）",
+      "test_file": "scripts/test_tri_consistency_gate.py",
+      "shape_k": "arm_b",
+      "full_k": "arm_a or arm_b or arm_c",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-73F9BD85C30F",
+      "note": "加载安全网「有机制、无自引导」：未知 flag 不回显合法集 / 阻断响应无 next / limits 未运行时注入 ⟹ 三要素（usage+limits+next）落三处（gk_task_gate.check 阻断分支 / gk_finding.main 未知 flag / gatekeeper-cli.sh 基础安全网）。臂 ×3（arm_a 未知 flag 回显 allowed / arm_b 阻断响应含非空 next / arm_c limits 回显运行时真值守卫）",
+      "test_file": "scripts/test_safetynet_self_guiding.py",
+      "shape_k": "arm_b",
+      "full_k": "arm_a or arm_b",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-6E2F2261410D",
+      "note": "锚判决同源双实现：A（gk_finding.scan_title_anchors 内联 2 判决，EOF 用区间右端 hi）与 B（gk_ecc_review.classify 6 判决，EOF 用 lo）各自实现判决阶梯 ⟹ 抽 classify_anchor(anchor, target, mode=existence|content) 单一源，且 **EOF 操作数按 mode 分化**（首轮 SCR 6/6 命中的 D1 回归点：统一即 lo<=EOF<hi 静默漏报）；A 只吃**已解析 target**、两侧各保留自己的解析器（零回归）。臂 ×4（arm1 API+mode 契约 / arm2 A 复用共享器哨兵 / arm7 区间跨 EOF / arm9 刷锚段剥离）",
+      "test_file": "scripts/test_anchor_verdict_unify.py",
+      "shape_k": "arm7",
+      "full_k": "arm1 or arm2 or arm7 or arm9",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-3CD0ED50CCE6",
+      "note": "处置前无强制回环预检：各写面直写台账、不先跑 anchor-drift ⟹ 须在 gk_finding 写入口内加 _guard_precheck（按 **fid 过滤**；命中 drifted ⟹ raise ECC_PRECHECK_DRIFT；`--ack-drift` 出口**须在 main 四分支解析**（首轮 D3「幻影出口」）；GK_FINDING_PRECHECK=0 SKIP；amend_anchors remedy **不得自锁**；写前置定序 _gate_writable→_assert_single_source→_guard_precheck）。臂 ×4（arm4 空转闸机+不误伤无关 fid / arm5 remedy 不自锁守卫 / arm6 接线臂 / arm8 ack 通路可达+journal）",
+      "test_file": "scripts/test_anchor_verdict_unify.py",
+      "shape_k": "arm4",
+      "full_k": "arm4 or arm5 or arm6 or arm8",
+      "expect": "red"
+    },
+    {
+      "finding": "N4-BATCH-NARROW",
+      "note": "n4 组 fan-out 批身份分叉：compute_batch_id(plan,narrow,epoch) 的 --batch-narrow 若逐臂喂各自那组串 ⟹ 三组 batch_id 各异 ⟹ moa-aggregate --batch <id> 只取单组 K 臂（R4 取恰 3×K 必失败）。修法 = --batch-narrow 传 3 组串并集（批级共享），--arm-group 逐臂变。静态臂 ×2（bn1 传 --batch-narrow / bn2 实参唯一共享）",
+      "test_file": "scripts/test_gk_moa_batch_shared_narrow.py",
+      "shape_k": "arm_bn1 or arm_bn2",
+      "full_k": "arm_bn1 or arm_bn2",
+      "expect": "red"
+    },
+    {
+      "finding": "F-REV-63",
+      "note": "写点/读点异源（域隔离后）：RED_RESULT 段 upsert_red_findings 绑 base $STATE_FILE，而读点 _conv_state_path 解析域 state ⟹ findings 账与 journal 异源 ⟹ MU_BACKCAST_NEGATIVE（WARN-only）。T1 = 写点改走同一中枢。静态臂 ×2（arm1a 不绑 base / arm1b 用中枢）",
+      "test_file": "scripts/test_gk_frev63_write_same_source.py",
+      "shape_k": "arm1a or arm1b",
+      "full_k": "arm1a or arm1b",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-4E6D7F42CA05",
+      "note": "并发写 state 丢更新（已复现 2026-09-27）：gk_finding.register 的 load_findings 在锁外 + save_findings 写调用方旧表；CLI monitor 落库块（subagent_history / subagent_last / _sealed_agent_score）json.load→json.dump 全程无 state_lock。实测 8 并发 register 仅 2 条落盘 / 串行 8/8。修法 = register 整段入 state_lock + 落库载荷取锁并改走 dump_state。静态臂 ×2 + 行为臂 ×1",
+      "test_file": "scripts/test_gk_concurrent_write.py",
+      "shape_k": "arm15b or arm15c",
+      "full_k": "arm15a or arm15b or arm15c",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-089658238011",
+      "note": "RC1 活动写面允许集（S1）：helper = gk_route_center.active_roots/in_active_surface（worktree ∪ worktrees_extra，**含目录边界**，修 ECC-73ACEA635A78）+ CLI 子命令 active-surface（exit 0=面内或 legacy-skip / 1=面外 / 2=错误）；pre_tool_hook.py 的 Gate 3 与 Gate 5/6/7 同调它。缺省 extras=[] == 今日逐字。CLI P7（gatekeeper-cli.sh:2787-2802，PROTECTED）的落刀判据 arm17 归 **ECC-20DB32FC0E55**（本 finding 只留 S1 三臂）。S5 追加 arm22（**真 git 行为臂**：真 git 仓 + 两个真 worktree + 直喂 hook stdin 的 STATE_FILE 显式，放行/拦阻**同表**断言；判据面 = **hook 退出码**而非 BLOCK 文案）。静态臂 ×2 + 行为臂 ×1 + 真 git 行为臂 ×1",
+      "test_file": "scripts/test_gk_active_surface.py",
+      "shape_k": "arm16a or arm16b",
+      "full_k": "arm16a or arm16b or arm16c or arm22",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-20DB32FC0E55",
+      "note": "CLI P7 = Gate 4 委派面且在 `PROTECTED_REGION::gate` 内（F7 过宽）：`gatekeeper-cli.sh:2787-2802` 须收敛到单一 helper `gk_route_center active-surface`（与 hook Gate 3/5/6/7 同调）、清除裸 rg 前缀谓词（`wt_wsl`，无目录边界 ⟹ 放行同前缀兄弟目录）。owner 裁定 A（2026-09-27）撤销「保护区只能人工改」⟹ 由 agent 落刀。arm17 = 静态判据（P7 块须含 `active-surface`、不得含 `wt_wsl`）",
+      "test_file": "scripts/test_gk_active_surface.py",
+      "shape_k": "arm17",
+      "full_k": "arm17",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-D21AFB35DC1E",
+      "note": "S3（RC1 写权收口）：`state-patch --set-top` 原只挡 `gate_data` 与 `_` 前缀 ⟹ `worktrees_extra` 这类**新顶层键可自助写入** = 活动写面允许集能被自助放宽（硬约束退化为自助放宽面）。修法 = ① `_TOP_DENY` 收编该键（fail-loud 拒）；② 新增唯一写通路 `gk_state_patch worktrees-extra <state> bind|unbind <path>`（持 state_lock / 原子写 / 重算 checksum / **幂等** / `--dry-run` 零写盘）；③ CLI `apply-worktree --bind/--unbind --path <dir>` 接线（区外、零保护区改动）。静态臂 ×1 + 行为臂 ×1 + 负臂 ×1",
+      "test_file": "scripts/test_gk_worktrees_extra.py",
+      "shape_k": "arm19a or arm19c",
+      "full_k": "arm19a or arm19b or arm19c",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-D15C62FFF34A",
+      "note": "S4（RC1 回收链未闭合的**允许集面**）：`worktrees_extra[]` 只增不减 —— 目录被 `reclaim` 回收后，允许集里仍留「指向不存在目录」的条目（= 永不命中的放行项）。修法 = `gk_worktree_reclaim.dangling_extras()`（只读枚举）+ `reclaim(state=…)` 尾段：dry-run 只报 `dangling_extras`，`--apply` 经**单一写通路** `gk_state_patch.cmd_worktrees_extra` 解绑（fail-loud 进 held）；CLI 的 plain reclaim 传 `--state`。臂 arm20a 静态 / arm20b 行为（dry-run 零写盘 → apply 清悬空且留存在项）/ arm20c 负臂（存在项不得误清）",
+      "test_file": "scripts/test_gk_worktrees_extra.py",
+      "shape_k": "arm20a or arm20c",
+      "full_k": "arm20a or arm20b or arm20c",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-2F171BF13CCA",
+      "note": "finding 状态机缺 reopen 单行道回正：误关/回归时只能直改 state（绕过 journal 第二副本锚）或等 RED upsert 被动自愈。修法 = `gk_finding.reopen()`（status→open + 清 verify_source/closed_at/verified_at + journal `to=open` 事件 + 重算 checksum；已 open 则幂等 no-op）+ `main`/`_usage_error` 接线 + CLI `cmd_finding` 的 checksum `case` 收编。红先臂 = 静态四处接线 / 行为 / reconcile 正向（core） / CLI 接线。⚠ 负向对照臂 `test_reopen_negative_status_only_flip_is_flagged`（只翻 status 不补记 ⟹ 必被判「回滚」）与幂等臂 `test_reopen_already_open_is_noop` **不入选红先集**（HEAD 即绿：它们证明的是机制判别力/幂等，非「修前必红」）",
+      "test_file": "scripts/test_gk_finding.py",
+      "shape_k": "reopen_static",
+      "full_k": "reopen_static or reopen_behavior or reopen_requires_journal or reopen_cli",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-C70ECCD4F7DC",
+      "note": "plan-refinement 报告的**实质只住 conclusion**（结构化 challenges/verdicts/kept/slashed/seven_dim 全空、conclusion 3000 字完整 verdicts，实测 entry sub-3b6a7a2ce6e0）⟹ 仍被 `_suspect_flags` 标 `zero_findings` = ECC-8AA064279810 修法的**残余面**。修法 = `_has_substance` 增 conclusion 载体（长度 ≥ `_CONCLUSION_SUBSTANCE_MIN`=200；`no_conclusion` 的 20 只判有无）",
+      "test_file": "scripts/test_gk_moa_aggregate.py",
+      "shape_k": "conclusion_only",
+      "full_k": "conclusion_only",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-03560D2993C2",
+      "note": "MoA 双盲人评页 `render_html` 原样渲染 conclusion，而 plan-refinement 各臂 conclusion 是**含 7 维分的 JSON**（命中 score/scope）⟹ 人评侧仍看到 agent 分值 ⟹ divergence/HUMAN_OVERSCORE 失去双盲意义。修法 = 渲染侧 `_blind_conclusion()` 遮蔽分数键值**片段**（含键名，防 `seven_dim_score` 字面量漏出；只改渲染不动落盘数据）",
+      "test_file": "scripts/test_gk_moa_aggregate.py",
+      "shape_k": "blinds_scores_inside_conclusion",
+      "full_k": "blinds_scores_inside_conclusion",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-13BE3E1A9B04",
+      "note": "hook 加速配套：gk_route_center._skill_dir_trusted 改限长读取（原 resolve-state 每次调用都整份读 600KB gatekeeper-cli.sh）",
+      "test_file": "scripts/test_gk_route_center.py",
+      "shape_k": "reads_bounded_head",
+      "full_k": "reads_bounded_head or does_not_whole_read",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-310D65FD844A",
+      "note": "subagent 派发 bug：cmd_monitor 的 `*) stage=\"$1\"` catch-all 吞未知 flag ⟹ `monitor --subagent <任务> --tier 1` 把任务载体静默换成 `1`。修法 = 加 `-*)` fail-loud 分支（档位只走 env SUBAGENT_TIER）",
+      "test_file": "scripts/test_subagent_runner_extract.py",
+      "shape_k": "unknown_flag_fails_loud",
+      "full_k": "unknown_flag_fails_loud or unknown_flag_hint_points_to_env_tier",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-4C1E8A27B9D3",
+      "note": "MoA 聚合后的**双盲人评页**（`moa-aggregate --html`）：自足 HTML / 禁渲 agent 侧分数锚 / 出口只有下载两 JSON + 可粘贴 adjudicate 命令（零新写通路）",
+      "test_file": "scripts/test_gk_moa_aggregate.py",
+      "shape_k": "page_is_selfcontained",
+      "full_k": "page_is_selfcontained or double_blind_hides_agent_side_score or exit_is_pasteable_adjudicate_command or f1_f7_axes_present or cli_html_flag_writes_page or cli_html_missing_value_takes_defensive_default",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-DCC2B8B80AAC",
+      "note": "`monitor --subagent` 落库块的内联 python 载荷（bash 双引号内）含反引号 ⟹ 运行期触发命令替换（病象 `json.dump: command not found` / `command substitution: syntax error near unexpected token '||'`，与 ECC-084E37B42CFB 同病象串但不同源）。修法 = 注释内反引号改为裸词。静态臂（源码字面不变量）",
+      "test_file": "scripts/test_gk_eval_injection.py",
+      "shape_k": "monitor_history_payload_has_no_backticks",
+      "full_k": "monitor_history_payload_has_no_backticks",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-186B99627299",
+      "note": "同族**类级**加固：上一条（ECC-DCC2B8B80AAC）只钉 `monitor --subagent` 那**一个**载荷 ⟹ 同类实例换载荷即漏网。本臂判据升为全文件不变量：`gatekeeper-cli.sh` 的 **bash 双引号区内**禁 ASCII 反引号（只允许在单引号区或注释里）⟹ 覆盖 `python3 -c \"…\"` / `_state_write \"…\"` 等一切内联载荷。2026-09-26 实测此臂对 HEAD 真红（`_grant_node_budget` 的 `_state_write` 载荷注释内 `min(<cur>+$_g,$CAP)` 一处）。静态臂（源码字面不变量）",
+      "test_file": "scripts/test_gk_eval_injection.py",
+      "shape_k": "cli_double_quoted_regions_have_no_backticks",
+      "full_k": "cli_double_quoted_regions_have_no_backticks",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-68A8EDFA4E40",
+      "note": "族↔finding 错配（P3 隔离 e2e 实测）：F3a 模板**锁死落点** `_log_block()`，而 `match.any` 里的泛词 `json.dump` 把「病象在 monitor 报告落库块」的 finding 也路由到 F3a ⟹ coder 按错落点落刀。实测面：91 条 ECC 里 F3a 命中 8 条，其中 **7 条靠 `json.dump`、6 条仅靠它**，多数不属 F3a 的类；F3b 另有 1 条仅靠泛词 `计费`。两层修法 = ① 判定层 `generic_tokens`（泛词**单独**命中不构成路由依据；命中集 ⊆ 泛词表 ⟹ 视同未命中 = fail-loud 不受理）；② 派发层 `anchor_symbols` 预检（族锁死落点符号必须出现在 finding 文本，否则 `resolve` 抛 FAMILY_ANCHOR_MISMATCH；显式 `--family` = 人工担责可跳过）。静态臂（含 2 条负臂 + 1 条守护臂）",
+      "test_file": "scripts/test_gk_agent_family.py",
+      "shape_k": "generic_token_alone",
+      "full_k": "generic_token_alone or anchor_mismatch or generic_token_outside_match_any",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-6C0742C3BC90",
+      "note": "闸①（guard-edit = coder 唯一落刀闸）在 **Windows py311 宿主**（subagent 默认环境）下**恒拒**：`gk_agent_edit._cli_gate_ok` 自建 ['bash', os.path.join(SKILL_DIR, 'gatekeeper-cli.sh'), …] ⟹ 脚本路径为 C:\\… 形态，被 bash.exe（WSL 启动器）吞掉反斜杠 ⟹ No such file or directory、rc=127；工具层 `subagent_runner._bash_script_argv`（有转换）同路径正常 ⟹「**第二份实现漏转换**」。2026-09-26 在 Windows py311 实测复现（探针：rc=127 + 吞反斜杠真因串）。修法 = 形态归一**单源** `scripts/gk_host_paths.py`（工具层与落刀闸共用）+ 空输出时 detail fail-loud（原实现回空串 = 真因不可见 = 摩擦源）。静态臂 ×3（argv 形态 / detail 非空 / 单源）",
+      "test_file": "scripts/test_gk_agent_edit_gates.py",
+      "shape_k": "converts_argv_on_windows_host",
+      "full_k": "converts_argv_on_windows_host or empty_output_detail_is_fail_loud or host_paths_is_single_source or state_patch_converts_argv",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-1D1C893060AF",
+      "note": "族模板断言「未实测的结构性事实」⟹ coder 按错前提行事（F3b 同一族**两次同向误判**；实为计费段在 PROTECTED_REGION::gate 之内）。当时模板写了**裸行号锚** `≈L2500–2872` / `L2872 与 L9357` —— 派发时早已漂移。修法 = `validate_family` **写时机检**：拒绝模板内 `L<≥3 位数字>`（保留 `L1/L2/L3` 档位/层次名）；模板改**符号锚**（`PROTECTED_REGION::gate` / `PROTECTED_REGION_END::gate`）+ 要求 coder 实跑 `rg -n 'PROTECTED_REGION'` 核对、冲突以源码为准。已知边界（如实登记）：只覆盖 `L<n>` 形态，`file.py:<n>` 形态不在本切片面内。静态臂（写时 lint + 负臂）",
+      "test_file": "scripts/test_gk_agent_family.py",
+      "shape_k": "bare_line_anchor",
+      "full_k": "bare_line_anchor",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-1B18EF23B8F1",
+      "note": "匿名 subagent 通道无 gate 读权（ROLE_ALLOWED_REGIONS[default] 只有 evidence，而 PROTECTED_REGIONS[gate] 含 gatekeeper-cli.sh）⟹ 任何「要读 CLI 本体」的匿名任务**结构性失败**（实测 C 组 3 探测全被拒 + 4 条 access_violations），而原理由只报 `not in effective_regions` ⟹ 看不出「该指定哪个角色」= 摩擦。修法 = 按**同一张角色表反查** gate-capable 角色名写进拒绝理由与 access_violations（非第二份名单）；⚠ **不**把 gate 加进 default（那是扩大击面，由守护臂钉住）。行为臂 ×2（理由可行动 / 违规记录带提示）",
+      "test_file": "scripts/test_subagent_role_tools.py",
+      "shape_k": "scope_denied_reason_is_actionable",
+      "full_k": "scope_denied_reason_is_actionable or violation_record_carries_actionable_hint",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-AAD612CC8270",
+      "note": "flag 缺值族：`set -u` 下 `case` 旗标支写 `var=\"$2\"` 尾随缺值即 unbound 崩溃；同在 `while [ $# -gt 0 ]` 内裸 `shift 2` 时 `$#==1` 不移位 ⟹ 死循环（实测 `apply-worktree --code-fix --family` rc=124 挂起）。修法 = 全仓 `\"${2:-}\"` + `shift 2 2>/dev/null || shift`。静态臂（本跑 HEAD 版得 77 处）",
+      "test_file": "scripts/test_agent_cli_wiring.py",
+      "shape_k": "no_unguarded_shift_two_in_flag_branches",
+      "full_k": "no_unguarded_shift_two_in_flag_branches",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-3F1B47B523F6",
+      "note": "裸 find 拦截不完整：`find.exe` 形态修前漏网（名单无 `find.exe`），且 find 文案只提裸 grep/rg、只给 `search` 路由（对本地文件遍历是错路由）——须指向高性能替代 `fdfind`（sharkdp/fd）",
+      "test_file": "scripts/test_pre_tool_hook.py",
+      "shape_k": "bypass_bare_find",
+      "full_k": "bypass_bare_find",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-E994635EF0EF",
+      "note": "hook Gate4 自锁：CLI boot 失败（语法错/解释器缺失）时 stdout 为空、真因只在 stderr，而 `_run_cli` 旧返回 `{ok,raw,error}` 三键皆空 ⟹ 文案恒 `unknown` 且 Edit/Write 全被封死。修法 = 回填 `stderr`（纯可观测性，不改判据）",
+      "test_file": "scripts/test_pre_tool_hook.py",
+      "shape_k": "boot_failure_surfaces_stderr",
+      "full_k": "boot_failure_surfaces_stderr",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-0A9B349F31BA",
+      "note": "apply-worktree 的 `GATEKEEPER_WORKTREE_ROOT` 自解析原只在 `--session` 分支 ⟹ plain 与 `--code-fix` 两条路径撞 `RouteError: GATEKEEPER_WORKTREE_ROOT 未设置`（2026-09-25 实测复现，并发会话发现）。修法 = 上提到模式分派**之前**（单点；删 `--session` 内副本，禁第二实现）。静态臂（源码形态：派生点须先于 `--session` 分派且全函数恰一处）",
+      "test_file": "scripts/test_agent_cli_wiring.py",
+      "shape_k": "worktree_root_self_resolve_hoisted_before_mode_dispatch",
+      "full_k": "worktree_root_self_resolve_hoisted_before_mode_dispatch",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-0516248B52D5",
+      "note": "state 锁唯一持有者改 python（选项 A，2026-09-25 用户裁定）：原锁资源 <state>.lock 只由 bash `_with_state_lock`（flock(1)）获取，python 侧 ~15 个写通道全无锁 ⟹ 并发读-改-写丢更新（实测 used=2 而 remaining 只由 8→7）。修法 = 拆除 bash `_with_state_lock`，锁改由 `gk_json_utils.state_lock`（可重入，防 dump_state 嵌套自锁）+ `update_state`（原子 RMW，内置 checksum 重算）持有；bash 两本体（_state_write/_state_checksum_write）与 gk_finding/gk_state_patch/gk_task_gate/pre_tool_hook 调用点持锁",
+      "test_file": "scripts/test_r2_state_serialization.py",
+      "shape_k": "arm10 or arm11 or arm12",
+      "full_k": "arm10 or arm11 or arm12",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-F6C94D444CC6",
+      "note": "编辑预算**按会话隔离**（2026-09-25 用户裁定「预算控制应该被隔离开，并发会话也不应该和这边抢」）：原 `gate_data.edit_budget` 是**全局单计数器** ⟹ 谁用完就把所有会话一起饿死（实测：并发会话被这边的编辑轮卡住无法推进）。修法 = hook 从 PreToolUse 载荷 `session_id`（实测存在，24 位 hex；本仓此前未读）透传 `GK_SESSION_ID`；Gate4 判据/扣减（`billed_files` 亦逐会话）+ `_bill_edit` + `_grant_node_budget` 传播全部改按 `edit_budget.sessions.<sid>` 计数；无键（老载荷 / 手工调 CLI）回退全局口径 ⟹ 零回归。行为臂（真 CLI × 两会话）",
+      "test_file": "scripts/test_gk_edit_budget_metering.py",
+      "shape_k": "edit_budget_is_isolated_per_session",
+      "full_k": "edit_budget_is_isolated_per_session",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-567E8C847F16",
+      "note": "剩余 RMW 丢更新窗口收口（2026-09-25，选项 A 后续）：病象 = 「读 state → 跨 LLM API / 长判据流程 → 写 state」的窗口内他人写入（edit_budget 扣减 / finding / state-patch）被整体覆盖回旧值。已收口：gk_reflect / gk_adjudicate（003e5df，锁内增量重放）。本轮 4 处：gk_appeal（哨兵否决修复 + appeal 记录，窗口跨 appeal LLM API）+ gk_escalate_resolve（裁定记录 + Ed25519 签名回写）+ gk_monitor_api（monitor_scores 写入）改 gk_json_utils.update_state 锁内重放（待落内容与读到的 state 无关）；gk_advance（8 处 _write_state + 起始读 state = 一整个 RMW，实测本文件 0 subprocess / 0 requests / 0 os.system ⟹ 锁内无等待）故改 main 对 _run 全段持 state_lock。静态臂（源码形态）",
+      "test_file": "scripts/test_r2_state_serialization.py",
+      "shape_k": "arm13 or arm14",
+      "full_k": "arm13 or arm14",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-685DDE20F8AB",
+      "note": "finding 台账双写通路不一致（2026-09-25 实测）：`upsert_red_findings`（RED 引擎 ingress，gk_finding.py:148）只走 `save_findings` + `_write_checksum`，**不写 finding journal**；而 RED 记录自带 `status:\"open\"` ⟹ 把**已 close** 的 fid 重新 upsert 时 journal 末事件仍为 `to=closed` ⟹ `finding reconcile` 恒报「state 被回滚」（实测 6 条：RED-CONSTRAINTS-01/02 + RED-MIGRATE-INLINE/SWALLOW/DANGER/FD），且同 hash 重放走 `unchanged` 分支（不落盘不留痕）⟹ **无自愈通道**。修法 = 「对账锚入账」单一判据：added 必留锚 / updated 必留痕 / **「终态→open」重开自愈**（覆盖同 hash 重放）；**反向不修**（state=终态而 journal 无锚 = 伪造裁决候选，必须保持 fail-loud，不得洗掉信号）。行为臂 2 例（红先）+ 负臂 1 例（not laundered，防过度修复，不入选）",
+      "test_file": "scripts/test_gk_finding.py",
+      "shape_k": "reopen_via_upsert or unlogged_drift_self_heals",
+      "full_k": "reopen_via_upsert or unlogged_drift_self_heals",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-75DAED1C537C",
+      "note": "`ecc_findings` 无配额且单调增长（实测 117 条 95,940 B = 全文件 39.6%；closed 45 条占其 45.6%）⟹ L2 加「配额驱动的代数归档」通道 `gk_finding.archive_closed`：① 配额**由汇总预算派生**（`target_total` 缺省 = `STATE_SIZE_WALL − STATE_SIZE_RESERVE`，再减**其余分量实测字节**）；② **只动 closed**（open/fixed/rejected 一律不碰 = 未闭环/待复核属治理信息）；③ 从最旧 closed 起移出并 append 到旁挂 `<state>.finding-archive.jsonl`（**可回溯**）；④ 对移出 id 打 epoch 声明 `purged_fids`（`reconcile` 单列 `purged` 而非报「记录被删」），且 **ts 复用当前 gen_start**（`_gen_start_or_earliest` —— 缺省 `_now()` 会推后代际起点，对**仍 live 的 closed** 反造假「伪造裁决候选」异常）；⑤ `dry_run` 零写盘。臂 2 例：行为主判据 + dry_run 零写盘",
+      "test_file": "scripts/test_gk_finding.py",
+      "shape_k": "archive_closed",
+      "full_k": "archive_closed",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-A127BEFEAB71",
+      "note": "§4.13.5「全序列打通①」：启动块的 `resolve-state` 调用（`_gkr_route` 赋值处）既不传 `--plan-file` 也不传 `--domain` ⟹ 1b 步在 CLI 链上不可达（源码注释自陈「生产不可达」）⟹ 无指针的会话无从按已声明计划落到域化 state，只能共用默认 state（§4.13.9 D 记的并发抢写根因）。修法 = `resolve-state` 增 `--derive-domain`：域来源顺序 `--domain` > `--plan-file`/`--plan-override` META > env `GK_PLAN_FILE`（**会话级计划来源**）META；启动块接线该 flag。未设 env / 计划未声明域 ⟹ 与既有链逐字一致（零回归）。臂 2 例：行为臂（子进程真 CLI 契约）+ 启动块接线守门臂；e2e 另证 /tmp/gk-e2e2 启动块 stage=DOMAIN",
+      "test_file": "scripts/test_gk_route_center.py",
+      "shape_k": "derive_domain_from_session_plan_env or startup_block_wires_derive_domain",
+      "full_k": "derive_domain_from_session_plan_env or startup_block_wires_derive_domain",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-39A8B24DCE27",
+      "note": "计划 META `state_domain` 占位符非法 token 活雷（2026-09-25 实测）：`docs/plans/2026-09-18-edit-budget-dual-track-plan.md` 的 META 写 `state_domain: (未声明)` ⟹ `meta_state_domain()` 返回 `(未声明)` ⟹ `_DOMAIN_TOKEN_RE` 不匹配 ⟹ 该计划一旦成为会话来源（env `GK_PLAN_FILE`）即 `STATE_DOMAIN_TOKEN_INVALID` ⟹ 启动块 `exit 1`（**CLI 全命令失效**）。修法 = 删该 META 行（缺省 = 未声明）；守门臂把该雷类纳入上界（判据复用生产同源函数 `meta_state_domain` + `_DOMAIN_TOKEN_RE`，非第二套 META 解析）",
+      "test_file": "scripts/test_gk_route_center.py",
+      "shape_k": "plan_meta_state_domain_tokens_legal",
+      "full_k": "plan_meta_state_domain_tokens_legal",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-E0FBD228DDB6",
+      "note": "② 使能切片（§4.13.5 高并发②）：会话身份**无双侧可得源** —— `session_id` 只在 PreToolUse 载荷（仅 hook 进程可见），唯一出口 `_run_cli` env **只达 Gate 4** ⟹ agent 自己跑的 CLI（`discover`/`finding`/`state-patch`）无身份 ⟹ 落**全局平面**、与 hook 的**会话平面**分叉 = 两套账（且 ② 若只做 hook 侧指针分片会**加剧**分叉）。修法 = hook 每次 PreToolUse 原子落 `<SKILL_DIR>/.gatekeeper.session`（`sid\\tepoch\\ttool\\tcwd`，tmp+os.replace，失败静默）；载荷无 sid ⟹ 不写",
+      "test_file": "scripts/test_pre_tool_hook.py",
+      "shape_k": "arm20_hook_writes_session_marker",
+      "full_k": "arm20_hook_writes_session_marker",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-E0FBD228DDB6",
+      "note": "② 使能切片（CLI 侧消费面）：**不设** `GK_SESSION_ID`、仅放 hook 的 `.gatekeeper.session` 标记 ⟹ 启动块须自解析出同一 sid ⟹ 消费落 `edit_budget.sessions.<sid>`（修前恒落**全局** `edit_budget.remaining` = 与 hook 会话平面分叉）。fail-safe = env 优先不覆盖 / 缺失 / 非 24 位 hex / 超 `GK_SESSION_TTL`(默认 1800s) ⟹ 保持空（零回归）。负臂 arm22（超窗 + 形态非法 ⟹ 回退全局）不入选红先集",
+      "test_file": "scripts/test_gk_edit_budget_metering.py",
+      "shape_k": "arm21_cli_self_resolves_session_from_marker",
+      "full_k": "arm21_cli_self_resolves_session_from_marker",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-2C351F72EA6A",
+      "note": "②b 会话级句柄（§4.13.5 高并发②）：全局指针 `.gatekeeper.plan` → **会话级分片**。病象① 会话 B 的 `discover`（无 --plan）会 rm 掉会话 A 刚写的绑定 ⟹ A 静默回落默认 state（= 抢写同一 state）；② env `PLAN_POINTER` **启动块不认**（只有 route center 认）⟹ 显式注入在 CLI 链上是死通道；③ 会话指针每会话一份但**过期件无人回收**。修法 = **跟随目标**三级优先（env → `.gatekeeper.plan.<sid>` → 全局）｜**写/清目标**（`_PLAN_POINTER_OWN`）与跟随目标**分离**（有会话身份时只动本会话指针）｜启动块把已选指针**透传** `resolve-state`（两者按同一指针判定）｜`discover` 路径 sweep 过期会话指针（`GK_PLAN_POINTER_TTL` 默认 86400s）。臂 3 例（读侧会话优先 / env 认 / 写侧会话指针+sweep）；负臂 arm25（无会话身份仍跟全局）不入选",
+      "test_file": "scripts/test_gk_edit_budget_metering.py",
+      "shape_k": "arm23 or arm24 or arm26",
+      "full_k": "arm23 or arm24 or arm26",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-8A6560E4FEB6",
+      "note": "⑤ worktree 落点归一（§4.13.5 全序列打通⑤，hook 侧）：Gate 3b 跨技能基址原为 `Path(__file__).parents[2]` = **路径层数推算** —— 只在「hook 恰位于 `<部署根>/<skill>/scripts/`」时成立；hook 从 **feature worktree 副本**（`.trae/worktrees/<repo>/feature/<branch>/scripts/`）加载时它落到 `…/worktrees/<repo>` ⟹ 兄弟插件根算错 ⟹ standing 下**合法**的跨技能编辑被判越界（fail-closed 拒）。修法 = `_cross_skill_root()` 复用 `gk_route_center._main_worktree`（`git worktree list --porcelain` 首条 = 主 worktree）再取父目录（与 `ECC-DEBCB4AC53C3` 同源）；非 git / 查询失败 ⟹ `\"\"` ⟹ fail-closed。臂造**真 git 仓 + linked worktree**（`_main_worktree` 是 git 权威视图，假目录查不出主树）；负臂 arm27b（非 git ⟹ 不放行）不入选红先集",
+      "test_file": "scripts/test_pre_tool_hook.py",
+      "shape_k": "arm27_cross_skill_root_uses_git_main_worktree",
+      "full_k": "arm27_cross_skill_root_uses_git_main_worktree",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-8A6560E4FEB6",
+      "note": "⑤ worktree 落点归一（CLI 侧）：`cmd_discover` 原以 `basename \"$(pwd)\"` 当**仓库段**，而调用方 cwd 常落在 feature worktree 目录（`.trae/worktrees/<repo>/feature/<branch>`）或技能仓子目录 ⟹ 目录名 ≠ 仓库名 ⟹ `repo_hint` 过滤恒不命中（静默漏检本仓 worktree / 被他仓最新 worktree 顶替）= `ECC-DEBCB4AC53C3` 的 CLI 侧同族。修法 = CLI 改注入 **cwd 路径** `GK_WORKTREE_CWD`，`resolve_worktree` 用主 worktree 名归一派生；优先序 显式 `GK_WORKTREE_REPO`（名字，既有覆盖语义不变）> cwd 派生 > 不设（全域扫描，route-all 语义不变）；非 git ⟹ 回退目录名（fail-safe）。arm30 = 接线面守门臂（锁调用块形态，不锁行号）；arm29 = 负臂（优先级 + 全域扫描 + 非 git 回退）",
+      "test_file": "scripts/test_gk_route_center.py",
+      "shape_k": "arm28_repo_hint_from_cwd or arm29_repo_hint_priority or arm30_cmd_discover_wires_worktree_cwd",
+      "full_k": "arm28_repo_hint_from_cwd or arm29_repo_hint_priority or arm30_cmd_discover_wires_worktree_cwd",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-3802B43E4EF9",
+      "note": "「state 受余烬管理却一直没被余烬系统处理过」：L2 配额归档通道（`gk_finding.archive_closed` + CLI `finding archive-closed`）**已实现且已登记红先臂**，但**生产零调用**（全仓唯一写余烬处 = `cmd_discover` 内相位切换快照，条件 `prev_entry.r_phase` 且相位真变化）⟹ 技能自维护序列十几天不换相位，state 单调涨到 margin 1.2%（258,971/262,144 B），只能靠人工调配额。修法 = ① CLI 增 `ember burn` 子命令（**归口**既有归档通道，禁第二实现；预算足时零写盘）；② 作业内核 `scripts/_cron_ember_burn.sh`（0 API，末行 `wakeAgent:false`）；③ cron 作业 `ember-burn`（`49 * * * *`，对齐 Windows 计划任务 `GatekeeperCronTick` 小时相位）。臂 3 例：越线真归档（体积回墙内 + 旁挂可回溯 + `purged_fids` 覆盖）/ 预算足**零写盘**（字节+mtime+journal 全不变）/ 作业内核形态契约。",
+      "test_file": "scripts/test_gk_ember_burn.py",
+      "shape_k": "arm31_ember_burn_archives or arm32_ember_burn_is_zero_write or arm33_cron_ember_burn_shim",
+      "full_k": "arm31_ember_burn_archives or arm32_ember_burn_is_zero_write or arm33_cron_ember_burn_shim",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-6978B149C111",
+      "note": "提交面**流程缺陷**两条：① 陈旧锁 —— git 正常退出会删 `.git/index.lock`，但进程被**杀**（工具宿主复用终端/超时/会话中断）或多会话同仓 ⟹ 0 字节孤儿锁留存致提交恒失败（当日 16:09 / 18:40 两次实测，均无 git 进程在跑）；旧 `cmd_commit` 只 `git commit -F`，无锁预检 ⟹ 无自愈/无归档/并发抢锁。② 无提交前校验 —— `65974a8` 落损坏 blob（`gatekeeper-cli.sh` 2968-2977 粘连、`bash -n` syntax error），而 `git status`/`diff`/`diff-files` **全 clean**（索引 stat 缓存命中 ⟹ 不重算 hash，见 ECC-E5364D7993C8）⟹ 撕裂读可静默进历史。修法 = `cmd_commit` 单一入口（锁预检：孤儿 ⟹ `mv` 归档 `.gk-trash/index.lock.stale-*`（**非删除**）/ 活锁 ⟹ `COMMIT_LOCK_HELD` fail-loud **不抢**；`update-index --really-refresh` 破缓存；只 add 显式路径；`gk_commit_verify --mode staged` 读**索引 blob** 与工作树逐字节比对 + `.sh/.py/.json` 解析面，坏 ⟹ **阻止提交**；提交后 `--mode rev HEAD` 复核）+ `--verify-only`。判据面读 **blob**（非工作树）⟹ 能抓「blob 坏而工作树好」。红先臂 arm34（坏语法已暂存 ⟹ 拦截）/ arm35（索引 blob≠工作树 ⟹ `--verify-only` 抓 BLOB_MISMATCH）/ arm36（新鲜锁不抢 + 陈旧锁归档后提交成功）/ arm38（**活锁**：锁陈旧但**确有 git 进程在跑**（`/proc/<pid>/cwd` + cmdline 指向本仓）⟹ fail-loud 不抢）/ arm39（**防子串假阳性**：名为 `bash` 的进程 cmdline 含 `git`+仓路径 ⟹ 不得误判活锁、孤儿锁仍须归档 —— 守 `pgrep -af git` 这一错法的回归）；非红回归臂 arm37（legacy 纯消息提交仍可用）**不入选**红先集",
+      "test_file": "scripts/test_gk_commit_guard.py",
+      "shape_k": "arm34 or arm35 or arm36 or arm38 or arm39",
+      "full_k": "arm34 or arm35 or arm36 or arm38 or arm39",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-C2BE2C56A7BD",
+      "note": "drvfs 陈旧读的人工处置手法（`cp f /tmp && cp f` 往返）**本身会把 Windows 侧新编辑回滚**（2026-09-27 实测：`c5366fc` 被回滚、`9dcb6e8` 补落）—— 因为回写的缓冲可能正是**陈旧**内容。修法 = `gk_commit_verify.verified_refresh`（drvfs **安全**通道）：回写前做**逐字节双视图**比对（`git hash-object --no-filters` 原文件 vs 其逐字节副本），**不一致 ⟹ 无法判定真值 ⟹ 拒绝回写**（目标文件一字节不动）+ `DRVFS_CROSS_VIEW_MISMATCH`；一致 ⟹ 逐字节等值往返（内容不变、只做缓存失效）。arm53 = 守门臂（不一致 ⟹ 不写盘 + 报错 + 文件字节未变）。",
+      "test_file": "scripts/test_gk_commit_verify_drvfs.py",
+      "shape_k": "arm53_drvfs_refresh_refuses",
+      "full_k": "arm53_drvfs_refresh_refuses",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-FAA686AB1791",
+      "note": "提交门 WSL drvfs 陈旧读（2026-09-27 实测）：Windows 侧改 `gatekeeper-cli.sh` + WSL git ⟹ `git hash-object`（四形态）读**旧** blob（`ef007824`），而 `dd`/`md5sum`/`cp`（read 路径）得真内容 ⟹ 索引暂存旧 blob ⟹ 提交门 `BLOB_MISMATCH` 拦下（拦对了）但**无法识别成因**、**无机械通道**。修法 = `gk_commit_verify.worktree_views`（两路独立读：read 路径 vs git 路径）+ `verify()` 对「blob ≠ 工作树」**区分成因**（两路不一致 ⟹ `DRVFS_CROSS_VIEW_MISMATCH` 并指向 `--refresh`；两路一致 ⟹ 仍 `BLOB_MISMATCH` —— **判据不放松**，只改诊断）+ CLI `--refresh` 安全通道。arm54 = 行为臂（成因命名 + 一致时仍不放松）。",
+      "test_file": "scripts/test_gk_commit_verify_drvfs.py",
+      "shape_k": "arm54_drvfs_cross_view_mismatch_named",
+      "full_k": "arm54_drvfs_cross_view_mismatch_named",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-130ECB1ABCA4",
+      "note": "crossfull 并发编辑 ⟹ L2 读到半写/撕裂快照（用户 2026-09-28 报告）。读码定位：`audit --crossfull` 的 LLM 车道（L2 `--crossrev` / 后R 双独立）以 `cwd=GK_CF_CWD` = **活动工作树**运行（非 `--isolate`），车道期间并发编辑即读半写；该段原有并发断言**只覆盖父 state**（`_cf_src_sum`）而**工作树零断言** ⟹ 结论静默失真（本仓自认最坏的『假绿』）。修法 = 判据单源 `gk_git_concurrency_check.worktree_fingerprint`（dirty 集合逐文件 `git hash-object --no-filters` 聚合 sha256，只读）+ CLI `--ws-fingerprint` + runner 车道**前后对拍**：不等 ⟹ loud 行 + L2 步降级 `WARN(并发写)` + JSON `worktree_fingerprint.changed_files`；指纹不可用 ⟹ `NOT-RUN`（**不得**读作一致）。arm = 行为臂（并发改写 ⟹ 指纹必变且命中该文件；无改动 ⟹ 必稳）。",
+      "test_file": "scripts/test_gk_ws_snapshot_guard.py",
+      "shape_k": "arm_ws_fingerprint_detects_concurrent_edit",
+      "full_k": "arm_ws_fingerprint_detects_concurrent_edit",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-730D4CC5CA51",
+      "note": "L4（硬墙判据 **disk→canon 字节**）：`gk_narrow_route.validate_narrow_tasks` 整文件上限判据原为 `len(磁盘原始字节) > 4×清单上限` ⟹ **与形态耦合** —— `ensure_ascii=True` 把每个 CJK 逃逸成 `\\uXXXX`（3B→6B），内容一字未变却凭空「长大」（实测同一 state 三种写法 **249,562 / 262,906 / 328,109 B** ⟹ 撞不撞墙取决于「谁最后写」，= F-REV-51 残余面「形态本身就是余量」）。修法 = 新增单源 `gk_json_utils.canon_bytes(obj)`（`ensure_ascii=False` + `indent=STATE_INDENT`；`state_size_report` 的 `canon_bytes` 字段改由它算、去重），判据改 `canon_bytes(d) > 4×清单上限` 且 detail 并报 canon/磁盘两值；**4× 上限不重估**（262,144 是内容预算 = `STATE_SIZE_WALL`）。副作用：解析前置、非法 JSON 报 `state_invalid_json`（更准确）。红先臂 arm46（磁盘>墙但 canon≤墙 的 legacy 逃逸态 ⟹ 不得判 state_oversized）/ arm48（canon 口径单源：`canon_bytes(d) == state_size_report(...)[\"canon_bytes\"]`）；负臂 arm47（canon>墙 仍须拒，防退化成「永不拒」）与既有 `test_state_oversized_reports`（改用合法 JSON 构造）为**非红**回归臂",
+      "test_file": "scripts/test_gk_narrow_route.py",
+      "shape_k": "arm46 or arm48",
+      "full_k": "arm46 or arm48",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-A42C0B995E10",
+      "note": "CLI subagent 派发链**预算双源**（2026-09-25 端到端实证）：`cmd_monitor` 侧独有第二份预算（`subagent_max_turns` / `subagent_token_budget` / `subagent_item_budget` 三参声明 + 4 个 named-mode 的 max_turns 预设 + free-text 的 task_count 启发式 + 5 个 role 臂的 token/item 赋值 + 3 处派发点当 argv 传参），而 runner `_bootstrap()` 的 tier 块**覆盖**它（`args.max_turns` 无条件；token/item 仅在 env `SUBAGENT_TOKEN_BUDGET` / `SUBAGENT_ITEM_BUDGET` **未设**时覆盖，而 CLI 从不 export 这两个 env）⟹ **CLI 三参是死参**。端到端实证：CLI argv 传 `--tier 4 --max-turns 10 --token-budget 500000 --item-budget 2000`，runner 产物 `token_usage{cap:1000000,item_cap:4000,rounds:28}`。次生缺陷：role `case`（`case \"$subagent_role\" in`）**无 `coder)` 臂、无 `*)` 兜底臂** ⟹ `--role coder`（及任何未登记角色）不命中任何臂 ⟹ `SUBAGENT_TIER` 未设 ⟹ 派发落 `--tier 0` ⟹ runner 的 tier 块**整块跳过** ⟹ 已判死的 CLI 三参反而「复活」为实际预算（实测该派发 `cap=100000 / item_cap=375` = CLI 默认值）⟹ 单源被彻底破坏。修法 = 删 CLI 侧三参全族（唯一活通道 `--tier` 保留），补 `coder)` 与 `*)` 臂（`SUBA_TIERS[tier]` = 预算单一事实源）。臂 arm50（全文字面判据：三参族出现次数须为 0；HEAD 实测 3/3/9/9/9/2 —— 注释里也不得残留，故为**全文**计数）/ arm52（role case 段须同时含 `coder)` 与 `*)`；剥注释后判「分支标签」）；**非红**回归臂 arm51（三处派发点仍须各传一次 `--tier` 带 `${SUBAGENT_TIER:-0}` 缺省 —— 防删死参时连带删档位）不入选红先集",
+      "test_file": "scripts/test_gk_dispatch_budget_single_source.py",
+      "shape_k": "arm50 or arm52",
+      "full_k": "arm50 or arm52",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-1FA6B6E7D15C",
+      "note": "转发 ECC 证据包**无确定性复核入口**（2026-09-26）：转发包此前只能人工逐锚读码 —— 实测一份 8 锚的包查出 **2 条因果反转 + 3 条行号漂移**，全部靠人读；仓内既无 ingest（`gk_finding.py` 仅 register/verify/close/reconcile），也无逐锚判定面。次生：锚机制根硬绑 `<skill_dir>/docs/plans`（`gk_anchor_rebase.py:55`/`:131`，前置门 `:180`；`gk_doc_align.check_anchor_existence` 只以 `skill_dir` 为根）⟹ **仓外计划**（`docs/plans/`）完全在机检面之外（`ECC-4D6978F042BA` 复核收窄后的真实缺口）。修法 = A）新增 `scripts/gk_ecc_review.py`：逐锚判定 `hit/line_drift/line_over_eof/file_missing/unverifiable`（锚提取**复用** `gk_plan_lint.iter_anchor_refs` 单一事实源）+ 自动起草「⚠ 复核订正」段；经**既有命令** `doc-align --ecc-review <pkg.md>` 暴露（`_CMD_REG` 在 `PROTECTED_REGION::gate` 内 ⟹ **不新增命令**，只在区外 `cmd_doc_align` 体开分支，同 `state-patch` 先例 = `ECC-D6115EC0C74D`）。B）锚根可配：`gk_anchor_rebase.py --plans-root` / `check_anchor_existence(extra_roots=)`（不传 = 逐字零回归）。臂 arm53（五类 verdict + line_drift 报真值行号）/ arm54（订正段自动起草，非 hit 锚全进草稿）/ arm55（仓外计划可被 `--map` 改写）/ arm56（`extra_roots` 纳入扫描面）—— 四臂均为**行为臂**（模块/形参缺席 ⟹ HEAD 必红）",
+      "test_file": "scripts/test_gk_ecc_review.py",
+      "shape_k": "arm53 or arm54",
+      "full_k": "arm53 or arm54 or arm55 or arm56",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-F2E2F9E07AC2",
+      "note": "域绑定**三级联动**缺陷（2026-09-26 落刀）：`target_repo`(L2) → `state_domain`(L4 1b) → `worktree_needed`(强制门) 三键彼此脱钩 —— ① 两键并列但**无推导**（`_META_FIELDS` 仅并排列出，`meta_state_domain()` 只回已声明值）⟹ 「目标仓=X」推不出「state 域=X」；② `state_domain` 机检门**只挂 `worktree_needed=true`**（`gk_plan_lint.check_meta` + `gk_route_center.calibration_from_route`）⟹ `worktree_needed=false` 的**跨仓**计划（zthl-adapter）连「应声明域」的机检都被 SKIP，finding 可静默错落技能默认 state。修法 = ① 新增单源推导 `gk_route_center.derive_state_domain(meta, plan_file)`（`<target_repo>.<plan-basename>`，声明优先，token 合法性复用 `gk_finding._DOMAIN_TOKEN_RE`）；② 强制门从 `worktree_needed=true` **解耦**为「`worktree_needed=true` **或** `target_repo` 指向他仓」（自指判定复用 `resolve_repo` 单源），并在 finding 文案里**报出可推导域**。⚠ 推导**不接进路由**（`meta_state_domain` 仍只读声明值）—— 接进 `--derive-domain` 会把 `target_repo: skill` 且无域 state 的计划推成 `STATE_DOMAIN_MISSING` ⟹ 启动块 exit 1、CLI 全命令失效（现存 docs/plans 20+ 处该形态）。臂 arm57（推导 + 声明优先 + 缺项不臆造 + 非法 token 不产出）/ arm58（跨仓未声明域 ⟹ L-META 命中且报出可推导域）/ arm60（运行时校准同判 FAIL，不再 SKIP）；非红回归臂 arm59（自指 `skill` 计划零误报）不入选红先集。③（`cmd_finding` 收尾 checksum 对齐域）调用点在 `PROTECTED_REGION::gate` 内 ⟹ 本轮不落刀，另登记。",
+      "test_file": "scripts/test_gk_state_domain_linkage.py",
+      "shape_k": "arm57 or arm58",
+      "full_k": "arm57 or arm58 or arm60",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-835E2928497D",
+      "note": "coder **加载安全网**（2026-09-26）：`--role coder` 的唯一落刀能力 = `edit` → 入口 `gk_agent_family.load_family(<family>)`；族脚手架（`references/agent-families/*.json`）或红先臂登记表（`references/red-arm-templates.json`）**缺失/不可解析**时，`load_family` 只在 coder **首次 edit 调用**才 `FamilyError`，且失败只回给 agent ⟹ 表现「零落刀 + 报告像在分析」= `references/plugin-loading-test-framework.md` §1 三失败模式的**漏加载静默**（协议红线：漏/误/错加载必须显式报告）。修法 = ① `gk_agent_family.scaffold_status(families_dir)` 单一事实源，三失败模式显式（缺失 ⟹ `missing` / JSON 坏 ⟹ `error` / `family` 字段与文件名不符 ⟹ `tampered`；含红先臂登记表可读性）；② `cmd_monitor` 在**角色白名单之后、所有 --subagent 机制之前**设派发前置闸 —— `--subagent --role coder` 且脚手架不可加载 ⟹ `CODER_SCAFFOLD_MISSING` fail-loud rc=2（不再等到首次 edit）。臂 arm61（健康 ⟹ ready）/ arm62（三失败模式显式）/ arm63（行为臂：脚手架不可加载 ⟹ rc≠0 且含 CODER_SCAFFOLD_MISSING；用未知工具保证修前也不触达 LLM）/ arm64（接线守门臂 + 负向：闸须只对 `--role coder` 生效）。",
+      "test_file": "scripts/test_gk_coder_scaffold_net.py",
+      "shape_k": "arm61 or arm62",
+      "full_k": "arm61 or arm62 or arm63 or arm64",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-F0F0999A3970",
+      "note": "③ 收尾 checksum **不清洗未改动的 state**（2026-09-26，`ECC-F2E2F9E07AC2` 次生缺陷的**区外等价加固**）：`_state_checksum_write` 原为**无条件**重算 ⟹ 调用方**根本没改动**该 state 时（如 `cmd_finding` 带 `--domain`：python 只写域化 state）重算等价 no-op；但若默认 state **已被篡改**，重算会把 `_checksum` 改成与篡改内容相符的值 = **洗白**（完整性旁路）。正常修法（`cmd_finding` 收尾改传解析后的目标 state 或删去）调用点在 `PROTECTED_REGION::gate` 内 ⟹ 不可改；实测**全仓无授权通路**（`_protected_region_check` 无 token 分支 / `cmd_guard_edit` 纯咨询 / `pre-tool-check` 只转发 / `GK_ALLOW_PROTECTED*` 0 实现）⟹ 改走区外：判据 = 「本次 CLI 调用是否改动过该 state」（文件 mtime vs `ps -o etimes= -p $$` 反推的调用起点）；checksum 已相符 ⟹ 零写盘；未改动且失配 ⟹ **拒写 + 留痕 GK_DBG_LOG**（不洗白）；三处合法「直写后补算」（`cmd_discover` / subagent 落库 / `cmd_adjudicate`）的 mtime 必 ≥ 起点 ⟹ 照旧重算（零回归）。臂 arm65（未改动 + 篡改 ⟹ 篡改值**未被洗白**，走真 CLI `finding verify <未知 id>`：python `KeyError` 不写 state 但 CLI 收尾仍调该函数）；负臂 arm66（本次调用时间窗内的 state 仍须重算 —— 守「直写后补算」通路，不入选红先集）。",
+      "test_file": "scripts/test_gk_state_write_single_entry.py",
+      "shape_k": "arm65",
+      "full_k": "arm65",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-28DB1E33027A",
+      "note": "`_grant_node_budget` **向下夹取**（2026-09-26，本轮实测 2 次）：`apply-worktree --code-fix` 派发时调它「为主 agent 追加节点额度」，载荷为 `eb['max']=min(<cur>+g, HARD_CAP)` —— 注释自称 **additive**，但只对 `max ≤ 16` 成立；用户 2026-09-24 裁定把 `edit_budget.max` 抬到 **500** 后，`min(500+g,16)` = **16** ⟹ 实为**向下夹**，后续编辑全被 Gate4 拦死（`used=130/max=16/remaining=0`）。修法 = **永不降**：`eb['max']=max(<cur>, min(<cur>+g, HARD_CAP))`（`remaining` 与 `sessions.*` 域同改）⟹ 对 ≤CAP 者仍按梯度 additive，对人工抬高者**保持不动**。臂 arm67（源形态：`min(int(eb.get('max',0))+$_g,$_EDIT_BUDGET_HARD_CAP)` 形态**不得**存在 + 永不降形态须在）/ arm68（**载荷语义臂**：把函数体内 `_state_write` 载荷**原样取出求值**（非副本），代入 g=4/CAP=16 与 max=remaining=500 ⟹ 结果不得 <500，含 `sessions.*` 域）。⚠ 行为面不可跑：`--code-fix --dry-run` 在授予前返回；非 dry-run 建真 worktree 且授予写 `$STATE_FILE`（非 `--state`）⟹ 会污染真 state（正是本缺陷现场）。",
+      "test_file": "scripts/test_gk_dispatch_autofill.py",
+      "shape_k": "arm67",
+      "full_k": "arm67 or arm68",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-FBAEA0AD4B77",
+      "note": "保护区文案**承诺不存在的通道**（2026-09-26）：BLOCK 文案 `Edits to protected regions require R-phase guard-edit` 自 `116be6d`（2026-05-29 T39 保护区初版）引入后**从未更新**，而它描述的机制语义此后**两度反转**（① 初版 `cmd_guard_edit` = stage=IDLE 提前放行、R 相位内才拦 ⟹ 今天 IDLE 直接拒入 + 行级拦；② 初版 `_protected_region_check` = 纯文件级 BLOCK ⟹ 今天行级 BLOCK + 文件级 WARN，F-REV-45 2026-09-13）⟹ 文案与机制**完全失配**。**查证 R-T 计划（`docs/plan-backup/2026-06-22-batch8-python-migration-plan.md` R-T7.13）无该通道设计**：其攻击面 #6 的防御恰是「保护不能被绕过」；Gate 8 的「活跃 R-phase 授权」是**防裸跑**语义、非保护区放行 ⟹ 该句是**空承诺**。同批纠正 `SKILL.md` 保护区说明与代码相反（称未传 `target_line` ⟹ 整个文件被锁；实为**文件级 WARN 放行**）。臂 arm69（CLI 文案不得含 `require R-phase guard-edit` 但 `is in PROTECTED_REGION` 拦截本体仍在；SKILL.md 半在 red-first 沙箱不判、accept 面必判）。连带同步 `test_eco_integration.py::test_protected_region_file_level_is_warn_not_block`（原断言钉的正是该旧文案）。",
+      "test_file": "scripts/test_agent_cli_wiring.py",
+      "shape_k": "arm69",
+      "full_k": "arm69",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-CB8579F9D826",
+      "note": "edit_budget 扣减**两套实现 / 单位混合却共享同一额度**（区内 `pre_tool_check` 按「触及文件数」+ `billed_files` 去重；区外 `_bill_edit` 按「调用次数」）：任一侧改口径须同步另一侧，否则两面对同一 `remaining` 用不同单位消费（漂移）。区内实现存于 `PROTECTED_REGION::gate` ⟹ 不可改（全仓无授权通路，同 `ECC-D6115EC0C74D`）⟹ 区外等价加固 = 区外「计费单点」头部落一行机器可读声明 `BILL_UNITS_DECL path1=files_dedup path2=calls counter=edit_budget.remaining`（单一事实源），臂从**两侧源码反推**口径与之比对。臂 arm27 = 红先（HEAD 无该声明；两侧反推值须 == 声明值且两侧写同一组计数键；且声明须落**区外**，否则又一个死锚）；arm28（检查器非空转负臂）/ arm29（① ② 共享同一 `sessions.<sid>.remaining` 行为不变式）均非红，**不入选**。",
+      "test_file": "scripts/test_gk_edit_budget_metering.py",
+      "shape_k": "arm27",
+      "full_k": "arm27",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-0530B31DF9F1",
+      "note": "edit_budget「**假计费**」切片：零副作用形态被按次计费。实测（2026-09-26，沙箱技能根 + HEAD 版 CLI + `max=8/remaining=8`）：`apply-worktree --code-fix --dry-run` ⟹ 8→7（该形态在建 worktree **之前** return）、`apply-worktree --reclaim`（**缺省即 dry-run**，只报告）⟹ 8→7（同族）；对照 `state-patch` 真写 state ⟹ 8→7（属应当）。同 finding 的「单位混合」面已在 `ECC-CB8579F9D826` 机检化（区外声明 + 两侧反推臂），本切片只修**假计费**。修法 = 区外计费块前置「零副作用豁免」闸 `_bill_is_noop_invoke`：**只**豁免**有据**的显式形态（`apply-worktree` 的 `--code-fix`+`--dry-run`；`--reclaim` 不带 `--apply`；`commit --verify-only`——该分支校验后直接 return），**不**放宽到命令级（否则整类命令免费 = 额度失效）。⚠ `advance --check` 本跑未取到「成功路径零副作用」证据 ⟹ **不**豁免，另登记。臂 arm30（行为：前两条不得扣 + 真写仍须扣的正向对照）/ arm31（形态：豁免闸须存在 + 声明覆盖已取证形态 + 须接线 + 不得退化成命令级）。",
+      "test_file": "scripts/test_gk_edit_budget_metering.py",
+      "shape_k": "arm30 or arm31",
+      "full_k": "arm30 or arm31",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-1F6514B84334",
+      "note": "F2 残留**真因定位**（2026-09-26，实测非推断）：`accept --full` **每轮**扣主 agent 会话 `edit_budget.remaining` **10**（两次独立量测 305→295 / 295→285 逐条一致；会话 `billed_files` 不变 ⟹ 全走区外 `_bill_edit` 的**按次**面，非 Gate4）。真因 = 5 个测试文件用**仓内真 CLI**、无状态隔离地跑**写类子命令**（计费**先于** `_dispatch` ⟹ 命令随即失败也照扣）；命令分布由 `_bill_edit` 调试日志取证（plan-refinement×5 / apply-worktree×4 / audit×1），逐文件单跑量测 2/3/3/1/1 = 10 ✓。⚠ 附带实测：`--state <p>` **挡不住**计费（`_bill_edit` 读 `${STATE_FILE:-}`，`--state` 只在 `cmd_*` 内生效、晚于计费）⟹ 修法不能用 `--state`。修法 = 五站点声明 `GK_BUDGET_OVERRIDE=1`（探测≠用户编辑，与生产面 `gk_agent_edit._cli_gate_ok` 同一口径，无第二机制）；实测同 5 文件 **10 → 0**（55 passed）。臂 arm32 = 五站点声明存在（HEAD 全无 ⟹ 红）。",
+      "test_file": "scripts/test_gk_edit_budget_metering.py",
+      "shape_k": "arm32",
+      "full_k": "arm32",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-033715F5215A",
+      "note": "`advance <stage> --check`（dry-run）被**按次计费** = 同族「假计费」的**未纳入**残留（实测沙箱 `remaining` 8→7）。本轮取证改走**代码路径穷举**（非行为成功路径 —— 合成 standing state 下守卫恒拒：`advance ECO-AUDIT/EDIT/READ/DOC` 皆 rc=1，实测）：python `gk_advance.py` 的 6 处 `_write_state` 全在 `if not dry_run:` 内 + 成功路径 `if dry_run: return {check_only:True,…}` **早退**（终写不可达）+ `_monitor_eval` 见 dry_run 即 return None（不写 `rejected_edits`）+ `_edit_budget` 亦 `not dry_run`；bash `cmd_advance` 的 4 个写块（red ledger / auto-audit / audit_extra / achievements+context）全在 `[ \"$dry_run\" = \"false\" ]` 下 ⟹ **零 state 写**成立。修法 = 复用同一豁免闸 `_bill_is_noop_invoke` 增 `advance` 的 `--check` 形态（无第二机制）。臂 arm34（行为：--check 不扣 + 非 --check 仍扣的**正向对照**）/ arm35（形态 · **下限守卫**：豁免声明 + bash `--check` 语义锚 + `dry_run=false` 守卫计数 ≥5 + python `not dry_run` 计数 ≥ `_write_state` 调用点数 + `if dry_run:` 早退锚）。⚠ arm35 为**下限**非穷举，已在臂内与 docs 如实标注。",
+      "test_file": "scripts/test_gk_edit_budget_metering.py",
+      "shape_k": "arm34 or arm35",
+      "full_k": "arm34 or arm35",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-D03CE3E6CBC9",
+      "note": "RC6 目录层残留①：**未登记空壳目录**（`git worktree list` 看不到、无 `.git`、递归无文件）不在任何回收面。2026-09-26 实测 `--reclaim` dry-run 报 `total:1, items:[]`（只认主树），而 worktree 根下仍有空壳（`agent/<family>` 形态；用户手工清过 7 个但无人守 ⟹ 会再生）。修法 = `gk_worktree_reclaim.scan_residue()`（保守：只收「递归无文件的目录」+「孤儿 state」，一律排除已登记子树 / `.gk-trash` / `.git`；父子同为空壳只报**最上层**）+ `reclaim` 报告新增 `residue`；dry-run 只报，`--apply` 才清（空壳无内容可归档 ⟹ 先 `os.walk` 二次确认无文件再 `rmtree`）。臂 rc6_shell_dir（行为：报出顶层空壳 + dry-run 零写 + apply 清理）。",
+      "test_file": "scripts/test_gk_worktree_reclaim.py",
+      "shape_k": "rc6_shell_dir or rc6_orphan_state",
+      "full_k": "rc6_shell_dir or rc6_orphan_state",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-35AC08DA96F0",
+      "note": "RC6 目录层残留②（回收链未闭合的**目录层**切片）：**非 worktree 残留** `root/dryrun/crossfull-*.state`（`audit --crossfull --isolate` 的独立 state）不在任何面 —— 实测 4 组 `.state`+`.lock`（2026-09-13×3 + 09-25×1）从未被回收；且 `_NOISE` 把 `.gatekeeper.state*` 一律当噪声（③，见 `worktree_state` docstring）。修法同 `scan_residue()`（`orphan_state` 形态）：dry-run 报出，`--apply` **先归档（内容逐字一致）再删**（沿用本模块「归档前置」硬约束）。臂 rc6_orphan_state（行为：报出 + dry-run 零写 + apply 归档后删）。",
+      "test_file": "scripts/test_gk_worktree_reclaim.py",
+      "shape_k": "rc6_shell_dir or rc6_orphan_state",
+      "full_k": "rc6_shell_dir or rc6_orphan_state",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-46C22B11AD85",
+      "note": "T3②/RC3′「域 ledger 分裂**可检**」（2026-09-26）：同一计划名下并存多套台账（base 113 条 vs plan-basename 域 138 条，id 交集仅 21、6 条同 id 状态相反），而仓内**无任何只读面**能同时看见 ⟹ 单查 base 即误判「不在册」（实测误判 4 条 `ECC-7FF005759CE2` 等）。修法（只读，零写盘）= `gk_finding.ledger()`：枚举 state 同目录**三源**（base + 全部**活体** `.gatekeeper.state.*` 域 state + 各自 `*.finding-archive.jsonl`）给 per-source 计数 + `shared_ids` + `conflicts`（同 id 状态不一致清单）；`resolve_plan_state()` = 「本计划应落哪套 state」**单点判定**（声明域 → 域 state；未声明 → base + 可推导域提示，复用 `meta_state_domain`/`derive_state_domain` 单源）。CLI 走 `finding ledger`（`cmd_finding` 是通用转发器 ⟹ 零 CLI 改动）。⚠ 真实现场回归（首版漏）：state 同目录混有 `.bak-*`/`*.tmp`/`corrupt-*`/`*.json` 旁挂 ⟹ 须 `_is_live_ledger_name` 收紧枚举 + `_read_findings_source` 防御式只读（顶层 list 的旁挂曾令 `load_findings` 崩 `'list' object has no attribute 'setdefault'`）。臂 ledger_enumerates_three_sources（三源计数可复算 + 冲突可见）/ plan_target_single_point（声明→域 / 未声明→base+would_be）/ ledger_is_read_only（零写盘负臂）/ ledger_skips_backups（非活体不收 + 顶层 list 不崩）/ cli_ledger_subcommand_wired（接线臂）。",
+      "test_file": "scripts/test_gk_finding.py",
+      "shape_k": "ledger_enumerates_three_sources or plan_target_single_point",
+      "full_k": "ledger_enumerates_three_sources or plan_target_single_point or ledger_is_read_only or ledger_skips_backups or cli_ledger_subcommand_wired",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-A2ECF8371F96",
+      "note": "T3 序③ 前置①：tier4 质询 cap（`SUBA_TIERS[4].token_budget`）低于本型实测成本。口径订正 = cap 比的是**成本当量**（`miss + hit×_PRICE_HIT_RATIO + completion×_PRICE_OUTPUT_RATIO`，`_BudgetHooks.on_llm_end`），**非 raw**（raw 含缓存重发量，`subagent_runner.py` `_BUDGET` 注释「口径警告…禁止直接比」明令）；原 finding 引 hook-xenv §15.1 的 **raw**（1,259,506）属口径错误，但结论由 2026-09-26 单臂质询**成本当量 1,146,006 > 1M**（`budget_status=hard` 截停）独立坐实。修法 = 1,000,000 → **1,500,000**（+31% margin，待补课 7 臂成本数据再标定）+ tier 表明示口径。臂 arm53（值下限 + 口径关键字）。",
+      "test_file": "scripts/test_gk_dispatch_budget_single_source.py",
+      "shape_k": "arm53_tier4_cap_covers_measured_cost",
+      "full_k": "arm53_tier4_cap_covers_measured_cost",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-8AA064279810",
+      "note": "T3 序③ 前置②：`moa-aggregate` 对 plan-refinement 报告 **6/6** 标 `suspect:zero_findings` —— 报告实质住 `conclusion`/`challenges`/`verdicts`/`kept`/`slashed`（`findings[]` 本就空，它不是 code-review 型报告），而 `_suspect_flags` 原判据**只**认 findings 的 worked/failed/not_tried ⟹ 聚合器 schema 与报告 schema 错位 ⟹ 六臂有效结论被统一降权（聚合『跑了』但结论无效）。修法 = 有任一「实质字段」（challenges/verdicts/kept/slashed/seven_dim_score）即不算零发现；负臂钉住「真零实质仍须标」。臂 pr_report_substance_not_zero_findings + 负臂 zero_findings_still_flagged_when_no_substance。",
+      "test_file": "scripts/test_gk_moa_aggregate.py",
+      "shape_k": "pr_report_substance_not_zero_findings",
+      "full_k": "pr_report_substance_not_zero_findings",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-74B7327230D8",
+      "note": "subagent evidence 形态损坏：落库块原式 `e.split(':')` 遇 Windows 盘符路径（`C:/…/x.py:13`）把**盘符冒号当分隔符** ⟹ file='C'、lines 塞全路径；渲染侧 `file + ':' + lines` 又拼回原样 ⟹ 症状被掩盖。修法 = 归一下沉到**已跟踪** `gk_subagent_report.normalize_evidence()`（按**首个「冒号+数字」**切）—— 不新建模块（red-first 沙箱会把未跟踪新脚本软链回工作树 ⟹ 假绿）。⚠ 首版把 import 误落通用 `_state_write()` 载荷 ⟹ 落库块 NameError 被 `2>/dev/null||true` 静默吞；静态臂已升为「import 恰一处 ∧ 与调用同载荷」。静态行为臂 ×3 + 接线臂 ×1",
+      "test_file": "scripts/test_gk_evidence.py",
+      "shape_k": "evidence_drive",
+      "full_k": "evidence_drive or cli_wired",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-A07BB84251AC",
+      "note": "审查管道 ctx 漂移族（2026-09-27 实测）：① `cmd_plan_refinement --adjudicate` 在 rc≠0 时**丢弃** `gk_task_gate adjudicate` 已产出的富错误（`phase_mismatch` + record/current context + 可操作 hint），只回「记录未落地」⟹ 现场无从判断；② 同函数 commit 段 `>/dev/null` 丢弃 `gk_task_gate commit` 真因；③ 会话/全局指针（`discover` 写）被非 discover 命令**静默跟随** ⟹ 治理 state 语义被换（`standing→analysis`）⟹ 入队 ctx 与裁决 ctx 不符 ⟹ adjudicate rc=1 + commit 失败。修法 = F-1 透传富错误 / F-2 回传 `commit_out` / F-3 `GK_PLAN_POINTER_STRICT` 解绑（零回归 opt-in；默认收紧须先补「命令→计划」透传，另立项）。静态臂 ×3 + 负臂 ×1（HEAD 必红）",
+      "test_file": "scripts/test_gk_plan_refine_pipeline.py",
+      "shape_k": "p1_adjudicate_passthrough",
+      "full_k": "p1_adjudicate_passthrough or p2_commit_reason_surfaced or p3_strict_pointer_killswitch",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-B9395FC8E23C",
+      "note": "序④-A v5 会话副本 state 治理落刀（2026-09-27，组3 审查落刀面闭合）：废 `--session` 的 cp 副本 / set-top 副本 / 副本预算重置（甲 = 单 state + `edit_budget.sessions.<sid>` 分片，`--session <name>` 仅标签）；改「幂等归档（A5：有 diff 才入旁挂，无 diff 直接删）+ bind 承接（worktrees-extra 唯一写通路）+ 归主树 state」；并清除虚假 note『就近 .gatekeeper.state 自动治理』。归档 helper 落 **python 侧** `gk_state_patch.cmd_session_state_archive`（已跟踪文件，禁 bash 内联不可测）。本批闭合 G2b（旁挂 schema 定义 + 命名族单源 `<state>.<kind>-archive.jsonl`）与 A5 口径；arm-lockobs 打 `state_lock` 抛错 + arm-sidattr 另见联动项。形态臂 ×5 + 行为臂 ×5（HEAD 必红：HEAD 无该 helper 且 --session 含 cp/set-top）。",
+      "test_file": "scripts/test_gk_session_state_landing.py",
+      "shape_k": "s1_no_copy_no_settop",
+      "full_k": "s1_no_copy_no_settop or s2_binds_worktrees_extra or s3_archives_before_delete or s4_note_is_truthful or s5_state_file_is_base or archive_helper_diff or archive_helper_identical or archive_helper_absent or archive_helper_dry_run",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-D44630007AE9",
+      "note": "F-3 收口：plan 指针「命令→计划」对账（2026-09-27）。病象 = 会话/全局指针（`discover` 写）被**非目标命令**静默跟随 ⟹ 治理 state 语义被换（`standing→analysis`）⟹ 入队/裁决 ctx 不符。本批：① 顶部**派生** `GK_CMD_TARGET_PLAN`（env 优先；`plan-refinement`/`plan-lint` 位置参派生，口径 `basename <plan>.md` 同 discover）；② 指针块**默认对账** —— 显式目标 ≠ 指针 `plan` ⟹ 不跟随（相符/无声明 ⟹ 零回归跟随）；③ `GK_PLAN_POINTER_STRICT=1` 保留（无声明时进一步收紧）。形态臂 ×3（HEAD 无 `GK_CMD_TARGET_PLAN` 必红）+ 回归护栏 c4（HEAD 已绿，排除在 -k 外）。",
+      "test_file": "scripts/test_gk_plan_pointer_target.py",
+      "shape_k": "c1_cmd_target_plan_declared",
+      "full_k": "c1_cmd_target_plan_declared or c2_mismatch_blocks_follow or c3_derives_from_known_commands",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-6B5775F09911",
+      "note": "序④-A v4① arm-lockobs（联动面）：BLOCK 路径 state 锁获取失败（`state_lock` 抛 `TimeoutError`）被 `_record_block_intent` 的 `except Exception: pass` 静默吞；且 `rec` 在 `with state_lock` **块内**赋值 ⟹ 抛错时 `rec` 仍 None ⟹ 持久源亦不写（**ring + 持久源双丢**）⟹「0 命中 ≠ 无超时」⟹ A4「base lock 串行可接受」只能待补测。修 = 该失败须落**独立可观测**记录（`<state 同目录>/hook-block/lock-timeout.jsonl`，与 block 误报率分母**分账**，不污染 Q3），且保持 fail-quiet。行为臂（monkeypatch `state_lock` 抛错 → 断言可观测 + 分账）+ 负臂（可观测落点自身失败不破 fail-quiet；负臂 HEAD 已绿，排除在 -k 外）。",
+      "test_file": "scripts/test_gk_lock_observability.py",
+      "shape_k": "lock_timeout_is_observable",
+      "full_k": "lock_timeout_is_observable",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-2FB0B4D0F356",
+      "note": "B3（2026-09-27 定稿＝方案①）：`--accept --full-regression`（opt-in）—— 在**合并树**跑 `bash <merge_tree>/scripts/_accept_cli.sh --full`，结果落 `accept.full_regression:{tree,rc,verdict,new_failures,fixed,summary,error}`；`--merge-tree` 缺省 = 技能仓根（`Path(__file__).resolve().parent.parent`）；复用 `--accept-timeout`；**fail-loud**（缺树/脚本缺失/超时/rc=2 ⟹ `verdict:\"unknown\"`，禁静默 pass，对齐 `_accept_one_worktree`）。红先臂 ×2（HEAD 版 argparse 无该 flag ⟹ `unrecognized arguments` rc=2，必红）+ 负臂（单独用须 fail-loud；HEAD 亦 rc≠0 ⟹ 恒绿，**排除在 -k 外**）。族 = 新建 `F-MoA-full-regression`。",
+      "test_file": "scripts/test_gk_moa_accept.py",
+      "shape_k": "full_regression_flag_recognized",
+      "full_k": "full_regression_flag_recognized or full_regression_fail_loud_without_tree",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-3BECE9FAD12A",
+      "note": "C3①/C3②/C3③（2026-09-27 定稿）：subagent 落库块（cmd_monitor，`GK_HMAC_VALID=` 锚 → python -c 收尾行）此前以 `2>/dev/null || true` 收尾 ⟹ dump_state 写失败/载荷异常**静默吞**（subagent_history 不写而 ECO-EDIT→ECO-AUDIT 门禁链断裂；亦掩盖 C1/C2/C4 的瘦身失败）。修法 = ① 收尾行改 `2>>GK_DBG_LOG` + `|| { 报 HISTORY_WRITE_FAILED + 留痕 + return 1; }`；② 载荷内 `if not dump_state(...): print(JSON); sys.exit(3)`；③ 落库条目补 output_file/report_file 指针（经 GK_OUTPUT_FILE/GK_REPORT_FILE env 传入，**export 一行**避免改派发行而打断既有 3 臂锚点）；④ 只读对账面 `gk_audit_state.reconcile_subagent_reports`（**窗口内双向**：entry→file 与「epoch ≥ 最老条目 epoch 的 file→entry」判 FAIL，更老文件归 aged_out 仅计数）挂进 `audit --state` 的 `subagent_reports` 检查项。判据面 = 落库段（`GK_HMAC_VALID=` 锚 → 收尾行，**止于收尾行**以避开 L4129 注释里的 _state_checksum_write 误截）；8 臂同表（静态①②③④ + 行为⑤⑥）。",
+      "test_file": "scripts/test_gk_history_failloud.py",
+      "shape_k": "history_block_terminator_not_silent or history_block_fail_loud_marker or history_block_dump_failure_guarded or history_entry_carries_file_pointers or reconcile_detects_entry_without_file or reconcile_detects_file_without_entry_in_window or reconcile_ignores_aged_out_files or audit_state_emits_subagent_reports_check",
+      "full_k": "history_block_terminator_not_silent or history_block_fail_loud_marker or history_block_dump_failure_guarded or history_entry_carries_file_pointers or reconcile_detects_entry_without_file or reconcile_detects_file_without_entry_in_window or reconcile_ignores_aged_out_files or audit_state_emits_subagent_reports_check",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-D9D2382BB535",
+      "note": "C4（2026-09-28 定稿）：落库白名单 entry 丢机检字段面（verification/evidence_anchor/gx_status/token_usage/agent_payload/guardrail/turns/mode/nonce/timestamp）。已核：docs/analysis/subagent/<subagent_id>.json 已=全量 ECC ⟹ 外置面已存在。修法 = ① 落盘校验（可解析 + 关键键非缺席，失败杜 fail-loud 标记 DUMP_REPORT_INVALID）；② entry 增 machine_check 最小摘要（字节上限常量 _MACHINE_CHECK_MAX_BYTES=512，由全量派生）；③ 投影键集单源常量 _ENTRY_KEYS（防再丢面）。判据面 = 落库段（GK_HMAC_VALID 锚→收尾行）+ 落盘段（local sub_out_file=→审计留痕注释）。4 臂同表。",
+      "test_file": "scripts/test_gk_machine_check.py",
+      "shape_k": "entry_carries_machine_check or machine_check_size_capped or entry_projection_keys_single_source or report_dump_validated or payload_writes_machine_check",
+      "full_k": "entry_carries_machine_check or machine_check_size_capped or entry_projection_keys_single_source or report_dump_validated or payload_writes_machine_check",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-0F1DAF8C787C",
+      "note": "C1②（2026-09-28 落刀）：subagent_history 溢出条目原以 hist.pop(0) **直接丢弃**（不可回溯）。修法 = 先 append 到旁挂 <state>.history-archive.jsonl（append-only，可回溯、不删），再出窗；归档写失败不阻断但留痕（HISTORY_ARCHIVE_FAILED）。判据面 = 落库段（GK_HMAC_VALID 锚→收尾行）。C1① 瘦身投影（conclusion 等大字段外置）与 C4④（MoA 外置优先）耦合，**本批未落**，单列残。2 臂同表（形态 + 行为：预置 120KB history 真跑载荷）。",
+      "test_file": "scripts/test_gk_history_archive.py",
+      "shape_k": "history_block_archives_overflow or overflow_entries_archived_not_dropped",
+      "full_k": "history_block_archives_overflow or overflow_entries_archived_not_dropped",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-CB64985A85AD",
+      "note": "序④-A（2026-09-28）：gk_route_center._skill_dir_trusted 首层要求 Path(sd).name == 'spz-gatekeeper-r-sequence'，而从 feature/agent worktree 调用时目录名=分支名/sha8 ⟹ 同仓合法 worktree 被判不可信（worktree 内全量验收 +9 红）。修法（计划 §3092 方向）= 先按 git 权威视图归一到该仓主 worktree（复用 _main_worktree，禁第二实现）再校验名字/结构；非 git/非本仓 ⟹ 回退原样（不放松空壳伪装）。§3179 要求先查保护区归属（gk_route_center.py 无 PROTECTED_REGION，非保护区）+ 配负臂。红先集只含正臂；负臂②③为守边界臂，**不入选 -k**。",
+      "test_file": "scripts/test_gk_skill_dir_trusted.py",
+      "shape_k": "skill_dir_trusted_accepts_repo_worktree",
+      "full_k": "skill_dir_trusted_accepts_repo_worktree",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-316C5C5F4168",
+      "note": "§19.7 host-3 幻影判据（2026-10-04 二轮质询驳回「host-3 可执行」②）：判据「host 只许写索引键、禁写载荷键」**无代码载体** —— `set-nested`/`append-list`（host 唯一写面）原只挡空段/`_` 前缀/`worktrees_extra` ⟹ host 可自助写 `gate_data.<载荷键>`（subagent_history/subagent_last/task_pipeline/ecc_findings）= 大体积臂输出绕过唯一写入者落库。修法 = `gk_state_patch._PAYLOAD_KEYS` 单点登记（名单）+ `_path_denied` 写点断言（含漏 `gate_data.` 前缀形态）。臂 = 4 红先（名单存在 / 含前缀拒 / 漏前缀拒 / append-list 拒）+ 1 负臂（索引键 `satellite_index` 须放行，防「全禁」）。形态 = guard-rejects-key。",
+      "test_file": "scripts/test_gk_host_write_surface.py",
+      "shape_k": "payload_keys_single_source or set_nested_rejects_payload_key or set_nested_rejects_payload_key_bare or append_list_rejects_payload_key",
+      "full_k": "payload_keys_single_source or set_nested_rejects_payload_key or set_nested_rejects_payload_key_bare or append_list_rejects_payload_key or allows_index_key",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-688A6E98950C",
+      "note": "§18.2 判据 9（2026-10-04）：`gk_finding.close()` 置 `basis_ref = evidence_hash or \"\"` **无闸** ⟹ 无证据也可 close（实测 `ECC-DB4E4CBDCF7C` 05:39 登记 / 05:58 manual 关闭、basis_ref=\"\"）= 「登记即闭合」洗白形状。修法（拍板：**不**复用 `closure_oracle` —— 其语义是「闭合是否需人审」`mechanical|judgment`，非「闭合是否有据」）= `gk_self_check.check_ecc_form` 增判据：status∈{closed,fixed} 时 basis_ref 非空 **或** verify_source==\"register-only\"，否则 FAIL。臂 = 1 红先（无据关闭 FAIL）+ 3 零回归/escape（register-only 放行 / 有据放行 / open 不判）。形态 = audit-flags-combination。",
+      "test_file": "scripts/test_gk_ecc_closure_basis.py",
+      "shape_k": "closed_without_basis_fails",
+      "full_k": "closed_without_basis_fails or register_only_escape_passes or closed_with_basis_passes or open_unaffected",
+      "expect": "red"
+    },
+    {
+      "finding": "N4-BATCH-DISPATCH",
+      "note": "n4 T1+T9：计划质询由单臂升为 3 组×K 批。T1 = `cmd_plan_refinement` 入队段一次入队 3×K 条 pending（id 同秒同 target+task 会撞 `make_id` ⟹ 需加盐唯一；批级共享 `batch` 键 = 批身份，**非** arm_group，单条不加 ⟹ 零回归）；T9 = 批级消解出口 `gk_task_gate.resolve_ids('last-batch')`（M1：原 `resolve_id` 只取队尾单条、无 batch 维度）＋ CLI `--adjudicate last-batch` 逐臂**显式 id** 定格（R7/R10：全批消解无僵尸、每 id 恰消费一次）。R9 = 旧 `--adjudicate last` 单条语义零回归（`r9_old_last_still_single` 为**非红**回归守卫，不入选 -k）。静态臂 ×2（bn1 入队接线 / bn2 批消解接线）+ 行为臂 ×4（count 入队 / id 唯一+batch 键 / resolve_ids 整批 / 批全消费）；HEAD 无 count 形参与 resolve_ids ⟹ 全红。⚠ 3 组**同文本**（§7-Q1：单一 `--task` 为本源，组语义仅由 arm_group 标签承载，与用户 2026-10-05「单一 --task」裁定一致）",
+      "test_file": "scripts/test_gk_pr_batch_dispatch.py",
+      "shape_k": "t1_cli_enqueue_wires_arms_per_group or t2_cli_dispatch_resolves_last_batch",
+      "full_k": "t1_submit_count_adds_n_records or t1_records_share_batch_key_and_unique_ids or t9_resolve_ids_last_batch or r7_batch_fully_consumed or t1_cli_enqueue_wires_arms_per_group or t2_cli_dispatch_resolves_last_batch",
+      "expect": "red"
+    },
+    {
+      "finding": "PAPER-PAGES-HEURISTIC",
+      "note": "论文页数判据假阳性（2026-10-05，用户实测驱动）：check_pages 原为纯字符启发式 sum(源字符)/3200，除数对 ACM/AAMAS 双栏偏低约 1.85x——本仓 aamas2027 实际编译 7 页（含引用）却被估成 12.9 页 ⟹ 误报 over-limit（desk-reject 假警报）。修法 A+B：B（首选）= papers_dir 有约定编译产物 main.pdf/paper.pdf ⟹ 用 pdfinfo（回退 pypdf）取真实页数；A（兜底）= 无 PDF 时除数由 3200 校准为 8000 源字符/页（依据=已接收论文真编译页数实测：aamas2026-fwm 55,988/7 约 8.0k 上界、aamas2027 41,328/7 约 5.9k 下界，取上界最保守）。红先臂 x2（A：约 41k 字符不得报超限；B：有 main.pdf 须用 pdfinfo 真页数）——HEAD 全红。",
+      "test_file": "scripts/test_gk_paper_review.py",
+      "shape_k": "pages_heuristic_clears_real_seven_page_paper",
+      "full_k": "pages_heuristic_clears_real_seven_page_paper or pages_prefers_compiled_pdf_pages",
+      "expect": "red"
+    },
+    {
+      "finding": "N4-MONITOR-GUARD",
+      "note": "n4 T3/T12（2026-10-05）：cmd_monitor 的批身份/组别 flag（--arm-group/--batch-plan/--batch-narrow/--batch-epoch）只在 --subagent 派发面有意义，与其它 mode（如 --local）同用会静默注入 env 而无消费方（--arm-group 曾可配 --local 误导）⟹ 补 mode 守卫 fail-loud exit 2。HEAD 无此守卫（monitor --local --arm-group G3 落 rc=1 stage required）⟹ 静态臂红；落刀后 rc=2 + 具名错误。",
+      "test_file": "scripts/test_gk_moa_batch_identity.py",
+      "shape_k": "cli_monitor_guards_batch_flags_to_subagent",
+      "full_k": "cli_monitor_guards_batch_flags_to_subagent",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-164BC163D0A5",
+      "note": "MCP 写归一须同步调用上下文（技能自维护）：`_cmd_identity`（命令面）归一后显式回写 `_CALL_TOOL`/`_CALL_CMD`（L2978-2979），而 `_write_identity`（写面）归一后只改局部 tool_name/file_path、未回写 `_CALL_TOOL`/`_CALL_TARGET` ⟹ MCP 写被 BLOCK 时 hook_block_log 记原始名（run_mcp/mcp__… ∉ EDIT_TOOLS）+ 空 target（路径在 tool_input[args]，scope 段取不到）⟹ 防线②「工具失效→提权绕过」对 MCP 写整条失明（原生 Edit 同链可拦 = 不对称旁路）。修法 = 写归一分支内与命令面同型同步两全局。臂 2 例：block 日志身份 = 归一 Write + 真目标；端到端 MCP 写被拦→shell 直写同目标被 R0.5 拦。",
+      "test_file": "scripts/test_pre_tool_hook.py",
+      "shape_k": "mcpwriteblock",
+      "full_k": "mcpwriteblock",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-0319B418F9A7",
+      "note": "finding register **归属路由硬门**（档 1，2026-10-09）：register 写 CLI 解析到的 STATE_FILE（启动块跟随计划指针），**不按 finding 的归属计划路由** ⟹ 在 Y 计划活跃时登记 X 计划的 finding 必落错 state（本会话复发 2 次：ECC-E34434E64B82 误落 base、ECC-2418DB9463A2 误落额度银行计划 state）。修法 = 落盘前用单源 resolve_plan_state 求「**裸** docs/plans 锚」（全匹配，不含 MoA 的 plan: 前缀式）的归属 state；声明域 + 目标 state 存在 + ≠ 当前 state ⟹ 默认 fail-loud ECC_FINDING_ROUTE_DRIFT；--ack-drift 显式放行并记 route_drift 留痕（带 fid、无 to）。硬门仅落 CLI 手工面（main register 分支 route_hard=True），模块内/自动化调用跳过（防误伤 MoA/prose/estimator 管线）。红先集只含 2 条对修前版真红臂（跨计划锚被拦 / ack 放行+留痕）；其余 6 臂（--domain 落归属 / 无计划锚 / 本域不误报 / 目标未建 / 内部面跳过 / reconcile 不污染）修前即绿 = 零回归/负臂，**不入选**红先集（--phase=full 才跑全 8 臂）。",
+      "test_file": "scripts/test_gk_finding_route_drift.py",
+      "shape_k": "blocks_cross_plan or ack_drift_allows",
+      "full_k": "route_drift or domain_flag or no_plan_anchor or owning_state or target_state_missing or internal_register or ack_drift or reconcile_clean",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-D72764C0D354",
+      "note": "edit-log K/N **读面无 CLI 通路**（2026-10-09）：`gk_budget_ledger.py calibrate|edit-stats` 无 CLI 包装，直跑被 pre_tool_hook 拦（绕过技能内置 cmd）；`audit --all` 只跑 audit --state 子域（gk_audit_state mode=state 不含 edit_log；含 edit_log 的 mode=all 无人调用）⟹ edit-log 载体「只写不读」= agent 结构性无法标定 开关 B（ECC-F66552EC9DA3）。修法（区外、不新增命令——_CMD_REG 在 PROTECTED_REGION::gate 内）= 在既有 `calibrate` 上开 `--edit-log [--stats]` 分支委托读面单源 gk_budget_ledger.py；无 --edit-log ⟹ route-center 五层校准逐字不变。红先集 = 3 臂（reaches_ledger / reaches_edit_stats / branch_wired）；route_center_preserved 为**非红**回归守卫（HEAD 即绿），不入选。",
+      "test_file": "scripts/test_gk_calibrate_edit_log.py",
+      "shape_k": "reaches_ledger or reaches_edit_stats or branch_wired",
+      "full_k": "reaches_ledger or reaches_edit_stats or branch_wired or route_center_preserved",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-3D144703E751",
+      "note": "宿主解析缺口（大肥鱼家族扩展，2026-10-10）：PS 会话下 RunCommand 的跨宿主流程摩擦 —— ① **别名劫持**：`ls -d <path>` 被 PS 解析成 `Get-ChildItem -Depth <path>`（-Depth 只收整数）⟹ 报错/静默错值；② **POSIX 控制语法**：`for … do … done` 在 PS 上 ParserError（实测 `Missing statement body in do loop`）。修法 = 新增同族两闸 R0.12（命令位别名 + POSIX 专属旗标）/ R0.13（命令位 POSIX 控制语法），双分支同挂 + 引导 `wsl -e bash -lc`。红先 27 臂对修前版全红（检测体缺席 = AttributeError）。",
+      "test_file": "scripts/test_pre_tool_hook.py",
+      "shape_k": "a1 or f1",
+      "full_k": "a1 or f1 or pshost",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-6056478D1353",
+      "note": "CLI 语义摩擦三条（2026-10-10，技能自维护）：① `push` 首参 flag 被当 action 吃掉（`push --repo X` ⟹ action 取成 `--repo`、repo 回落 MAIN_REPO_WSL、其余 flag 全丢）；② `push confirm` 直推 URL 不写 `refs/remotes/<remote>/<branch>`（本地 status/branch -vv 与远端脱节）；③ 宽度 reclaim（`--all`）对「已并入主树 HEAD 且干净」的 worktree 不自动释放 claim ⟹ 须逐条 `--path` 枚举（流程摩擦）。修法：① action 只认非 flag 首参；② confirm 成功后 `git update-ref` 补刷 tracking ref；③ 新增 `_is_merged_clean` + `--all` 内自动释放回收（fail-closed）。红先三臂（功能·离线）对 HEAD 全红；两条 `keeps_guarded_*` 为守卫臂（修前即绿）。",
+      "test_file": "scripts/test_gk_cli_friction_fixes.py",
+      "shape_k": "leading_flag or confirm_refreshes or autoreclaims_merged",
+      "full_k": "leading_flag or confirm_refreshes or autoreclaims_merged or keeps_guarded",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-3FD7DEAF6078",
+      "note": "测试层墙钟钉子（2026-10-10，技能自维护·提速）：`--dist load` 并按用例分片暴露两处慢点 —— ① `TestMonitorGitnexusStateWriteChecksum::test_checksum_consistent_after_run` 真跑 gitnexus（实测 ~69s）→ 以 `GK_GX_TIMEOUT=2` 短路**外部重依赖**（判据 = state 写入面，非图正确性）；② `TestSubagentRoleReachesRunnerEnv::test_dispatch_role_reaches_runner_env` 因 `--role` 触发 L0 全量预取（gitnexus detect-changes + 裸 `gitnexus status` 脏树比对 ~19s + 内嵌整跑 pytest 的 self-check，实测合计 ~38s）→ 以 `GK_GX_DIR` 指向**未索引**目录令 `gk_l0_prefetch --repo \"\"` 立即走既有降级路径。该降级路径**实测崩溃**（WSLENV 并入循环 `${!_k}` 对「export 未赋值」变量在 `set -u` 下 unbound，GX_REPO 解析不出仓库名时正是此态）⟹ 同批修 `[ -n \"${!_k:-}\" ]`，恢复文档承诺的「图能力不可用 → 降级不阻断」。红先臂对 HEAD 红：未修 CLI 时派发在桩之前即死（rc=1 无输出）。",
+      "test_file": "scripts/test_eco_integration.py",
+      "shape_k": "test_dispatch_role_reaches_runner_env",
+      "full_k": "test_dispatch_role_reaches_runner_env",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-7FF904ADF22C",
+      "note": "CLI 启动固定开销（2026-10-10，技能自维护·提速）：启动块**每次 spawn 无条件**跑 `resolve-state --derive-domain`；其成本主成分不是 plan 金字塔搜索（`meta_state_domain('')` 已在 gk_route_center L801 短路），而是 `gk_state_route.resolve_state` **step 4 归属冲突纠正扫描** `_candidate_isolated_states`（glob × 全 extra_roots + **逐候选** `_load_worktree`/`_owned_by_skill`（含 git），实测 17 候选 ~1.3s/次）。L1 惰性化：`STATE_FILE_EXPLICIT=1`（测试/集成注入态）下**跳过全量候选扫描**、不自动纠正（与启动块「显式态无指针通道」口径同构）；非显式调用方逐字不变。红先臂用计数 spy 断言「是否发生扫描」（黑盒触发面 = env，HEAD 上仍扫描 ⟹ 干净 assert 失败）。",
+      "test_file": "scripts/test_gk_state_route.py",
+      "shape_k": "test_explicit_state_skips_candidate_scan",
+      "full_k": "test_explicit_state_skips_candidate_scan",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-6007804DD7BD",
+      "note": "单出网口闸 R0.14（2026-10-10，技能自维护·安全）：浏览器 MCP 的**导航/取网**动词（navigate/goto/fetch/request/…）此前既不进写面（MCP_WRITE_VERBS）也不进命令面（MCP_EXEC_TOOLS 精确等值白名单只收 shell 执行器）⟹ 到达 hook 却**无面认领** = 第二出网通道，违 `scripts/gk_evidence.py` L5「一切出网走 _prior_art_fetch」。修法：新增 `_egress_identity`（哨兵名 `McpEgress`）+ 普适 BLOCK（位点**先于** scope_out），白名单精确等值（click/type/dom_tree/screenshot 属本地页面操作**不收**）；逃生舱 GK_MCP_EGRESS_GATE=0。红先三臂对 HEAD 全红。",
+      "test_file": "scripts/test_pre_tool_hook.py",
+      "shape_k": "test_arm1_run_mcp_navigate_blocked",
+      "full_k": "test_arm1_run_mcp_navigate_blocked or test_arm2_direct_mcp_navigate_blocked or test_arm3_fetch_blocked",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-9792B39A6B0C",
+      "note": "evidence-锚/必需字段**重试流中断**的可观测性与账实一致（2026-10-10）：`_run_once` 内 `Runner.run_streamed().stream_events()` 抛 `process() takes no keyword arguments` 被 `except Exception as _se` 吞掉、**只记 `str(e)` 无 traceback** ⟹ 真身不可定位；且 F-REV-81/F-REV-97 两处重试即使流中断（或整轮异常）仍写 `retried=True` ⟹ 账实歧义（「发起过」与「真跑通」混同）。修法 = ① `_run_once` 回报 `_stream_ok`（返回 4 元组）+ 首调解包 `_sok0`；② except 分支落**完整 traceback**；③ 首轮流中断 ⟹ `verification.stream_broken=True`；④/⑤ 两重试流中断/异常 ⟹ `verification.retry_failed` / `evidence_anchor.retry_failed`，且重试结果切片 `_new=_r[:3]` 保 `_pick_retry_result` 3 元组契约。臂 ×5（arm1 契约 / arm2 traceback / arm3 首轮 stream_broken / arm4 F-REV-81 retry_failed / arm5 F-REV-97 retry_failed）；守卫臂 guard6（`_pick_retry_result` 仍按 3 元组解包）为**非红**（HEAD 即绿），不入选红先集。",
+      "test_file": "scripts/test_gk_stream_anchor_retry.py",
+      "shape_k": "arm3",
+      "full_k": "arm1 or arm2 or arm3 or arm4 or arm5",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-449948814679",
+      "note": "MoA 聚合 `--batch` **批号双轨 / 未知批号静默**：`--batch` 传流水线批号 `pr-<epoch>-<hex>`（enqueue 回执 / `task_pipeline[].batch`）而非 `subagent_history[].batch_id` 指纹时，`collect_entries` 静默返回 0 条（`mode=batch_bound`+`batch_size=0`），`aggregate` 不报错、`main` 仍落 finding ⟹ 误归因为「批内一致度不足/基础设施缺陷」（实测落 `ECC-37985D9A67BE`）。修法 = ① 未知批号 ⟹ `collect_entries` 返回 `mode=batch_unresolved` + `available_batch_ids`；② `aggregate` 落 `error=no_entry_matches_batch` + hint（rc≠0）；③ `main` 的 `_emit` 加 `and not agg.get(\"error\")` 门（禁落误归因 finding）。臂 ×3（arm1 unresolved 标记 / arm2 aggregate 报错 / arm4 _emit 门控），守卫臂 arm3（已知 batch_id 仍绑定）为**非红**（HEAD 即绿），不入选红先集。",
+      "test_file": "scripts/test_gk_moa_batch_id.py",
+      "shape_k": "arm1",
+      "full_k": "arm1 or arm2 or arm4",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-9FF31C13260D",
+      "note": "MoA `--serve` 页注入锚误命中 JS 字符串内的 body 结束标签（2026-10-10 用户实测「图没了 + 输出全是乱码」）：裁定页把「下载 HTML」构造器整页源码嵌进 JS 字符串，其中已含 `</body>`；`render_serve_html` 原用 `html.replace(\"</body>\", widget + \"</body>\", 1)` 锚**首个** ⟹ 注入 `<script>` 落进 ECharts 块内部 → 图表不渲染 + 压缩 JS 被当正文显示（仅 `--serve` 变体受影响）。修法 = 改 `html.rfind(\"</body>\")` 锚**文档级**结束标签，无 body 时追加。臂 ×3（arm1 文档级锚不改前文 / arm2 无 body 追加 / arm3 JS 串不被劈开）。",
+      "test_file": "scripts/test_gk_moa_serve_inject.py",
+      "shape_k": "arm1",
+      "full_k": "arm1 or arm2 or arm3",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-4A6DA8F310F5",
+      "note": "`moa-aggregate --md` 输出未渲染 `error`/`hint`（2026-10-10，非静默缺口）：`render_md` 只渲 references ⟹ 未知批号 / task 零命中时 md 面看不到任何错误信息（仅 rc=1 可见 = 半静默）。修法 = render_md 前置 error/hint 块。臂 arm_b1（md 须含 error+hint 可操作指引）；守卫臂 arm_b2（无 error 时不得渲染错误块，防过度修复）为**非红**（HEAD 即绿），不入选红先集。",
+      "test_file": "scripts/test_gk_moa_serve_inject.py",
+      "shape_k": "arm_b1",
+      "full_k": "arm_b1",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-5E433392C5C7",
+      "note": "DS 欠费（HTTP 402 / Insufficient Balance）不触发 failover（2026-10-10，用户目标「DeepSeek 欠费后自动降级路由到 MiMo」）：降级链 `GK_FAILOVER_CHAIN=deepseek,mimo,local` 已存在，但**两处 `_is_retryable` 都不认 402** ⟹ `monitor --api`（bash）在 402 上 `break` 不换 provider、python `gk_monitor_api` 置 `stop_chain`。修法 = bash 正则纳入余额语义词（`insufficient.balance|insufficient.quota|insufficient.funds|insufficient.credit|arrears`，吃 curl 响应体文本）+ python `status_code == 402`；语义类 400/401 仍不可重试。臂 ×2（arm_b1 python `_is_retryable(402)` / arm_bash CLI 正则含余额语义词）；守卫臂 `test_guard_400_not_retryable` 为**非红**（HEAD 即绿），不入选红先集。",
+      "test_file": "scripts/test_gk_failover_402.py",
+      "shape_k": "arm_b1",
+      "full_k": "arm_b1 or arm_bash",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-81F6D83D153B",
+      "note": "`assess_findings` 的 P/L/M 分组失真（2026-10-10，用户裁定「按方案修复」）：① **L 通道结构性缺席**（`optimization_items` 只产 M/P，`_CARRIER_LABEL` 却定义 L=机检）—— 修法 = 新增 `_arm_mech_bad`（读已落库 `machine_check.{dump_ok,verification,evidence_anchor}` + `suspect` 引用完整性词表）产 `carrier:L`；② **矛盾簇误判为 M**（`contradictions` = 与逐 F 多数相左的判定 = 计划文本分歧，P2 去 G3 标签后「污染探测/隔离」动作已失效）—— 改归 P；③ **平局偏置**（`infra >= plan ⟹ infra-defect` 1:1 隐式偏 infra）—— 平局 ⟹ `unknown` + `class-tie:` facet；④ **merge 叠加 scalar facet**（同 root_key 重跑 `_extend_unique` 叠加 `classification:`/`refs:`，实测 ECC-9186B25360D6 两 classification、refs:6+refs:2）—— `gk_finding._merge_facets` 标量命名空间后写覆盖。臂 ×4（arm_l / arm_contradiction / arm_tie / arm_merge）；两条 `test_guard_*` 为**非红**（HEAD 即绿），不入选红先集。⚠ 残差：`ECC-50E9DA687CB8`（batch=d8c0cfd1bb29）空 facets **无法回填**（该批 subagent_history 已不在 live/归档片 ⟹ 无源数据，禁臆造）。",
+      "test_file": "scripts/test_gk_moa_assess_plm.py",
+      "shape_k": "arm_l",
+      "full_k": "arm_l or arm_contradiction or arm_tie or arm_merge",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-60BF82183364",
+      "note": "`gk_finding.register` 合并时**不刷新派生标题** ⟹ title 与 facets 口径分叉（2026-10-10，清理历史污染 finding 时实测）：同 `root_key`（= 同 (plan,batch)）重跑时 register 只并 anchors/facets、不更新 title，而 facets 已后写覆盖 ⟹ 实测 `ECC-6A8E27475130` title `n=2 clusters=1 unknown` vs facets `refs:8 / infra-defect`（人读被误导）。修法 = `_refresh_derived_title`：**仅**前缀登记为派生标题者（`_DERIVED_TITLE_PREFIXES = (\"MoA聚合批裁决: \",)`）在同 root_key 重跑时刷为最新，且要求**新旧同为派生**（防误覆盖人工/策展标题）；历史不丢（merge 事件已把每次新标题记入 `finding-journal.jsonl`，gk_finding.py L1112-1114）。臂 ×2（arm_derived_title_refreshed / arm_derived_title_refreshed_cross_format）；守卫臂 `test_guard_manual_title_preserved` 为**非红**（HEAD 即绿），不入选红先集。",
+      "test_file": "scripts/test_gk_finding_title_refresh.py",
+      "shape_k": "arm_derived_title_refreshed",
+      "full_k": "arm_derived_title_refreshed or arm_derived_title_refreshed_cross_format",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-0BA041A4284E",
+      "note": "MoA 聚合 ECC finding 的批身份未适配**跨批比对机制**（2026-10-10，用户裁定「方案 B 全做 + 统一到聚合指纹 + 非指纹 fail-loud」）：① **p_art 消费者取数恒空** —— `emit_aggregate_finding` 的 `root_key = sha256(plan|batch)[:16]`（批号不可读），而 `_latest_defect_rate` 按 `batch in root_key` 取批 ⟹ 恒 None（三通道 κ_tilt 永久缺 p_art）；且 `test_gk_moa_aggregate.py::test_batch_scoped_rejected_ratio` 用生产者**从不产**的 `root_key=\"moa-agg:P:B7\"` ⟹ 恒绿掩真缺陷。修法 = 新增 `_finding_batch`（facet `batch:` → 锚 `batch:`）并改读。② **finding 缺身份 facet** ⟹ 跨批比对（§18.2「按 batch_id 读组」）无从分组；修法 = `emit_aggregate_finding` 落 `batch:`/`plan:`/`cross-batch:` facet（+ gk_finding._SCALAR_FACET_NS 收编防重跑叠加）。③ **批锚两 id 空间混用**（聚合指纹 vs 流水线批号 pr-<epoch>-<hex>）⟹ G2 守卫 `re.fullmatch(r\"[0-9a-f]{12}\", batch)` fail-loud。④ **趋势跨计划混线** ⟹ `_trend_from_state(plan=)` 按计划过滤。臂 ×5（arm_real_chain / arm_emitted_finding_has_batch_plan_facet / arm_legacy_anchor_only / arm_batch_not_fingerprint / arm_trend_filter_by_plan）；守卫臂 `test_guard_other_batch_excluded` 为**非红**（HEAD 即绿），不入选红先集。",
+      "test_file": "scripts/test_gk_moa_batch_facet.py",
+      "shape_k": "arm_real_chain",
+      "full_k": "arm_real_chain or arm_emitted_finding_has_batch_plan_facet or arm_legacy_anchor_only or arm_batch_not_fingerprint or arm_trend_filter_by_plan",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-02710BDFAC8E",
+      "note": "台账级「主要矛盾」提取器缺失（2026-10-10，用户裁定「finding ledger 全源合并 + root_key 优先/锚集 Jaccard + open×severity 排序 + 输出 principal 恰1/RC 溶解清单/未归并孤项，结合现有聚合 RC 与 P/L/M」）：ECC 的 principal 此前**只有形式判据**（ECC-WRITE.json `principal_singular_if_present`：若给出则恰 1 条），**无**「吃台账→吐 principal」的函数 ⟹ MoA 页只能计数（质询挑战 121/保留 122/应砍 106）无法塌缩为根因组。修法 = 新增 `gk_finding.principal`：全源合并（`_entries_by_id` + `_pick_winner`）、`root_key` 精确成组、余项锚集 Jaccard 平均连接凝聚（复用 `gk_moa_aggregate._jaccard`/`_avg_linkage`）、终态不计分、孤项单列；CLI 走 `finding principal`（cmd_finding 通用转发，零保护区改动）。臂 ×5（正臂主矛盾 / 全源合并 / 终态不计 / 孤项负臂 / 只读负臂）。",
+      "test_file": "scripts/test_gk_finding_principal.py",
+      "shape_k": "test_principal_picks_max_open_root_key",
+      "full_k": "test_principal_picks_max_open_root_key or test_principal_cross_source_merge or test_principal_closed_not_counted or test_principal_orphans_listed_not_rc or test_principal_is_read_only",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-7F6AC6625A45",
+      "note": "principal 单例 bug + 聚类签名召回弱（2026-10-10，用户裁定「先做 ①+②」）：① HEAD 的 `principal` 会选中 **n=1 的单例孤项**（真台账 principal = `{key:anchors, n:1, members:['RED-HOOK-09']}`）——主矛盾不该是孤项；② 签名只吃 `anchors` ⟹ 真台账 550 条 **548 孤项**（塌缩几乎无效）。修法：① `principal` 只在 **n≥2 的根因组**且 score>0 里选（否则 `None` = fail-loud）；② `_finding_cluster_tokens` 加 **title 词**（ASCII 词 len≥2 去停用 + 中文 bigram）提召回，窄 τ=0.6 约束精度。臂 ×2（negative:`test_principal_never_singleton` / positive:`test_title_signature_merges_reworded`）。embedding/LSH 层另议（gitnexus 本地嵌入运行时可用）。",
+      "test_file": "scripts/test_gk_finding_principal.py",
+      "shape_k": "test_principal_never_singleton",
+      "full_k": "test_principal_never_singleton or test_title_signature_merges_reworded",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-FAF2A8F0A0DF",
+      "note": "principal 缺 embedding 粗筛：中文 finding 标题语义近重复无法归并（2026-10-10，用户裁定 ③-A「完整（consumer+producer）」）：`principal` ② 阶段只用锚集/词集 Jaccard ⟹ 真台账 551 条仍 **537 孤项**（措辞不同、token 不重叠的中文近重复 Jaccard 恒 0，召回失败）。A/B 实测 `bge-small-zh-v1.5`（中文 24M/96MB/CPU）P@1=79.2%、gap=0.130 ≫ gitnexus 自带英文 `arctic-embed-xs` P@1=60.4%、gap=0.079；HF 不通，模型经 ModelScope 镜像离线落 `~/.cache/huggingface/onnx-community/bge-small-zh-v1.5-ONNX/`。修法：① **consumer** —— `principal` 自动探测旁挂契约 `<state>.finding-embeddings.jsonl`（每行 `{id,vec}`），对 `cos>=emb_tau`（默认 0.66，A/B 校准）的 finding 对**强制直连**（与 Jaccard 取并集 = 粗筛召回），缺失则 **fail-open** 退回纯 Jaccard；主判据仍 root_key/锚集；② **producer** —— 新增 `gk_finding_embed.py`（读 ledger (id,title) → 调 Node 桥 `_gk_embed_bridge.mjs`（复用 gitnexus 的 transformers.js 栈 + 本地 bge 缓存，CLS pooling）→ 写契约文件）+ 纯函数 `write_contract`。臂 ×2（`test_principal_uses_embeddings_file` / `test_embed_write_contract`）；守卫 `test_principal_no_embeddings_fail_open` 为**非红**（HEAD 即绿），不入选红先集。",
+      "test_file": "scripts/test_gk_finding_embed.py",
+      "shape_k": "test_principal_uses_embeddings_file",
+      "full_k": "test_principal_uses_embeddings_file or test_embed_write_contract",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-666539027A62",
+      "note": "嵌入 producer 内存失控：全量 552 条一次过 ONNX ⟹ 注意力张量一次性 4.6GB（batch×heads×T²×4B）⟹ OOM ⟹ 拖崩宿主（2026-10-10 实测，Trae 报 0xC0000005）。④ 的临时止血（固定分批 32，`ECC-FAF2A8F0A0DF`）仍会被**单条超长文本/批内过大**击穿。补三道硬防线：① **自适应批** `plan_batches`（每批同时守 `max_count` 与 `max_chars`，保序/无重复/全覆盖；单条独占批允许超 max_chars 不丢料）；② **预检门** `preflight_batches`+`estimate_peak_bytes`（按峰值 `batch×heads×T²×4B` 降批直至 ≤cap，降到 `max_count=1` 仍超则 **fail-loud** RuntimeError）；③ **内存上限**（Node 子进程 `--max-old-space-size`，env `GK_EMBED_NODE_MAX_MB`；桥侧 `truncation/max_length` 限单条 token）。臂 ×3（双约束守量 / 预检限量且不丢料 / 超限 fail-loud）。",
+      "test_file": "scripts/test_gk_finding_embed_memguard.py",
+      "shape_k": "test_plan_batches_respects_count_and_chars",
+      "full_k": "test_plan_batches_respects_count_and_chars or test_preflight_gate_bounds_peak or test_preflight_refuses_oversize_single",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-5B314A80DD49",
+      "note": "台账相似度缺高性能 GEMM 算子路径：`gk_finding.principal` ② 阶段纯 Python 双层循环算两两余弦（`_cosine` 每对 512 维 ×3 次解释器循环）⟹ `O(n²·d)` + `sim` 矩阵 `O(n²)`；n 跨线（≳3–5k）即成瓶颈。第一刀 = **numpy/BLAS 路径** `_emb_links_numpy`（`V @ V.T` 一次 GEMM 出 `cos>=emb_tau` 的对，`_get_numpy` 惰性探测），numpy 缺席则**回退**逐对 `_cosine`（零回归）；结果**逐位等价**。本轮再续（凝聚聚类 O(n³)→LW 增量 + LSH 常态启用）：判别臂 ×4（LW 存在 / 与朴素等价 / 委托 / LSH 默认=1）。",
+      "test_file": "scripts/test_gk_finding_principal_gemm.py",
+      "shape_k": "test_avg_linkage_lw_exists",
+      "full_k": "test_avg_linkage_lw_exists or test_avg_linkage_lw_equals_naive or test_avg_linkage_delegates_to_lw or test_lsh_default_enabled",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-9BD2FA550A78",
+      "note": "§18.1 声明「缺省按批分节（不混票）；跨批仅同 plan_path 且显式放开」，但 `--plan`(plan_bound) 路径**裸混**：`collect_entries` 收全 history（`excluded_other_tasks=0`），`aggregate` 只把 `batch_sections` 当 **trace 元数据**，consensus 仍对全臂混算；`--allow-cross-batch` 在该路径为 **no-op**（加不加结果逐字相同，只翻 trace 布尔），trace 自相矛盾（`mixed_batches=True` 却 `cross_batch_allowed=False`）。触发 = 同计划多轮质询（W2A 实测 12 臂混成 6 簇，agreement 0.619 vs 分批 0.643/0.667）⟹ 分值失真、熔断判据被污染；根 = §18「task 指纹降为子分组」声明未落（§18.1 已复核）。修法（A+B）：plan_bound 跨批**按批分节**（逐节 consensus）＋缺省 **fail-loud**（`error=cross_batch_requires_ack`），仅显式 `--allow-cross-batch` 才合并。",
+      "test_file": "scripts/test_gk_moa_batch_identity.py",
+      "shape_k": "test_plan_bound_batch_sections_present",
+      "full_k": "test_plan_bound_mixed_requires_ack or test_plan_bound_batch_sections_present or test_plan_bound_ack_merges_with_sections",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-95277E21EF31",
+      "note": "MoA 聚合 finding 恒 gap=true：`emit_aggregate_finding` 调 `gk_finding.register(..., \"review\", ...)` **不传 cover_layers** ⟹ `source=review` ∈ `_COVER_REQUIRED_SOURCES` ⟹ 每条批裁决 finding 落 `cover_layers=[]` + `gap=true` + gap 告警（C2/E2 缺应拦审查层登记）。实测默认 state 65/67 条 finding 皆空、域 state 亦然。修法 = register 传 `cover_layers=(\"L2\",)`（MoA 批裁决 = `plan-refinement`(L2 code-to-spec) 的产物层）。",
+      "test_file": "scripts/test_gk_moa_finding_cover.py",
+      "shape_k": "test_emit_finding_declares_cover_layers",
+      "full_k": "test_emit_finding_declares_cover_layers or test_emit_finding_reemit_keeps_cover_layers",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-F3A27EB08725",
+      "note": "T4 隐蔽事件通道无 warden：本仓**无 warden / 无隐写分析**（只有 `_red_attacks.red_poison` 的 state 面零宽/BOM 扫描），相关性降权只对**显式相关**有效 ⟹ 对 Storage/Timing/Behavioral 三轴隐蔽耦合**不可见** ⟹ 一致度虚高 = 假收敛（§9.5 ⚠修 / §9.6 Q4；Whispering Agents AAAI-26 `arXiv:2508.02188`，IND-STAT/IND-INT）。修法 = 新增 `scripts/gk_covert_warden.py`：Storage=Unicode 隐写扫描（复用 `_UNICODE_SUSPECT`）；Timing=`ind_stat` 时序独立性（n<6 ⟹ UNDER_POWERED，禁读作无通道）；Behavioral=`ind_int` 证据锚结构去重。",
+      "test_file": "scripts/test_gk_covert_warden.py",
+      "shape_k": "test_three_axis_scan_exists",
+      "full_k": "test_three_axis_scan_exists or test_storage_flags_unicode_stego or test_ind_stat_underpowered_small_n or test_ind_stat_flags_too_regular or test_ind_int_flags_structural_dup or test_scan_returns_three_axes",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-143409BC4A8C",
+      "note": "T4 covert warden **接线**（§5，2026-10-11）：warden 已落 `scripts/gk_covert_warden.py`（`ECC-F3A27EB08725`）但**无消费方** = 纸老虎（判据在源码却不可达）。修法 = `gk_moa_aggregate._covert_scan`（延迟导入，单源） + argparse `--covert-scan` + 调用并入 `agg[\"covert\"]`；`gatekeeper-cli.sh cmd_moa_aggregate` 白名单转发（声明 + case 认领 + 喂 python，禁第二实现）。臂 ×3（helper 存在 / --covert-scan 落 covert 三轴 / CLI 转发源码形态）。",
+      "test_file": "scripts/test_gk_covert_warden.py",
+      "shape_k": "covert_scan_helper_exists",
+      "full_k": "covert_scan_helper_exists or covert_scan_flag_attaches_axis or covert_scan_cli_forwards_flag",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-BB4E8FF782F0",
+      "note": "W2A 方案 A（浏览器**受治出网车道**）四前置：① Q3a `_prior_art_fetch` URL/query 内容门（超长 URL ⟹ ValueError + 留痕）；② Q3b `pre_tool_hook` 浏览器车道域 allowlist（白名单域 → `McpEgressAllowed` 放行+记账；域外 → `McpEgress` BLOCK）；③ 封 `puppeteer_evaluate`/`eval_js`（JS 内 fetch = 出网残余 → `McpEgressSealed`）；④ 放行动作进 egress JSONL（`via=mcp-browser`，单源 `gk_evidence.record_egress`）。臂 ×4（q3a 内容门 / q3b allowlist 行为 / evaluate 封禁 / 浏览器记账）。",
+      "test_file": "scripts/test_w2a_q3_surface_probes.py",
+      "shape_k": "q3a_outstation_gate_caps_query_length",
+      "full_k": "q3a_outstation_gate_caps_query_length or q3b_browser_lane_has_domain_allowlist or arm_egress_evaluate_sealed or arm_browser_egress_recorded",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-B23D80C0545D",
+      "note": "W2A Q3c（相位可控，最尖锐）：相位不变门未以**出口侧 L** 为共同输入 ⟹ 相位可由本地正文长度操控（构造 L 使 `L mod S` 落已知翻转相位）。修法 = `gk_evidence.phase_from_egress(records, egress_ref, modulus)`：从**出口留痕回指的证据记录**取 `content_len` 算 `L mod S`；取不到 ⟹ `None`（fail-loud）。臂 ×1（Q3c 由 xfail 转实臂）。",
+      "test_file": "scripts/test_w2a_q3_surface_probes.py",
+      "shape_k": "q3c_phase_gate_binds_egress_len",
+      "full_k": "q3c_phase_gate_binds_egress_len",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-00739E179486",
+      "note": "W2A §6.3(3) R2 per-arm 相位（`--phase-offset`）：相位门现只算单点 `L mod S`；R2 需 arm i 吃 `L + i·Δ`（错相臂）+ `Δ=0` 同相控制臂。修法 = `gk_evidence.phase_from_egress(..., offset=0)` 平移 + `per_arm_phases(L, n_arms, delta, modulus)`。相位来源仍为出口侧 `content_len`（不破 T1 防篡改）。臂 ×1。",
+      "test_file": "scripts/test_w2a_q3_surface_probes.py",
+      "shape_k": "q3c_per_arm_phase_offset_shifts_residue",
+      "full_k": "q3c_per_arm_phase_offset_shifts_residue",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-F0D3F78E9F58",
+      "note": "W2A §6.3(6) ④ 缓存观测（红线 ②③④）：`cache-hit / cached tokens` 逐调用 + `L` 的 token 块边界对齐 + 跨轮 cache 失效点，三条**均无载体**。修法 = 新 `scripts/gk_cache_observe.py`（raw→归一桶〔**P1 自建**，dsh-context 只读已归一 usage〕+ `token_count_of` 消毒 + `block_alignment` + 失效点），作协变量入 MoA 聚合。臂 ×1。",
+      "test_file": "scripts/test_gk_cache_observe.py",
+      "shape_k": "gk_cache_observe_normalizes_and_aligns",
+      "full_k": "gk_cache_observe_normalizes_and_aligns",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-0FC756057411",
+      "note": "W2A §6.3(1) ①② 合成题 + 可复现判分：① 缺陷计划族（D1–D5 注入 + 金标 + `det_F1` 输入）与 ② 判分（当前无 ⟹ `det_F1` 不可复现）**均缺载carrier**；判分器若相位敏感 ⟹ 双重相位混杂（§6.3 F3）。修法 = 新 `scripts/gk_defect_gen.py`（确定性 D1–D5 注入 + 金标 clause + 防天花板）+ `scripts/gk_moa_judge.py`（规则式 `det_F1`，位置无关 ⟹ **按构造相位不变**）。臂 ×2。",
+      "test_file": "scripts/test_gk_moa_defect_judge.py",
+      "shape_k": "defect_gen_injects_d1_d5",
+      "full_k": "defect_gen_injects_d1_d5 or moa_judge_det_f1_phase_invariant",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-DF7FC6860957",
+      "note": "W2A Q3e 残项：egress JSONL **只读审计入口缺**（`audit --egress`）。修法 = `gk_evidence.summarize_egress(path=None)`（总数 / ok / by_host / by_via / failures，纯只读）+ `cmd_audit` 增 `--egress` 分支委托单源（**禁第二实现**；**不新增命令** —— `_CMD_REG` 在 `PROTECTED_REGION::gate` 内，只在区外函数体开分支）。臂 ×2（摘要行为 / CLI 接线）。",
+      "test_file": "scripts/test_w2a_q3_surface_probes.py",
+      "shape_k": "q3e_audit_egress_summarizes",
+      "full_k": "q3e_audit_egress_summarizes or q3e_audit_egress_cli_wired",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-715E4C8DD7C2",
+      "note": "P-2 臂数轴 `n_eff` 估计器未落实（§9.5 AP2 落点 = `gk_moa_aggregate.cluster_references`）：A8 只给**轮次轴** `n`，**臂数轴**有效样本量缺 ⟹ 折叠 / 隐蔽耦合下高一致度被误读为收敛。修法 = consensus 增 **Kish** `n_eff = n²/Σsize²` + 暴露独立度门 `n_eff_min` / `independence_ok`（**不**默认翻 `abstain` —— 硬门折叠属 owner 决策，避免反转 unanimous-consensus 语义）。臂 ×2。",
+      "test_file": "scripts/test_gk_moa_aggregate.py",
+      "shape_k": "n_eff_is_kish_from_clusters",
+      "full_k": "n_eff_is_kish_from_clusters or n_eff_gate_flag_exposed",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-8B2C819EDE7D",
+      "note": "n_eff 独立度门**只暴露、无 opt-in 硬开关**。修法 = `cluster_references(..., strict_independence=False)`（True 时 `not independence_ok` **并入** `abstain`）+ consensus 增 `abstain_reason`；`aggregate()` + CLI `moa-aggregate --strict-independence` 转发（**缺省 False ⟹ 零回归**，unanimous-consensus 语义不变）。臂 ×2（硬门折叠 / 缺省不变）。",
+      "test_file": "scripts/test_gk_moa_aggregate.py",
+      "shape_k": "strict_independence_folds_neff_into_abstain",
+      "full_k": "strict_independence_folds_neff_into_abstain or strict_independence_default_off_unchanged",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-96B2214FA16B",
+      "note": "octop-browser（TencentCloud/octop-browser）的 MCP 工具名带 `browser_` 前缀，与 R0.14 的**裸动词精确等值集**不匹配（`_mcp_inner_tool` 不做前缀剥离）⟹ `browser_navigate`/`browser_open`/`browser_new_tab`/`browser_replay_run` 与 `browser_eval_js` **全部漏网** = 第二条未受治出网通道。修法 = 出网集并入 octop-browser 导航动词、封禁集并入 `browser_eval_js`、`_egress_url` 增读 `urls`（列表首元素）。臂 ×3（前缀导航拦 / eval_js 封 / 负臂本地动词不误拦）。",
+      "test_file": "scripts/test_pre_tool_hook.py",
+      "shape_k": "octop_browser_prefixed_navigate_blocked",
+      "full_k": "octop_browser_prefixed_navigate_blocked or octop_browser_eval_js_sealed",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-BF1B8AF95332",
+      "note": "单源契约头口径不一：`gk_evidence.py` 头注仍称「**单出网口** —— 一切出网走 `_prior_art_fetch`」，而 R0.14 已把浏览器 MCP 扩为**受治车道**（白名单域放行 + **同一** egress JSONL）⟹ 契约头未同步（照契约读会以为浏览器出网通道不存在）。修法 = 头注补「或受治车道（MCP 浏览器，同源白名单 + 同一 egress JSONL）」。臂 ×1（**静态源码切片**：头注须含「受治车道」+「MCP」）。",
+      "test_file": "scripts/test_gk_prior_art_egress.py",
+      "shape_k": "gk_evidence_contract_header_names_governed_lane",
+      "full_k": "gk_evidence_contract_header_names_governed_lane",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-BF39D6698097",
+      "note": "C 期 MoA HTML 图表精细化（plan 2026-10-04 §12.4-3）：手写内联 SVG **降级路**观感粗（图② 横条 / 图③ 表格 / 趋势 裸折线 / 图④ 无色标）⟹ 与 ECharts 主路不一致。修法 = `_svg_divergence_clusters` 环形弧、`_svg_identity_states` 散点、`_trend_svg` 双序列+轴+图例、`_svg_group_cluster_heatmap` 色标图例（**只改渲染**，同页、不新增页、不搬 7 维分；守纯函数/零外链/禁分数字面量）。臂 ×4。",
+      "test_file": "scripts/test_gk_moa_charts_refined.py",
+      "shape_k": "trend_svg_dual_series_axes_legend",
+      "full_k": "trend_svg_dual_series_axes_legend or clusters_svg_donut_arcs or identity_svg_scatter_points or heatmap_svg_color_scale",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-93F54BA38157",
+      "note": "C 期(ii)：MoA HTML 图表精细化·**ECharts 主路**（生产实际渲染；C 期只改了 SVG 降级路）。修法 = `_ECHARTS_INIT_JS` 调色板统一到页面 token（`#b58900`→`#a9761a`=--warn）+ 图② 环形中心汇总（`graphic` 簇数/臂数）+ 图④ 热力轴名（组/结论簇）+ 色标说明 + tooltip 统一圆角。臂 ×5（js 模板 ×4 + 渲染页 ×1）。",
+      "test_file": "scripts/test_gk_moa_charts_echarts.py",
+      "shape_k": "echarts_palette_token_unified",
+      "full_k": "echarts_palette_token_unified or echarts_donut_center_summary or echarts_heatmap_axis_names or echarts_tooltip_uniform_style or echarts_rendered_page_carries_refinements",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-75F6A2BB7F2B",
+      "note": "W2A P2 前置①：判 stride/相位周期 `S` 禁据 alias 推断（别名可换后端不换名）；本仓无版本探针也无 CLI 入口。修法 = 新 `scripts/gk_model_probe.py`（元数据层 model/system_fingerprint + 行为层变 L 测周期；`resolved=false` fail-loud）+ CLI 命令 `model-probe`。臂 ×6（纯函数 ×5 + CLI 注册 ×1）。",
+      "test_file": "scripts/test_gk_model_probe.py",
+      "shape_k": "test_model_probe_module_symbols_present or test_model_probe_cli_registered",
+      "full_k": "test_model_probe or test_normalize_meta",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-F2BDAFB8899C",
+      "note": "doc-align 缺人读视图（全量 JSON 逾 1.7 万行不可一次读完）。修法 = `gk_doc_align.summarize`（纯函数，每检查一行）+ CLI `doc-align --summary` 解析/转发。臂 ×3（summarize 行数 ×1 / 截断 ×1 / cmd_doc_align 注册 ×1）。",
+      "test_file": "scripts/test_gk_doc_align_summary.py",
+      "shape_k": "test_doc_align_summary_renders_one_line_per_check",
+      "full_k": "test_doc_align_summary or test_doc_align_cli_registers_summary_flag",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-D934C09CC47F",
+      "note": "`_CMD_REG` 计数不变量**漂移**（2026-10-13，基线重拍暴露）：`0fcbe84`（`model-probe`，`ECC-75F6A2BB7F2B`）+ `0806f53`（`phase-probe`，`ECC-42B4A6E15927`）两条**已批准** W2A-P2 命令使 `gatekeeper-cli.sh` 的 `_CMD_REG[` 计数 54→56，而 `test_gk_state_forms.EXPECTED_CMD_REG_COUNT`（注释原写「禁事后调整」= 一次性快照口径）未同步 ⟹ `test_no_new_cmd_reg_entry_added` 在 e07f225（54）→ 现 HEAD（56）之间转红，直到 accept 重拍基线才暴露。裁定（owner 2026-10-13）= 常量**随批准命令同步**（局部不变量，非全局冻结）。修法 = 常量 54→56 + 注释改「随批准命令同步（附 finding）」+ 本类级守卫臂（同步策略标记用拼接构造防注释盲）。臂 ×1（计数一致 + 策略声明）。",
+      "test_file": "scripts/test_gk_state_forms.py",
+      "shape_k": "cmd_reg_sync",
+      "full_k": "cmd_reg_sync",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-439C8B7CF048",
+      "note": "doc-align 脆弱点**三处收口**（2026-10-13 压测，非推测）：① **docgen 产物对账缺失** —— `docgen --check` 报 `DOC_DRIFT`（`0fcbe84` 手工把 model-probe 富描述行追加进 cli-protocol.md、`3c18f67` 手改 `**Commands**` 50→51，两次都未重跑 docgen；根因 = `cmd_model_probe` 上方无 docgen 可识别表头注释），而 doc-align 命令数四项**全 PASS**（`cli_protocol_commands`/`skill_command_count`/`audit_docs_command_count`/`audit_docs_cli_entries`）⟹ 「doc-align 绿 / docgen 红」两面分裂，且 `grep docgen scripts/test_*.py` 零覆盖。② **命令数三口径分裂** —— 测试 `src.count(\"_CMD_REG[\")`=56（含 2 注释 + 3 读取）/ doc-align `_count_cmd_reg`（`[a-z-]+` 赋值行）=51 / docgen（`cmd_\\w+` 函数 + 硬编码 `pre_tool_check`）=51；`[a-z-]+` 遇数字/大写名即**静默漏计**（实测 `[stage2]`/`[Probe]` 命中 0）。③ **`--summary` 截断** —— `detail[:137]+\"...\"` 把多条目清单从中间斩断（papers_framework_drift 7 项 / comment_code_mismatch 多文件），可操作信息丢失；且 4 条 WARN 在 `issues=0` 下被绿灯化。修法 = ① 重跑 docgen 使文档与产物一致 + 加 `docgen --check` 守卫臂；② `_count_cmd_reg` 放宽为 `[A-Za-z0-9_-]+` + `test_gk_state_forms` 常量与口径改**复用** `_count_cmd_reg`（单一事实源）；③ `summarize` 长 detail 换行续排（不截断）+ 头行补 WARN 计数。红先集 = ②a/②b/③ 三臂；`test_docgen_sync_guard_check_passes` 为**非红守卫臂**（沙箱无 `references/` ⟹ 真空绿），**不入选** `-k`。",
+      "test_file": "scripts/test_gk_docalign_fragile.py",
+      "shape_k": "frag_counter or frag_state_forms",
+      "full_k": "frag_counter or frag_state_forms or frag_summary",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-FF16D8C2E5C7",
+      "note": "docgen Purpose 提取缺口（`ECC-439C8B7CF048` D1 的**根因收口**，2026-10-13）：`cmd_model_probe` 与 `cmd_phase_probe`（**保护区内**，`PROTECTED_REGION::gate`）上方**无** docgen 可识别表头 banner（`^# -{5,} <purpose> -{5,}$`）⟹ docgen 回退 `name.replace('cmd_','').replace('_',' ')`，文档 Purpose 退化为 `model probe`/`phase probe`；`0fcbe84` 遂**手工**把富描述行追加进 cli-protocol.md、`3c18f67` 手改 `**Commands**` 50→51，两次都不重跑 docgen ⟹ `docgen --check` 报 `DOC_DRIFT`（doc-align 只看计数、恒绿）。修法 = 给两函数补 banner（`# ---------- <purpose> ----------` + `# Refs:`）+ 重跑 docgen。⚠ **落点在 `PROTECTED_REGION::gate` 内**，按 2026-09-27 owner 裁定 A：行级 WARN + 强制留痕（`${STATE_FILE}.protected-edits.jsonl`）放行，代价 = commit + 文档双留痕（本批 commit 主语带 `[PROTECTED-EDIT]`，文档留痕落 `SKILL.md`）。臂 ×1（静态：banner 存在性，红跑沙箱内 `gatekeeper-cli.sh` 在位 ⟹ 可红）。",
+      "test_file": "scripts/test_gk_docalign_fragile.py",
+      "shape_k": "frag_probe_cmd_has_docgen_banner",
+      "full_k": "frag_probe_cmd_has_docgen_banner",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-317C82A14DE8",
+      "note": "MCP 写工具归一化**不完整**三处收口（2026-10-13 压测实证）。上游：用户 2026-09-28 要求把 IDE 写工具换成 filesystem MCP（`docs/plans/2026-09-28-mcp-write-tool-gate-coverage-plan.md` §2.2），hook 侧做了「写工具**身份**归一」（`ECC-BC63B84B28AB`）。**但只归了身份+路径，未归参数形态/语义粒度** ⟹ ① `_protected_target_line` 只读**顶层** `old_str`/`content`，而 MCP 写参数据在 `args` 下（`_mcp_inner_tool` 自证）⟹ 实测 `run_mcp`/`edit_file`、`run_mcp`/`write_file`、`mcp__filesystem__*` **三形态全退 `\"0\"`** ⟹ 保护区行级判定与 `_pe_record` 留痕对 MCP 写路径**不可达**（与 2026-09-22 `ECC-BFE933526D0B` 同型复活）。② `_protected_region_check` 文件级分支（无有效行号）仅 echo WARN 后 `return 0`，**不写审计** ⟹ 行号不可得时**静默无留痕**（本会话实证：12:11 两次 gatekeeper-cli.sh 编辑，hook 日志仅 `INVOKE→ALLOW`，ledger 零条目）。③ `_write_identity` **一律**归成 `Write` ⟹ filesystem MCP `edit_file`（局部编辑）被 CLI 当**整文件覆盖**拦（实测 hook BLOCK「禁止整体覆盖已存在文件…请改用 Edit/SearchReplace」）⟹ **MCP 写工具对已存在文件实际不可用**。修法 = ① `_protected_target_line` 复用 `_mcp_inner_tool` 剥 `args` + 支持 `edits[].oldText`，且调用点传**归一前**原名（`_ORIG_TOOL_NAME`）；② 文件级分支亦 `_pe_record`（`lines:\\\"0\\\"`/`region:\\\"FILE-LEVEL\\\"`）；③ `_write_identity` 按内层语义细分（`edit*` → `SearchReplace`，其余 → `Write`）。红先集 = ①3 臂 + ②1 臂 + ③1 臂（均沙箱内可红：`pre_tool_hook.py`/`gatekeeper-cli.sh` 在 `scripts/`+根，`git archive` 覆盖）。⚠ 本轮落刀**仍用原生 `SearchReplace`**——因 ③ 未修前 MCP 写路对已存在文件被拦（自证）；修后 MCP 端到端验证见 finding 收尾记录。",
+      "test_file": "scripts/test_gk_protected_audit_mcp.py",
+      "shape_k": "protected_line_mcp or mcp_edit_file_identity",
+      "full_k": "protected_line_mcp or protected_file_level_branch_records or mcp_edit_file_identity",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-BC9FB99C4C93",
+      "note": "R0.12 假阳性**误拦**（2026-10-13，accept 在「受影响面」显影）：`_PS_ALIAS_POSIX_FLAGS` 含 `mkdir:「p」` ⟹ R0.12 拦 `mkdir -p`；而 PS 实测（Windows PowerShell，2026-10-13）`mkdir -p <新嵌套路径>` 能建出嵌套目录、`-p` 被 `New-Item` 接受（前缀→`-Path`）⟹ 不满足判据「PS cmdlet **不接受**的 POSIX 专属旗标」（真阳性 `ls -d`→`Get-ChildItem -Depth` 只收整数⟹静默错值）。后果：`_dangerous_command` 对 `rm -rf <path>` 生成的**自动替换 hint**（`mkdir -p 「<trash>」 && mv -- …`）本身被 R0.12 拦 ⟹ hook 自家建议过不了自家闸（`test_gk_q2_hint_selfconsistency.py::test_arm_c` 红先抓出；该臂只引 `pre_tool_hook.py` 非 `gatekeeper-cli.sh` ⟹ 从不在 accept 默认 subset 基线内，2026-10-10 R0.12 引入后长期潜伏）。修法 = 移出 `mkdir` 条目（`rmdir:「p」` 保留：POSIX `rmdir -p` 删祖先后代 / PS `Remove-Item -Path` 只删叶子 ⟹ 静默语义分叉，真阳性）。臂 ×1（源码切片：`_blue_fat_fish_ps_alias_story(「mkdir -p …」) is None` + `ls -d` 对照仍 BLOCK）。",
+      "test_file": "scripts/test_pre_tool_hook.py",
+      "shape_k": "mkdir_p",
+      "full_k": "mkdir_p",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-092EC2A72A3F",
+      "note": "doc-align `comment_code_mismatch` **系统假阳性**（2026-10-13 逐项实证）：③（反引号 `name()`）与 ②（`cmd_*`）把四类非「本仓模块函数」判为『注释引用函数缺失』—— · **内置**（`str()`/`compile()`/`id()`）；· **方法调用**（`exists()`/`read_text()`/`is_file()`/`lower()`/`close()`/`stream_events()`）；· **跨模块 def**（`claim_ttl_s` 在 `gk_git_lease.py`、`verify` 在 `gk_finding.py`、`cmd_set_nested`/`cmd_worktrees_extra` 在 `gk_state_patch.py`）；· **CLI 内非命令 token**（`cmd_target_mismatch` 是 `reason` 值）。实测 16 项中 **15 假 1 真**（真项 = `gk_agent_edit.py` 注释引用**未落地**命令 `cmd_code_fix`）⟹ 信噪比 1/16。修法 = ③ 加 builtins + 方法调用（本文件出现 `.<name>(`）+ `_func_defined` 扩到**全 `scripts/*.py`**；② 加 `cli_tokens`（CLI 内任意 `cmd_*` token）+ 跨模块 def；**真项**改注释 `cmd_code_fix` → `apply-worktree --code-fix`。红先集 = `frag_comment_checker`（沙箱 `scripts/` 内含 `gk_doc_align.py` ⟹ 可红）。",
+      "test_file": "scripts/test_gk_docalign_fragile.py",
+      "shape_k": "frag_comment_checker",
+      "full_k": "frag_comment_checker",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-7B8C3B04A84B",
+      "note": "ECC-PLAND 落刀（standing 计划 `docs/plans/2026-10-04-plan-landing-drift-detector-plan.md` §2/§3）：T1 实装 `check_plan_landing_drift`（计划↔实现漂移：目标在且含**落刀痕** ⟹ `landed_stale`(high,WARN)；存在无落刀痕 ⟹ `suspect`(low,INFO)；不存在 ⟹ `ok`）+ 注册进 `run_all`；T2 `check_anchor_existence` 改口径（`drifted` 改 **T0+T1**、T2 移入新键 `unasserted`、`anchors_total` 分母**不变** ⟹ 噪声分子变小）。红先臂 = T3 **已落**（`test_gk_plan_landing_drift.py` 4 臂，对 HEAD 必红）；开关 `GK_PLAND_DRIFT=0` ⟹ SKIP。",
+      "test_file": "scripts/test_gk_plan_landing_drift.py",
+      "shape_k": "landed_stale",
+      "full_k": "landed_stale or suspect_target or absent_target or unasserted_t2",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-1F4858220AA5",
+      "note": "conv-estimator 补 delta-method **仅报告**近似区间 `r_interval`（吸收 session/758d0706）：区间夹 r̂、端点非正/单轮不可定义、区间跨 1 只报告不改写 verdict",
+      "test_file": "scripts/test_gk_convergence_estimator.py",
+      "shape_k": "r_interval_units",
+      "full_k": "r_interval_units or r_interval_straddles_one",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-A5FCBC3BE225",
+      "note": "subagent `_extract_llm_json` 补外层切片 + 控制符转义兜底（吸收 session/758d0706）：字符串内裸换行修复为**外层**对象，结构性畸形（缺逗号等）仍 fail-closed",
+      "test_file": "scripts/test_subagent_runner_extract.py",
+      "shape_k": "unescaped_newline_repaired",
+      "full_k": "unescaped_newline_repaired",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-ECDB1C9C2B1D",
+      "note": "ecc-finding **全过程默认跨仓**（owner 2026-10-15 硬要求）：`_accept_gate` 已跨仓（b3da888）；本批把**处置前锚闸**（`_scan_drift` 根 = 候选仓集合 `_candidate_repos`，他仓锚不误报漂移）与**全域对账**（`_ledger_sources` 枚举候选仓 ledger + `_src_key` 跨仓去重键，治「两仓同名 `.gatekeeper.state` 并键」⟹ 跨仓同 fid 可报 `shared_ids`/`conflicts`）改为跨仓默认。",
+      "test_file": "scripts/test_gk_finding_accept_gate.py",
+      "shape_k": "scan_drift_cross_repo_anchor_not_flagged or ledger_sources_cross_repo_enumerated or ledger_cross_repo_shared_id_detected",
+      "full_k": "scan_drift_cross_repo_anchor_not_flagged or ledger_sources_cross_repo_enumerated or ledger_cross_repo_shared_id_detected",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-50FD2FD2F8D0",
+      "note": "state 整文件墙**单源 + ×10**（owner 2026-10-16 裁定「审计署 state 只存元数据 ⟹ 给 state 加个0」）：`gk_json_utils.STATE_SIZE_WALL` 262144 → 2621440；`gk_narrow_route.validate_narrow_tasks` 的 `state_oversized` 判据由内联 `_NT_MAX_TOTAL_BYTES * 4`（双源字面量）改为**运行时读** `gk_json_utils.STATE_SIZE_WALL`。红先：HEAD 上墙值仍 262144 且判据不随 `gk_json_utils` 改动 ⟹ 两臂必红。",
+      "test_file": "scripts/test_gk_narrow_route.py",
+      "shape_k": "wall_ten_x_owner_ruling or state_oversized_consumes_single_source_wall",
+      "full_k": "wall_ten_x_owner_ruling or state_oversized_consumes_single_source_wall or state_oversized_reports or arm46_canon_under_wall_not_rejected or arm47_canon_over_wall_still_rejected",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-0DBB2CBB5461",
+      "note": "`plan-refinement <plan>` 的 **state 路由**（2026-10-17）：`cmd_plan_refinement` 原全程用 CLI 启动期 `$STATE_FILE`（未设 `GK_PLAN_FILE` 时恒 base）⟹ 窄任务登记在域 state 却报 `narrow_tasks_insufficient`、批次写进 base（跨计划污染）。修法：参数解析后按 `<plan>` 的 `META.state_domain` 解析域 state（单源 `gk_route_center.meta_state_domain` + `gk_finding.resolve_domain_state`），沿用既有 `GK_STATE_DOMAIN_ROUTE` kill switch。红先：HEAD 上形态臂（路由块缺席）+ 行为臂（`--list-pending` 读 base 空队列）双红。",
+      "test_file": "scripts/test_gk_plan_refine_routing.py",
+      "shape_k": "plan_refinement_routes_state_by_plan_domain or plan_refinement_list_pending_reads_domain_state",
+      "full_k": "plan_refinement_routes_state_by_plan_domain or plan_refinement_list_pending_reads_domain_state",
+      "expect": "red"
+    },
+    {
+      "finding": "ECC-2E9DA8D90CB2",
+      "note": "t4(a)（2026-10-17）：臂输出**全量直接落卫星 history 片**、state 只留元数据（spilled/conclusion_len）；读侧 union 去重改用「片内全量原位替换占位」。红先：HEAD 上写侧未溢出即不落片（结论全内联）+ union 偏好占位 ⟹ 3 臂红。",
+      "test_file": "scripts/test_gk_history_spill.py",
+      "shape_k": "history_payload_spills_before_strip or new_entry_spills_full_and_state_keeps_metadata or union_prefers_shard_full_record_over_placeholder",
+      "full_k": "history_payload_spills_before_strip or new_entry_spills_full_and_state_keeps_metadata or union_prefers_shard_full_record_over_placeholder",
+      "expect": "red"
+    }
+  ]
+}

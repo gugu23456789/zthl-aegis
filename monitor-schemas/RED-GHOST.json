@@ -1,0 +1,21 @@
+{
+  "name": "RED-GHOST",
+  "stage": "standing",
+  "structural_checks": [
+    {
+      "check": "red_ghost_scan",
+      "command": "python3 scripts/_red_attacks.py ghost 2>/dev/null | grep -q '\"phase\": \"ghost\"'",
+      "fail_if": "exit_code != 0"
+    },
+    {
+      "check": "suba_tiers_present",
+      "command": "test -f scripts/gk_suba_tiers.py",
+      "fail_if": "exit_code != 0"
+    },
+    {
+      "check": "red_ghost_findings_json",
+      "command": "python3 scripts/_red_attacks.py ghost 2>/dev/null | grep -q '\"findings\"'",
+      "fail_if": "exit_code != 0"
+    }
+  ]
+}

@@ -1,0 +1,18 @@
+{
+  "family": "F-FAILOVER-CHAIN",
+  "match": {"any": ["降级链", "failover", "断路器", "circuit breaker", "FAILOVER_CHAIN", "ms 级切换"]},
+  "anchor_symbols": ["FAILOVER_CHAIN", "_is_retryable", "PROVIDERS", "_breaker_allows"],
+  "tier": 3,
+  "edit_quota": 6,
+  "allowed_paths": ["scripts/gk_monitor_api.py"],
+  "forbidden_paths": [
+    "docs/", "references/", "gatekeeper-cli.sh",
+    "scripts/pre_tool_hook.py", "scripts/gk_state.py", "scripts/gk_json_utils.py",
+    "scripts/gk_finding.py", "scripts/gk_agent_family.py", "scripts/gk_route_center.py",
+    "scripts/test_gk_monitor_api_failover.py"
+  ],
+  "narrow_task_template": "修 {anchor}。**唯一落点 = `scripts/gk_monitor_api.py`**（唯一 allowed_path）。**禁止**改任何测试文件、`docs/`、`references/`、`gatekeeper-cli.sh`、`scripts/pre_tool_hook.py`、`scripts/gk_*` 共享模块 —— 红先臂由主 agent 写、已证对 HEAD 必红，你**只负责落刀**。\n\n## 族契约（H1a 已落刀；同族后续按此，全部为**已实证**结论）\n降级链单一事实源 = `FAILOVER_CHAIN`（禁第二实现）。加固三面：① **双超时**（connect 短超时 + read 长超时，两个独立常量）⟹ 连接类失败**立即降级**、不再同跳重试；② **断路器**（跨进程健康记忆：失败达阈值 → TTL 内 O(1) 零网络跳过；缓存落 state 旁挂 `.gatekeeper.failover.json`，已入 `.gitignore`）；③ **安全面**（base 白名单 = `PROVIDERS` 单源、禁跟随重定向、响应体上限、错误串脱敏）。\n\n## 落刀清单（一律用**符号锚**定位，禁凭行号）\n1. 常量集中在 `_is_retryable` 之后：`FAILOVER_CONNECT_TIMEOUT` / `FAILOVER_READ_TIMEOUT` / `FAILOVER_BREAKER_FAILS` / `FAILOVER_BREAKER_TTL` / `FAILOVER_MAX_RESP_BYTES` / `ALLOWED_BASES`（env 可覆盖，单一默认）。\n2. 断路器 helper：`_breaker_read` / `_breaker_write`（原子 tmp + `os.replace`）/ `_breaker_allows` / `_breaker_record_fail` / `_breaker_record_ok`；缓存读写一律 best-effort（**不得**抛、**不得**改 BLOCK 语义）。\n3. 主循环头：先 `_breaker_allows` 跳过，再 `_ensure_allowed_base`（白名单外 fail-loud）。请求用双超时 + `allow_redirects=False`；响应体超 `FAILOVER_MAX_RESP_BYTES` 即记失败并中断；成功后 `_breaker_record_ok`。\n4. 异常分流：连接类（`ConnectTimeout`/`ConnectionError`）**立即降级**；读超时（`Timeout`）单列；其余 `RequestException` 依 `_is_retryable` 决定重试或降级。所有错误串经 `_redact(msg, api_key)`。\n\n## 落刀方式 / 你**不需要**做的\n- 用 `edit` 工具落刀；`old_str` 必须**逐字**取自文件（先 `read` 取原文，禁凭记忆）；新增 helper 可用 `old_str=\"\"` 插入。\n- 红先测试由主 agent 负责（`test_first` 已给出且已证对 HEAD 必红）；你**无需**跑测试。验收命令（你不用跑）：{verify_cmd}\n- ⚠ **判据自检**：若你发现 `test_first` 判据存在**注释盲**或**前置未验证**（可能真空通过/假红），在报告里点出并附一行复现 —— 但**仍须先落刀**。",
+  "test_first": "scripts/test_gk_monitor_api_failover.py::test_connect_failure_switches_immediately",
+  "verify_cmd": "bash -c 'cd \"$PWD\" && python3 -m pytest scripts/test_gk_monitor_api_failover.py -q'  # cwd=本工作树根（coder 的 worktree）；**禁**写死家目录绝对路径（防 foreign_content_guard 白名单误判）",
+  "affected_tests": ["scripts/test_gk_monitor_api_failover.py"]
+}

@@ -1,0 +1,88 @@
+name: release
+
+# 发布纪律（对齐 references/ci-pipeline-template.md §3.6 / §5 / §6）：
+#   tag → 全量 smoke → 确定性打包 → 校验和回验 → GitHub Release（附 zip + manifest + SHA256SUMS）
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "待打包的 tag（workflow_dispatch 用）"
+        required: true
+        default: ""
+
+# 最小权限：workflow 默认只读；发布 job 单独申请 contents/id-token/attestations。
+permissions:
+  contents: read
+
+# 运行时基线（2026-11-02）：Actions 已弃用 Node 20，默认强制 Node 24；
+# runner 侧固定 `ubuntu-24.04`（`ubuntu-latest` 已于 2026-10 起迁 Ubuntu 26，
+# 发布打包不应随基础镜像语义漂移）。
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: package + verify + publish
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    # 单人维护：不设 environment required reviewers —— GitHub 不允许触发者审批自己的部署，
+    # 配了会永久等待。tag push / workflow_dispatch 本身就是人工闸门。
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: "3.12"
+      - name: install test deps
+        run: python -m pip install --upgrade pip pytest pytest-xdist cryptography pyyaml==6.0.2
+      - name: workflow security gate
+        run: python scripts/gk_ci_security_lint.py --json
+      - name: package/hook integrity
+        # 发布前最后一道注册面检查：命令 / 插件 / 钩子注册了就必须有载体。
+        run: python scripts/gk_package_integrity.py --json
+      - name: smoke gate
+        run: bash scripts/ci_smoke.sh
+      - name: pack (deterministic zip + SHA256SUMS + manifest)
+        env:
+          VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+        run: |
+          python scripts/pack_release.py --tree . --out dist --version "$VERSION" --json > pack-report.json
+          cat pack-report.json
+      - name: verify checksums (extract + sha256sum -c)
+        env:
+          VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+        run: |
+          mkdir -p dist/unpacked
+          unzip -q "dist/zthl-aegis-$VERSION.zip" -d dist/unpacked
+          cd dist/unpacked
+          sha256sum -c SHA256SUMS
+      - name: attest build provenance
+        # SLSA provenance：把 zip 与本次 workflow/commit 绑定，消费方可离线核验。
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be  # v2
+        with:
+          subject-path: dist/zthl-aegis-*.zip
+      - name: publish release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+        run: |
+          gh release create "$VERSION" \
+            --verify-tag \
+            "dist/zthl-aegis-$VERSION.zip" \
+            "dist/SHA256SUMS" \
+            "dist/release-manifest.json" \
+            --title "ZTHL Aegis $VERSION" \
+            --notes-file "RELEASE-NOTES-$VERSION.md"

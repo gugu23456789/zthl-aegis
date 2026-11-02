@@ -1,0 +1,20 @@
+{
+  "stage": "STAGE_2",
+  "name": "CI — Continuous Integration",
+  "trigger": "推送后监控CI状态",
+  "requires": [
+    "code_pushed_to_remote",
+    "ci_workflow_triggered",
+    "all_platforms_green"
+  ],
+  "produces": [
+    "ci_all_green_confirmation"
+  ],
+  "evidence": [
+    "GitHub Actions workflow shows ubuntu✅ macos✅ windows✅ wasm✅"
+  ],
+  "must_not": [
+    "proceed_to_STAGE_3_with_red_ci",
+    "push_without_ci_trigger"
+  ]
+}

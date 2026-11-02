@@ -1,0 +1,41 @@
+{
+  "schema": "gk-red-external-map/1",
+  "what": "外部威胁框架 → 红队站点映射（单一事实源）。用途：证明向量集合**覆盖了外部基线**，并把新情报按框架落位到站点。",
+  "discipline": "每个外部条目必须映射到已登记站点（`references/red-vectors.json::stations`）；映射是**覆盖面声明**，不是「已完全实现」——缺项按 `gap` 标注。新增框架须同批加检查用例。",
+  "frameworks": {
+    "OWASP-LLM-Top10-2025": {
+      "url": "https://genai.owasp.org/llm-top-10/",
+      "entries": [
+        {"id": "LLM01", "name": "Prompt Injection", "stations": ["RED-POISON", "RED-CTX"], "gap": ""},
+        {"id": "LLM02", "name": "Sensitive Information Disclosure", "stations": ["RED-SCOPE", "RED-GHOST"], "gap": ""},
+        {"id": "LLM03", "name": "Supply Chain", "stations": ["RED-REGISTRY"], "gap": "依赖清单/签名验证无独立向量（仅注册表面）"},
+        {"id": "LLM04", "name": "Data and Model Poisoning", "stations": ["RED-POISON"], "gap": ""},
+        {"id": "LLM05", "name": "Improper Output Handling", "stations": ["RED-HOOK"], "gap": ""},
+        {"id": "LLM06", "name": "Excessive Agency", "stations": ["RED-CONSTRAINTS", "RED-EXPLOIT"], "gap": ""},
+        {"id": "LLM07", "name": "System Prompt Leakage", "stations": ["RED-GHOST"], "gap": ""},
+        {"id": "LLM08", "name": "Vector and Embedding Weaknesses", "stations": ["RED-COVERAGE"], "gap": "无向量库/embedding 面（本项目未使用）"},
+        {"id": "LLM09", "name": "Misinformation", "stations": ["RED-REPORT", "RED-DIFF"], "gap": "报告站无独立向量（汇总站）"},
+        {"id": "LLM10", "name": "Unbounded Consumption", "stations": ["RED-PY", "RED-COVERAGE"], "gap": "token/预算面仅间接覆盖"}
+      ]
+    },
+    "MITRE-ATLAS": {
+      "url": "https://atlas.mitre.org/tactics/",
+      "entries": [
+        {"id": "AML.TA0002", "name": "Reconnaissance", "stations": ["RED-SURFACE", "RED-SCOPE"], "gap": ""},
+        {"id": "AML.TA0003", "name": "Resource Development", "stations": ["RED-POISON"], "gap": ""},
+        {"id": "AML.TA0004", "name": "Initial Access", "stations": ["RED-EXPLOIT"], "gap": ""},
+        {"id": "AML.TA0005", "name": "ML Model Access", "stations": ["RED-EXPLOIT"], "gap": ""},
+        {"id": "AML.TA0006", "name": "Execution", "stations": ["RED-PY", "RED-EXPLOIT"], "gap": ""},
+        {"id": "AML.TA0007", "name": "Persistence", "stations": ["RED-HOOK"], "gap": ""},
+        {"id": "AML.TA0008", "name": "Privilege Escalation", "stations": ["RED-HOOK", "RED-CONSTRAINTS"], "gap": ""},
+        {"id": "AML.TA0009", "name": "Defense Evasion", "stations": ["RED-HOOK", "RED-DIFF"], "gap": ""},
+        {"id": "AML.TA0010", "name": "Credential Access", "stations": ["RED-SCOPE"], "gap": ""},
+        {"id": "AML.TA0011", "name": "Discovery", "stations": ["RED-SURFACE"], "gap": ""},
+        {"id": "AML.TA0012", "name": "Lateral Movement", "stations": ["RED-REGISTRY"], "gap": ""},
+        {"id": "AML.TA0013", "name": "Collection", "stations": ["RED-SCOPE"], "gap": ""},
+        {"id": "AML.TA0014", "name": "Exfiltration", "stations": ["RED-GHOST"], "gap": ""},
+        {"id": "AML.TA0015", "name": "Impact", "stations": ["RED-INTEGRITY"], "gap": ""}
+      ]
+    }
+  }
+}

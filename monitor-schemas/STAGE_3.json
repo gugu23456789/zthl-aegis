@@ -1,0 +1,37 @@
+{
+  "stage": "STAGE_3",
+  "name": "REVIEW — Cross-Review + GitNexus + Update Plan",
+  "trigger": "CI 全绿后",
+  "requires": [
+    "sprint_contract_declared_before_review",
+    "l1_git_integrity_check",
+    "l2_plan_conformance_check",
+    "l3_gitnexus_baseline_analyzed",
+    "l4_niantic_reference_line_by_line",
+    "l5_known_blind_spot_registry_check",
+    "l6_architecture_sync",
+    "plan_backup_synced",
+    "dead_code_three_gate_completed"
+  ],
+  "produces": [
+    "sprint_contract_in_gate_data",
+    "cross_review_report_l1_l6",
+    "gitnexus_baseline_nodes_edges",
+    "updated_plan_status_table",
+    "synced_plan_backup"
+  ],
+  "evidence": [
+    "gate_data.sprint_contract exists with scope+dimensions+failure_conditions+pass_standard",
+    "gitnexus analyze output with node count > 1400",
+    "rg production entry scan for new symbols",
+    "plan §0.4 status updated to current R",
+    "docs/plan-backup/ plan file exists"
+  ],
+  "must_not": [
+    "sprint_contract_written_after_code_review",
+    "skip_l4_niantic_cross_review",
+    "dead_code_claim_from_context_alone",
+    "proceed_without_three_gate_verification",
+    "plan_not_synced_to_backup"
+  ]
+}
