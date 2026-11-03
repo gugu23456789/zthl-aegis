@@ -150,9 +150,11 @@ def _state_field(state_file: str, key: str):
         proj = _state_projection(state_file)
         return None if proj is None else proj.get(key)
     try:
-        with open(state_file, "r", encoding="utf-8") as f:
-            return json.load(f).get(key)
-    except Exception:
+        # 2026-11-03（M1）：非投影字段走 WAL-aware 读（checkpoint + `.wal` replay）。
+        from gk_json_utils import read_state_file
+        d = read_state_file(state_file)
+        return d.get(key) if isinstance(d, dict) and "error" not in d else None
+    except Exception:  # noqa: BLE001 — 容错语义与旧实现一致
         return None
 
 

@@ -4,17 +4,23 @@
 输入一棵**已导出的树**（或任意待发布目录），产出：
 
   <out>/<name>-<version>.zip        确定性 zip（固定 mtime、路径排序、排除运行期产物）
-  <out>/SHA256SUMS                 逐文件 sha256（不含自身；随包内根目录一份）
+  <out>/SHA256SUMS                 逐成员 sha256（不含自身；随包内根目录一份）
+  <out>/PROVENANCE.json            来源声明（source repo/commit/tag + 导出策略 + 工具哈希）
   <out>/release-manifest.json      文件数 / 逐文件 sha256 / zip sha256 / 身份与禁词反查结果
 
 纪律（沿 CI 模版）：
   · **拒发**：身份字面量 / 密钥形态 / 禁词命中 ⟹ exit 2，**不产出 zip**（fail-closed）。
-  · **确定性**：同输入两次打包 zip sha256 必须相同（mtime 固定为 1980-01-01，成员排序）。
+  · **确定性**：同输入两次打包 zip sha256 必须相同（mtime 固定为 1980-01-01，成员排序；
+    PROVENANCE.json **不含墙钟时间** ⟹ 不破坏确定性）。
   · **零网络**、仅标准库。
   · 身份/密钥正则优先复用 `oss_scrub`（单一事实源）；公开树无该模块时退化为保守内置形态。
+  · **来源可对账**（2026-11-03）：`--source-repo/--source-commit/--source-tag`（缺省读
+    `GITHUB_REPOSITORY/GITHUB_SHA/GITHUB_REF_NAME`）写进包内 PROVENANCE.json 与 manifest；
+    导出排除面的权威文件 = `references/oss-export-whitelist.json`（记录其 sha256，不复制清单）。
 
 用法：
-  python3 scripts/pack_release.py --tree <dir> --out dist --version v0.9.2
+  python3 scripts/pack_release.py --tree <dir> --out dist --version v0.9.2 \
+      --source-repo owner/repo --source-commit <sha> --source-tag v0.9.2
   python3 scripts/pack_release.py --tree <dir> --out dist --version v0.9.2 \
       --forbidden docs/oss/forbidden-terms.txt --json
 """
@@ -34,7 +40,8 @@ EXCLUDE_DIRS = {".git", "__pycache__", ".pytest_cache", ".mypy_cache", ".zthl", 
 #   二者都是**运行期产物**，进包即污染发布物（且 claims 属运行元数据）。
 EXCLUDE_PREFIXES = (".gatekeeper.",)
 EXCLUDE_SUFFIXES = (".pyc", ".pyo", ".log", ".tmp", ".bak", ".sig", ".seal")
-EXCLUDE_NAMES = {"SHA256SUMS", "release-manifest.json", "pack-report.json"}
+EXCLUDE_NAMES = {"SHA256SUMS", "release-manifest.json", "pack-report.json",
+                 "PROVENANCE.json"}
 # 未脱敏的私仓原件标记（2026-11-02）：`oss_scrub export` 会剥离 `GK-PUBLIC:CUT-*` 块；
 #   打包树里仍有标记 ⟹ 这是**私仓树/漏跑 export**，不是发布树 ⟹ fail-closed 拒发。
 _PUBLIC_MARKER = re.compile(r"<!--\s*" + re.escape("GK-PUBLIC:CUT-START") + r"\b")
@@ -112,7 +119,8 @@ def _load_terms(path: str) -> list:
     return terms
 
 
-def pack(tree: str, out: str, version: str, forbidden: str = "") -> dict:
+def pack(tree: str, out: str, version: str, forbidden: str = "",
+         source: dict = None, excluded: list = None, tool_sha: str = "") -> dict:
     tree = os.path.abspath(tree)
     out = os.path.abspath(out)
     if not os.path.isdir(tree):
@@ -153,7 +161,46 @@ def pack(tree: str, out: str, version: str, forbidden: str = "") -> dict:
     os.makedirs(out, exist_ok=True)
     base = "zthl-aegis-%s" % version
     zip_path = os.path.join(out, base + ".zip")
+
+    # 来源声明（确定性：**不含墙钟时间**，否则同输入两次 zip sha 会不同）。
+    policy_rel = "references/oss-export-whitelist.json"
+    policy_abs = os.path.join(tree, *policy_rel.split("/"))
+    policy_sha = (_sha256_bytes(open(policy_abs, "rb").read())
+                  if os.path.isfile(policy_abs) else "")
+    provenance = {
+        "schema": "zthl-provenance/1",
+        "version": version,
+        "source": {k: v for k, v in (source or {}).items() if v},
+        "export": {
+            "policy": policy_rel if policy_sha else "",
+            "policy_sha256": policy_sha,
+            "tool_sha256": tool_sha or "",
+            "excluded": sorted(excluded or []),
+        },
+        "license": "LICENSE",
+        "payload_files": len(file_rows),
+        "note": "clean export（非开发仓）；canonical 仓库与 commit 见 source 字段",
+    }
+    # 第三方存档标识（可选）：Concept DOI 稳定 ⟹ 可随包分发；Version DOI 不进包（上传后才存在）。
+    archive_rel = "references/archive.json"
+    archive_abs = os.path.join(tree, *archive_rel.split("/"))
+    if os.path.isfile(archive_abs):
+        try:
+            with open(archive_abs, encoding="utf-8") as f:
+                meta = json.load(f)
+        except (OSError, ValueError):
+            meta = {}
+        arch = {k: str(meta.get(k) or "").strip()
+                for k in ("concept_doi", "zenodo_record", "swhid")}
+        arch = {k: v for k, v in arch.items() if v}
+        if arch:
+            provenance["archive"] = arch
+    prov_bytes = (json.dumps(provenance, ensure_ascii=False, indent=2,
+                             sort_keys=True) + "\n").encode("utf-8")
+    prov_sha = _sha256_bytes(prov_bytes)
+
     sums_lines = ["%s  %s" % (r["sha256"], r["path"]) for r in file_rows]
+    sums_lines.append("%s  %s" % (prov_sha, "PROVENANCE.json"))
     sum_text = "\n".join(sums_lines) + "\n"
     sum_sha = _sha256_bytes(sum_text.encode("utf-8"))
 
@@ -165,6 +212,10 @@ def pack(tree: str, out: str, version: str, forbidden: str = "") -> dict:
             zi.compress_type = zipfile.ZIP_DEFLATED
             with open(os.path.join(tree, r["path"]), "rb") as f:
                 z.writestr(zi, f.read())
+        zi = zipfile.ZipInfo("PROVENANCE.json", date_time=(1980, 1, 1, 0, 0, 0))
+        zi.external_attr = (0o644 & 0xFFFF) << 16
+        zi.compress_type = zipfile.ZIP_DEFLATED
+        z.writestr(zi, prov_bytes)
         zi = zipfile.ZipInfo("SHA256SUMS", date_time=(1980, 1, 1, 0, 0, 0))
         zi.external_attr = (0o644 & 0xFFFF) << 16
         zi.compress_type = zipfile.ZIP_DEFLATED
@@ -172,16 +223,22 @@ def pack(tree: str, out: str, version: str, forbidden: str = "") -> dict:
 
     with open(os.path.join(out, "SHA256SUMS"), "w", encoding="utf-8", newline="\n") as f:
         f.write(sum_text)
+    with open(os.path.join(out, "PROVENANCE.json"), "wb") as f:
+        f.write(prov_bytes)
     zip_sha = _sha256_bytes(open(zip_path, "rb").read())
     manifest = {
         "schema": "zthl-release-manifest/1",
         "version": version,
         "created_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "tree": tree,
+        "tree": os.path.basename(tree.rstrip("/\\")) or ".",
         "file_count": len(file_rows),
         "zip": os.path.basename(zip_path),
         "zip_sha256": zip_sha,
         "sha256sums_sha256": sum_sha,
+        "provenance_sha256": prov_sha,
+        "source": provenance["source"],
+        "export": provenance["export"],
+        "archive": provenance.get("archive", {}),
         "files": file_rows,
         "identity_hits": [],
         "forbidden_hits": [],
@@ -200,9 +257,26 @@ def main(argv=None) -> int:
     ap.add_argument("--out", required=True)
     ap.add_argument("--version", required=True)
     ap.add_argument("--forbidden", default="")
+    ap.add_argument("--source-repo", default=os.environ.get("GITHUB_REPOSITORY", ""),
+                    help="canonical 仓（缺省 GITHUB_REPOSITORY）")
+    ap.add_argument("--source-commit", default=os.environ.get("GITHUB_SHA", ""),
+                    help="本次发布对应 commit（缺省 GITHUB_SHA）")
+    ap.add_argument("--source-tag", default=os.environ.get("GITHUB_REF_NAME", ""),
+                    help="发布 tag（缺省 GITHUB_REF_NAME）")
+    ap.add_argument("--exclude", action="append", default=[], metavar="PATH",
+                    help="写入 PROVENANCE.json 的排除面声明（可重复；仅记录，不改变打包）")
+    ap.add_argument("--export-tool-sha256", default="",
+                    help="导出自证工具的 sha256（缺省取 <tree>/scripts/oss_scrub.py）")
     ap.add_argument("--json", action="store_true")
     ns = ap.parse_args(argv)
-    r = pack(ns.tree, ns.out, ns.version, ns.forbidden)
+    tool_sha = ns.export_tool_sha256
+    if not tool_sha:
+        cand = os.path.join(ns.tree, "scripts", "oss_scrub.py")
+        if os.path.isfile(cand):
+            tool_sha = hashlib.sha256(open(cand, "rb").read()).hexdigest()
+    source = {"repo": ns.source_repo, "commit": ns.source_commit, "tag": ns.source_tag}
+    r = pack(ns.tree, ns.out, ns.version, ns.forbidden, source=source,
+             excluded=ns.exclude, tool_sha=tool_sha)
     if ns.json:
         print(json.dumps({k: v for k, v in r.items() if k != "files"}, ensure_ascii=False, indent=2))
     if not r.get("ok"):

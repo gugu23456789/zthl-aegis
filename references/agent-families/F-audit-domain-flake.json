@@ -1,0 +1,20 @@
+{
+  "family": "F-audit-domain-flake",
+  "match": {
+    "any": ["audit --all", "load-failed", "empty_or_invalid_result", "域偶发", "域结果不可复核"]
+  },
+  "generic_tokens": [],
+  "anchor_symbols": ["cmd_audit", "_audit_timed_run", "_tmp_audit_dir"],
+  "tier": 4,
+  "edit_quota": 3,
+  "allowed_paths": ["gatekeeper-cli.sh"],
+  "forbidden_paths": [
+    "docs/", "references/", ".gitignore",
+    "scripts/gk_audit_coverage.py", "scripts/gk_audit_findings.py",
+    "scripts/test_gk_audit_all_aggregation.py"
+  ],
+  "narrow_task_template": "修 {anchor}。**唯一目标文件 = `gatekeeper-cli.sh` 的 `cmd_audit` `--all` 分支**（唯一 allowed_path）。红先测试已由主 agent 写入 `scripts/test_gk_audit_all_aggregation.py::test_domain_failures_not_silently_swallowed`，对 HEAD 必红；你**只负责落刀**，不改测试、不改其它分支。**越界即失败**。⚠ **判据自检**：若发现 test_first 存在注释盲或前置未验证，在报告里点出并附一行复现 —— 但仍须先落刀。\n\n## 病象（已实证，勿再复核）\n`audit --all` 首轮 `crossr` 域返回**空文件 + 非零 rc**，但域调用与结果读取都用了 `2>/dev/null` ⟹ stderr 被丢弃，聚合只能报 `load-failed: Expecting value: line 1 column 1`，既看不到真实错误也拿不到退出码；同一命令单跑 `audit --crossr` 成功（1/2 偶发）。\n\n## 落刀清单\n1. 在 `_audit_timed_run` 之后新增 helper `_audit_read_result()`：读 `$_tmp_audit_dir/<domain>.json`；若文件为空或 JSON 非法，输出具名结果 `{\"ok\":false,\"error\":\"empty_or_invalid_result\",\"domain\":...,\"rc\":...,\"bytes\":...,\"stderr_tail\":...}`；合法则原样 `cat`。\n2. 域循环改为每域写 `<domain>.err` 与 `<domain>.rc`（`2> \"$_tmp_audit_dir/$_ad.err\"`；随后 `echo $? > \"$_tmp_audit_dir/$_ad.rc\"`），**移除**域调用上的 `2>/dev/null`。\n3. 五处 `cat ... 2>/dev/null || echo '{\"ok\":false}'` 改为 `_audit_read_result <domain>`；`report` 域同样保留 `.err/.rc` 并用 helper 读取。\n4. 不改聚合 python 的 all-of 语义、不改落库/登记行序、不改 `_audit_timed_run` 的进程判活逻辑。\n\n## ⛔ 不得触碰\n- 任何 `PROTECTED_REGION`；`_CMD_REG`；其它 case 分支；`docs/` / `references/` / 测试文件。\n- 不得把 helper 写成第二套 JSON 解析器：合法判定只允许一次 `json.load`；合成结果只允许 `json.dumps`。\n\n## 验收（主 agent 跑）\n{verify_cmd}\n另外 `bash -n gatekeeper-cli.sh` 必须通过。",
+  "test_first": "scripts/test_gk_audit_all_aggregation.py::test_domain_failures_not_silently_swallowed",
+  "verify_cmd": "bash -c 'cd \"$PWD\" && python -m pytest scripts/test_gk_audit_all_aggregation.py -q -k domain_failures && bash -n gatekeeper-cli.sh'",
+  "affected_tests": ["scripts/test_gk_audit_all_aggregation.py"]
+}

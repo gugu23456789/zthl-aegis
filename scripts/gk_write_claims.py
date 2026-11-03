@@ -563,9 +563,12 @@ def _state_worktree(state_file: str) -> str:
     if not state_file or not os.path.isfile(state_file):
         return ""
     try:
-        with open(state_file, encoding="utf-8") as f:
-            d = json.load(f)
-    except (OSError, ValueError):
+        # 2026-11-03（M1）：走 WAL-aware 读（checkpoint + `<state>.wal` replay）。
+        from gk_json_utils import read_state_file
+        d = read_state_file(state_file)
+    except Exception:  # noqa: BLE001 — 边界：读不到即无 root（与原语义一致）
+        return ""
+    if not isinstance(d, dict) or "error" in d:
         return ""
     v = d.get("worktree")
     return v.strip() if isinstance(v, str) else ""

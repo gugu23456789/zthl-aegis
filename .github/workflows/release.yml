@@ -55,12 +55,24 @@ jobs:
         run: python scripts/gk_package_integrity.py --json
       - name: smoke gate
         run: bash scripts/ci_smoke.sh
-      - name: pack (deterministic zip + SHA256SUMS + manifest)
+      - name: pack (deterministic zip + SHA256SUMS + PROVENANCE + manifest)
         env:
           VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
         run: |
-          python scripts/pack_release.py --tree . --out dist --version "$VERSION" --json > pack-report.json
+          python scripts/pack_release.py --tree . --out dist --version "$VERSION" \
+            --source-repo "${{ github.repository }}" \
+            --source-commit "${{ github.sha }}" \
+            --source-tag "$VERSION" \
+            --json > pack-report.json
           cat pack-report.json
+      - name: sbom (CycloneDX 1.5)
+        env:
+          VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+        run: |
+          ZIP_SHA=$(sha256sum "dist/zthl-aegis-$VERSION.zip" | cut -d' ' -f1)
+          python scripts/gk_sbom.py --tree . --version "$VERSION" \
+            --zip-sha256 "$ZIP_SHA" --out dist/SBOM.cdx.json
+          cat dist/SBOM.cdx.json
       - name: verify checksums (extract + sha256sum -c)
         env:
           VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
@@ -69,11 +81,23 @@ jobs:
           unzip -q "dist/zthl-aegis-$VERSION.zip" -d dist/unpacked
           cd dist/unpacked
           sha256sum -c SHA256SUMS
+      - name: release-gate benchmark (SLA record)
+        # S5：发布门耗时纳入 SLA —— 只记录与 WARN（CI 抖动大），不阻断发版；
+        #   基线滚动由维护者按 nightly 产物人工 `--init-baseline`。
+        run: |
+          set -o pipefail
+          mkdir -p dist/bench
+          python scripts/gk_bench_release.py --json --out-dir dist/bench > dist/bench/release.json
+          python scripts/gk_bench_compare.py --baseline references/bench-baseline.json \
+            --release dist/bench/release.json --only release --json \
+            | tee dist/bench/release-compare.json
       - name: attest build provenance
         # SLSA provenance：把 zip 与本次 workflow/commit 绑定，消费方可离线核验。
         uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be  # v2
         with:
-          subject-path: dist/zthl-aegis-*.zip
+          subject-path: |
+            dist/zthl-aegis-*.zip
+            dist/SBOM.cdx.json
       - name: publish release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -83,6 +107,8 @@ jobs:
             --verify-tag \
             "dist/zthl-aegis-$VERSION.zip" \
             "dist/SHA256SUMS" \
+            "dist/PROVENANCE.json" \
+            "dist/SBOM.cdx.json" \
             "dist/release-manifest.json" \
             --title "ZTHL Aegis $VERSION" \
             --notes-file "RELEASE-NOTES-$VERSION.md"

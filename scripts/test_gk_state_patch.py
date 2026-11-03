@@ -13,6 +13,71 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 import gk_state
 import gk_state_patch as gsp
+import gk_json_utils as _JU
+
+
+def _read(p):
+    """WAL-aware state 读（2026-11-03 M1：写路径追加 WAL，磁盘 checkpoint 可能落后）。"""
+    return _JU.read_state_file(str(p))
+
+
+# ── S4（M3）：gate 元数据批量提交（单事务）──────────────────────────────────
+def test_set_nested_uses_wal_not_full_rewrite(tmp_path, monkeypatch):
+    """定点叶写不得再走整份 `_write_state`（否则 512KB state 每次 1975x 写放大）。"""
+    p = tmp_path / "state.json"
+    _write_state(p, _base_state())
+
+    def _boom(*a, **k):
+        raise AssertionError("set_nested 仍走整份 _write_state")
+
+    monkeypatch.setattr(gk_state, "_write_state", _boom)
+    out = gsp.cmd_set_nested(str(p), "gate_data.ci_status", '"green"')
+    assert out.get("ok"), out
+    assert _read(p)["gate_data"]["ci_status"] == "green"
+
+
+def test_set_nested_batch_is_one_transaction(tmp_path):
+    """一轮多叶写只落 **一条** WAL 记录；三条语义全部可见。"""
+    p = tmp_path / "state.json"
+    _write_state(p, _base_state())
+    out = gsp.cmd_set_nested_batch(str(p), [
+        {"path": "gate_data.a", "value": '"1"'},
+        {"path": "gate_data.b", "value": '"2"'},
+        {"path": "gate_data.c", "value": '"3"'},
+    ])
+    assert out.get("ok") and out.get("count") == 3, out
+    wal = Path(str(p) + ".wal")
+    lines = [ln for ln in wal.read_text(encoding="utf-8").splitlines() if ln.strip()]
+    assert len(lines) == 1, "批量写未合并为单条 WAL 记录（%d 条）" % len(lines)
+    d = _read(p)
+    assert (d["gate_data"]["a"], d["gate_data"]["b"], d["gate_data"]["c"]) == ("1", "2", "3")
+
+
+def test_set_nested_batch_rejects_atomically(tmp_path):
+    """批内任一叶非法（目标是容器）⟹ 整批拒、零写盘（不产生半批）。"""
+    p = tmp_path / "state.json"
+    _write_state(p, _base_state())
+    before = Path(str(p)).read_bytes()
+    out = gsp.cmd_set_nested_batch(str(p), [
+        {"path": "gate_data.ok_leaf", "value": '"x"'},
+        {"path": "gate_data.best", "value": '"y"'},      # best 已是 dict ⟹ G4 拒
+    ])
+    assert out.get("ok") is False, out
+    assert Path(str(p)).read_bytes() == before
+    wal = Path(str(p) + ".wal")
+    assert not wal.exists() or wal.stat().st_size == 0
+
+
+def test_set_nested_batch_last_write_wins(tmp_path):
+    """同批同路径重复写 ⟹ 顺序可见（与逐条调用一致）。"""
+    p = tmp_path / "state.json"
+    _write_state(p, _base_state())
+    out = gsp.cmd_set_nested_batch(str(p), [
+        {"path": "gate_data.seq_leaf", "value": '"first"'},
+        {"path": "gate_data.seq_leaf", "value": '"second"'},
+    ])
+    assert out.get("ok"), out
+    assert _read(p)["gate_data"]["seq_leaf"] == "second"
 
 
 def _write_state(state_path: Path, data: dict) -> None:
@@ -42,7 +107,7 @@ class TestUpdateBest:
         _write_state(p, _base_state())
         out = gsp.cmd_update_best(str(p), "0.8", "STAGE_4", "", "t1")
         assert out["ok"] is True and out["new_best"] is True
-        data = json.loads(p.read_text(encoding="utf-8"))
+        data = _read(p)
         best = data["gate_data"]["best"]
         assert best["score"] == 0.8 and best["stage"] == "STAGE_4"
 
@@ -51,7 +116,7 @@ class TestUpdateBest:
         _write_state(p, _base_state())
         out = gsp.cmd_update_best(str(p), "0.2", "STAGE_9", "", "t1")
         assert out["ok"] is True and out["new_best"] is False
-        data = json.loads(p.read_text(encoding="utf-8"))
+        data = _read(p)
         assert data["gate_data"]["best"]["score"] == 0.5
 
     def test_r_phase_auto_extracted(self, tmp_path):
@@ -60,7 +125,7 @@ class TestUpdateBest:
         _write_state(p, _base_state())
         out = gsp.cmd_update_best(str(p), "0.9", "STAGE_5", "", "t1")
         assert out["ok"] is True and out["new_best"] is True
-        data = json.loads(p.read_text(encoding="utf-8"))
+        data = _read(p)
         assert data["gate_data"]["best"]["r_phase"] == "R-T6"
 
     def test_written_checksum_verifies(self, tmp_path):
@@ -80,7 +145,7 @@ class TestUpdateGateData:
         out = gsp.cmd_update_gate_data(
             str(p), '"branch_cleaned":true,"pr_number":"456"')
         assert out["ok"] is True
-        data = json.loads(p.read_text(encoding="utf-8"))
+        data = _read(p)
         gd = data["gate_data"]
         assert gd["branch_cleaned"] is True          # JSON bool
         assert gd["pr_number"] == "456"              # JSON 字符串原样
@@ -91,7 +156,7 @@ class TestUpdateGateData:
         _write_state(p, _base_state())
         out = gsp.cmd_update_gate_data(str(p), ',"commit_shas":"abc123"')
         assert out["ok"] is True
-        data = json.loads(p.read_text(encoding="utf-8"))
+        data = _read(p)
         assert data["gate_data"]["commit_shas"] == "abc123"
 
     def test_missing_file_reports_error(self, tmp_path):
@@ -105,7 +170,7 @@ class TestUpdateGateData:
         _write_state(p, _base_state())
         out = gsp.cmd_update_gate_data(str(p), '{"ci_status": "green"}')
         assert out["ok"] is True
-        data = json.loads(p.read_text(encoding="utf-8"))
+        data = _read(p)
         assert data["gate_data"]["ci_status"] == "green"
 
     def test_parse_error_gives_guidance(self, tmp_path):
@@ -138,7 +203,7 @@ class TestUpdateGateData:
         _write_state(p, _base_state())
         out = gsp.cmd_update_gate_data(str(p), '"some_list":[]')
         assert out["ok"] is True, f"合法对象片段（值=空数组）被误拒：{out}"
-        data = json.loads(p.read_text(encoding="utf-8"))
+        data = _read(p)
         assert data["gate_data"]["some_list"] == []
 
 
@@ -158,7 +223,7 @@ class TestNarrowTasksWriteSurface:
         return p
 
     def _narrow_ids(self, p: Path) -> list:
-        return [e["id"] for e in json.loads(p.read_text(encoding="utf-8"))
+        return [e["id"] for e in _read(p)
                 ["gate_data"]["narrow_tasks"]]
 
     def test_update_gate_data_rejects_whole_table_replace(self, tmp_path):
@@ -175,7 +240,7 @@ class TestNarrowTasksWriteSurface:
         out = gsp.cmd_update_gate_data(
             str(p), '{"narrow_tasks": [], "pr_number": "999"}')
         assert out["ok"] is False, out
-        data = json.loads(p.read_text(encoding="utf-8"))
+        data = _read(p)
         assert data["gate_data"]["pr_number"] == "123", "拒绝须整份不落（不得半写）"
         assert self._narrow_ids(p) == ["KEEP"]
 
@@ -236,7 +301,7 @@ class TestAppendAchievements:
         assert out["ok"] is True
         assert [a["id"] for a in out["achievements"]] == ["a2"]
         assert out["achievements"][0]["label"] == "L2"
-        data = json.loads(p.read_text(encoding="utf-8"))
+        data = _read(p)
         assert data["achievements"] == ["a1", "a2"]
 
     def test_checksum_verifies(self, tmp_path):
@@ -275,7 +340,7 @@ class TestSetTop:
         _write_state(p, _base_state())
         out = gsp.cmd_set_top(str(p), "worktree", '"/mnt/c/x/wt"')
         assert out["ok"] is True, out
-        data = json.loads(p.read_text(encoding="utf-8"))
+        data = _read(p)
         assert data["worktree"] == "/mnt/c/x/wt"
 
     def test_written_checksum_verifies(self, tmp_path):
@@ -291,7 +356,7 @@ class TestSetTop:
         _write_state(p, _base_state())
         out = gsp.cmd_set_top(str(p), "branch", '"feature/x"')
         assert out["ok"] is True
-        assert json.loads(p.read_text(encoding="utf-8"))["branch"] == "feature/x"
+        assert _read(p)["branch"] == "feature/x"
 
     def test_rejects_gate_data_key(self, tmp_path):
         """负臂：顶层 setter **不得**成为绕过 update-gate-data 校验的后门。"""
@@ -301,7 +366,7 @@ class TestSetTop:
         assert out["ok"] is False
         assert "gate_data" in out["error"]
         # 原 gate_data 未被破坏
-        assert json.loads(p.read_text(encoding="utf-8"))["gate_data"]["pr_number"] == "123"
+        assert _read(p)["gate_data"]["pr_number"] == "123"
 
     def test_rejects_underscore_key(self, tmp_path):
         """负臂：`_checksum` 等内部键禁经此写（由 _write_state 单点重算）。"""

@@ -55,6 +55,11 @@ INDEX_ROOT = "gate_data.satellite_index"
 SEG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]*$")
 _SEG_RE = SEG_RE   # 兼容本模块既有引用
 
+# S3（M2，2026-11-03）：内联热索引写开关。**缺省 False** = 写侧只落片 + 侧车；
+# 读面 `index_entries` 并集内联 ∪ 侧车，旧内联叶照常可读，由 GC 按 TTL 清理。
+# 置 True 即回滚到「逐叶 set-nested」（计划 §6 的回滚路径）。
+INLINE_INDEX_WRITES = False
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -332,6 +337,13 @@ def append(state_file: str, kind: str, records: list, *, batch_id: str,
         _spilled = _spill_inline(state_file, gd=gd)
         return {"ok": True, "shard": shard, "appended": len(records), "leaf": leaf,
                 "claim": claim, "spilled": _spilled}
+    # S3（M2，2026-11-03）：**写侧停更内联热索引**。读面 `index_entries` 已是
+    #   内联 ∪ 侧车 的并集，侧车（append-only + fsync）是完整持久索引 ⟹ 内联只留历史叶，
+    #   由 `gc_index` / `reclaim` 按 TTL 清理。常量仅作回滚开关（计划 §6）。
+    if not INLINE_INDEX_WRITES:
+        return {"ok": True, "shard": shard, "appended": len(records), "leaf": leaf,
+                "claim": claim, "spilled": 0, "inline_skipped": True,
+                "inline_skip_reason": "S3: 写侧只落片 + 侧车（内联热索引停写）"}
     # 索引登记（**只经**定点 set-nested；禁顶层整替 ⟹ 与 c4 拦截面同调）
     try:
         import gk_state_patch as SP

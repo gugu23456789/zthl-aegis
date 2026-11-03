@@ -333,6 +333,73 @@ def test_dead_registration_falls_back_to_diff(tmp_path):
     assert any("orphan_new.txt" in e for e in st["entries"]), f"兜底未报出孤儿内容：{st}"
 
 
+def _force_diff_truncate(monkeypatch, budget="0.001", delay=0.05):
+    """把「内容比对」放慢到必然超出预算（判据臂不依赖宿主 FS 速度）。
+
+    直接调小 `GK_RECLAIM_DIFF_TIMEOUT` 不足以稳定复现：Windows tmp 上 200 个小文件可在
+    0.1 ms 内比完（实测首版臂因此恒绿）。故把 `_files_equal` 包一层 sleep，令预算必然到点。
+    """
+    real = wr._files_equal
+
+    def slow(x, y):
+        time.sleep(delay)
+        return real(x, y)
+
+    monkeypatch.setattr(wr, "_files_equal", slow)
+    monkeypatch.setenv("GK_RECLAIM_DIFF_TIMEOUT", budget)
+
+
+def test_dead_registration_diff_is_time_bounded(tmp_path, monkeypatch):
+    """**红先**（2026-11-03 回收超时）：失效注册的 diff 兜底必须有**墙钟预算**。
+
+    现场（实测，非推测）：`gk-bare-guard` 走兜底时与主树逐字节比对 **1810** 个共有文件
+    （79 MB；WSL `/mnt/c` 单文件 ~38 ms）⟹ **70 s/棵**；4 棵残留即把 `apply-worktree
+    --reclaim` 的 dry-run 顶过 2 min 被判超时。HEAD 无 `truncated` 键（无预算）⟹ 本臂必红。
+    """
+    repo = tmp_path / "main"
+    repo.mkdir()
+    _git(str(repo), "init", "-q", "-b", "main")
+    (repo / "a.txt").write_text("x", encoding="utf-8")
+    _git(str(repo), "add", "a.txt")
+    _git(str(repo), "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init")
+    wt = tmp_path / "orphan"
+    wt.mkdir()
+    (wt / ".git").write_text("gitdir: /nonexistent/gone\n", encoding="utf-8")
+    (wt / "a.txt").write_text("x", encoding="utf-8")      # 共有文件 ⟹ 走到「逐文件比对」段
+    for i in range(20):
+        (wt / ("f%d.txt" % i)).write_text("孤儿内容%d" % i, encoding="utf-8")
+    _force_diff_truncate(monkeypatch)
+    st = wr.worktree_state(str(wt), str(repo))
+    assert st.get("fallback") == "diff"
+    assert st.get("truncated") is True, "diff 兜底无墙钟预算 ⟹ 大树上必超时（本次超时的真因）"
+
+
+def test_truncated_diff_is_held_not_deleted(repo_wt, tmp_path, monkeypatch):
+    """**红先**（2026-11-03 回收超时）：比对未完成 ⟹ **拒删**（fail-closed），不得当「干净」。
+
+    反例风险：把 `truncated` 的 `entries=[]` 当成「无残留」⟹ 未回收内容随目录静默消失
+    （本模块头注点名的病）。HEAD 无此闸 ⟹ 本臂必红。
+    """
+    repo, root, wt = repo_wt
+    # 注册失效（只影响本 wt 的 HEAD 探针，不改盘上 `.git` —— Windows 上该文件可能不可写）。
+    real_git = wr._git
+
+    def fake_git(r, *a):
+        if os.path.abspath(r) == os.path.abspath(wt) and a[:2] == ("rev-parse", "HEAD"):
+            return 1, "", "fatal: not a git repository"
+        return real_git(r, *a)
+
+    monkeypatch.setattr(wr, "_git", fake_git)
+    _force_diff_truncate(monkeypatch)
+    monkeypatch.setenv("GK_WRITE_CLAIMS_PATH", str(tmp_path / "claims.jsonl"))
+    monkeypatch.delenv("GK_RECLAIM_CLAIM_GUARD", raising=False)
+    r = wr.reclaim(repo, root, apply=True, trash=os.path.join(root, "trash"), only=[wt])
+    assert os.path.isdir(wt), "比对未完成竟删了 worktree（fail-open，可能丢未回收内容）"
+    assert r["ok"] is False, r
+    assert any(os.path.abspath(p) == os.path.abspath(wt) for p in r["held"]), r
+    assert not os.path.isdir(os.path.join(root, "trash")), "拒删时不应产生归档"
+
+
 # ══════════ `/tmp` 回收（**共享区纪律**，2026-09-24 用户裁定「3 是不是更好」）══════════
 def _mk_tmpdir(root, name, content="x", age_days=0.0):
     """造一个可控龄期的 `/tmp` 风格条目（目录 + 内含一个文件）。"""

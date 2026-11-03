@@ -1,0 +1,7 @@
+{
+  "schema": "gk-archive-meta/1",
+  "note": "第三方存档标识（可选）。只放**稳定标识**：Zenodo Concept DOI 一次分配、永久指向最新版本；SWHID 按发布快照更新。空值 = 未分配，打包时会被省略（不伪造）。",
+  "concept_doi": "",
+  "zenodo_record": "",
+  "swhid": ""
+}

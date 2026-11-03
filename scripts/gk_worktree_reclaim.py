@@ -24,6 +24,7 @@ import shutil
 import subprocess
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 from datetime import datetime, timezone
 
 # 噪声过滤：环境缓存（gitignore 覆盖得了 git，覆盖不了文件级 diff）
@@ -98,6 +99,88 @@ def _files_equal(x: str, y: str) -> bool:
         return False
 
 
+def _diff_budget_s() -> float:
+    """失效注册 diff 的**墙钟预算**（秒）；`GK_RECLAIM_DIFF_TIMEOUT=0` ⟹ 无预算（旧语义）。
+
+    2026-11-03 实测（`gk-bare-guard`，git 注册已失效）：与主树逐字节比对 **1810** 个共有文件
+    （79 MB，WSL `/mnt/c`）耗时 **70 s/棵** ⟹ 4 棵残留即把 `apply-worktree --reclaim` 的
+    dry-run 顶过 2 min 超时。预算默认 45 s：超时**不猜**，交调用方 `truncated` ⟹ 拒删。
+    """
+    try:
+        return max(float(os.environ.get("GK_RECLAIM_DIFF_TIMEOUT", "45") or 45), 0.0)
+    except (TypeError, ValueError):
+        return 45.0
+
+
+def _dir_diff_rq_bounded(a: str, b: str, deadline: float = None) -> tuple:
+    """`_dir_diff_rq` 的**有界**实现 → `(lines, truncated)`（判据不变，只加边界）。
+
+    三条提速/兜底（**都不放宽判据**）：
+      ① **目录剪枝**：名字命中 `_is_noise` 的目录不下钻 —— 其输出行本就会被 `worktree_state`
+         的 `_is_noise` 过滤 ⟹ 结果**逐字等价**（缓存/state 目录实测占大头）；
+      ② **并行比对**：文件内容比对是 I/O 延迟主导（drvfs 单文件 ~38 ms），线程池并发后
+         结果**排序**再返回 ⟹ 输出顺序与串行实现一致；
+      ③ **墙钟预算**：`deadline` 到点即停，返回 `truncated=True`；**不**把「没比完」当「没差异」。
+    """
+    def _names(d):
+        try:
+            return sorted(os.listdir(d))
+        except OSError:
+            return []
+
+    only, pairs = [], []
+    stack = [(a, b)]
+    truncated = False
+    while stack:
+        if deadline is not None and time.monotonic() > deadline:
+            truncated = True
+            break
+        x, y = stack.pop()
+        na, nb = _names(x), _names(y)
+        sa, sb = set(na), set(nb)
+        for n in nb:
+            if n not in sa:
+                only.append("Only in %s: %s" % (y, n))
+        for n in na:
+            if n not in sb:
+                only.append("Only in %s: %s" % (x, n))
+        for n in na:
+            if n == ".git" or n not in sb:
+                continue
+            px, py = os.path.join(x, n), os.path.join(y, n)
+            if os.path.isdir(px) and os.path.isdir(py):
+                if _is_noise(n):
+                    continue          # ①：与输出侧过滤同判据 ⟹ 剪枝不改变结果
+                stack.append((px, py))
+            elif os.path.isfile(px) and os.path.isfile(py):
+                pairs.append((px, py))
+
+    differ = []
+    if pairs and not truncated:
+        left = None if deadline is None else deadline - time.monotonic()
+        if left is not None and left <= 0:
+            truncated = True
+        else:
+            pool = ThreadPoolExecutor(max_workers=min(8, max(1, len(pairs))))
+            try:
+                futs = [pool.submit(_files_equal, px, py) for px, py in pairs]
+                for fu, (px, py) in zip(futs, pairs):
+                    if deadline is not None and time.monotonic() > deadline:
+                        truncated = True
+                        break
+                    try:
+                        same = fu.result(timeout=max(deadline - time.monotonic(), 0.001)
+                                         if deadline is not None else None)
+                    except FuturesTimeout:
+                        truncated = True
+                        break
+                    if not same:
+                        differ.append("Files %s and %s differ" % (px, py))
+            finally:
+                pool.shutdown(wait=False)
+    return sorted(only + differ), truncated
+
+
 def _dir_diff_rq(a: str, b: str) -> list:
     """`diff -rq a b` 的**可移植**等价（输出**同形**行，供 `_copy_entry` 解析）。
 
@@ -108,29 +191,9 @@ def _dir_diff_rq(a: str, b: str) -> list:
       · 双侧存在但内容不同 ⟹ `Files <a> and <b> differ`；
       · 两侧同为目录 ⟹ 递归（跳过 `.git`：其内部条目在 `worktree_state` 的**顶层**口径下本就被丢，
         且两侧 `.git` 形态不同时 GNU 只报一行「is a directory」，不进 `entries`）。
+    2026-11-03：实现下沉到 `_dir_diff_rq_bounded`（剪枝 + 并行 + 预算）；本函数保留无预算语义。
     """
-    def _names(d):
-        try:
-            return sorted(os.listdir(d))
-        except OSError:
-            return []
-    ea, eb = _names(a), _names(b)
-    out = []
-    for n in eb:
-        if n not in ea:
-            out.append("Only in %s: %s" % (b, n))
-    for n in ea:
-        if n not in eb:
-            out.append("Only in %s: %s" % (a, n))
-    for n in ea:
-        if n == ".git" or n not in eb:
-            continue
-        pa, pb = os.path.join(a, n), os.path.join(b, n)
-        if os.path.isdir(pa) and os.path.isdir(pb):
-            out.extend(_dir_diff_rq(pa, pb))
-        elif os.path.isfile(pa) and os.path.isfile(pb) and not _files_equal(pa, pb):
-            out.append("Files %s and %s differ" % (pa, pb))
-    return out
+    return _dir_diff_rq_bounded(a, b, None)[0]
 
 
 def worktree_state(wt: str, main_repo: str) -> dict:
@@ -152,8 +215,13 @@ def worktree_state(wt: str, main_repo: str) -> dict:
     # ── 兜底：文件级 diff（git 注册失效，或 status 不可用） ──
     # [ECC-8B68A4DF6D68] 自实现（`_dir_diff_rq`）取代外部 `diff -rq` —— 后者在 Windows 宿主不存在
     #   ⟹ FileNotFoundError 直接崩（不是兜底）。输出行格式**逐字对齐** GNU `diff -rq` ⟹ 下方解析不变。
+    # 2026-11-03：改走**有界**实现（剪枝 + 并行 + 墙钟预算）。预算到点 ⟹ `truncated=True`，
+    #   此时 entries **不完整**，调用方必须拒删（`reclaim` / `_is_merged_clean` 均已 gate）。
+    budget = _diff_budget_s()
+    deadline = (time.monotonic() + budget) if budget > 0 else None
+    lines, truncated = _dir_diff_rq_bounded(main_repo, wt, deadline)
     only_wt, differ = [], []
-    for ln in _dir_diff_rq(main_repo, wt):
+    for ln in lines:
         if _is_noise(ln):
             continue
         if ln.startswith("Only in " + wt + ":") or ln.startswith("Only in " + wt + os.sep):
@@ -162,6 +230,8 @@ def worktree_state(wt: str, main_repo: str) -> dict:
             differ.append(ln)
     st["entries"] = only_wt + differ
     st["fallback"] = "diff"
+    if truncated:
+        st["truncated"] = True
     return st
 
 
@@ -677,7 +747,10 @@ def _is_merged_clean(baseline: str, wt: str, branch: str) -> bool:
         return False
     if _git(baseline, "merge-base", "--is-ancestor", branch, "HEAD")[0] != 0:
         return False
-    return not worktree_state(wt, baseline).get("entries")
+    st = worktree_state(wt, baseline)
+    # 2026-11-03：`truncated`（diff 预算到点）**不**等于「干净」—— 未比完的内容可能仍有残留
+    #   ⟹ fail-closed，绝不当成可删。
+    return (not st.get("entries")) and not st.get("truncated")
 
 
 def reclaim(main_repo: str, root: str, apply: bool = False, trash: str = "",
@@ -877,6 +950,18 @@ def reclaim(main_repo: str, root: str, apply: bool = False, trash: str = "",
                 "unregistered": bool(w.get("unregistered")), "pending": len(st["entries"]),
                 "broken": bool(w.get("broken")), "age_days": w.get("age_days"),
                 "fallback": st.get("fallback", ""), "noise_only": st.get("noise_only", False)}
+        # 2026-11-03（回收超时修复）：失效注册的 diff 兜底到墙钟预算仍未比完 ⟹ **无法判定**是否有
+        #   未回收内容 ⟹ 拒删（fail-closed）。原状：全树逐字节比对 70 s/棵，4 棵即顶穿 CLI 超时；
+        #   若把「没比完」当「没差异」就会误删（本模块最要防的病），故此处**只**允许人工介入。
+        if st.get("truncated"):
+            item["action"] = "HELD"
+            item["reason"] = ("内容比对超出墙钟预算（GK_RECLAIM_DIFF_TIMEOUT=%gs）⟹ 无法判定是否有"
+                              "未回收内容 ⟹ 拒删（fail-closed）；调大预算复跑，或人工核对后用 "
+                              "--path 指名" % _diff_budget_s())
+            report["held"].append(wt)
+            report["ok"] = False
+            report["items"].append(item)
+            continue
         if st["entries"]:
             # **归档前置**：有未回收内容 ⟹ 先归档；归档失败 ⟹ 拒删（fail-loud）
             item["pending_sample"] = st["entries"][:5]

@@ -61,6 +61,7 @@ import time
 from pathlib import Path
 
 from gk_json_utils import extract_last_json, extract_markdown_int, extract_markdown_table
+from gk_json_utils import read_state_file
 import gk_host_paths as _host_paths  # noqa: E402  跨宿主路径形态/用户目录单源
 
 # ── 论文框架事实清单（**私有面**，2026-10-28 G7b 裁剪）────────────────────────
@@ -313,6 +314,8 @@ _CROSSREF_DOCS = [
     "references/sequence-node-safety-net-template.md",
     "references/meta-routing-protocol.md",
     "references/architecture-overview.md",
+    "references/oss-hooks.md",                                 # 开源 hook 契约（2026-11-03）
+    "references/oss-moa-phase-provenance.md",                  # MoA 污染 provenance 口径（2026-11-03）
 ]
 
 
@@ -2705,7 +2708,10 @@ def _read_state_safe(state_file: str):
         p = Path(state_file)
         if not p.exists():
             return None, f"state 文件不存在: {state_file}"
-        data = json.loads(p.read_text(encoding="utf-8"))
+        # 2026-11-03（M1）：WAL-aware（checkpoint + `<state>.wal` replay）。
+        data = read_state_file(state_file)
+        if "error" in data:
+            return None, f"state 读取失败: {_clip(str(data['error']), 100)}"
         if not isinstance(data, dict):
             return None, f"state 顶层非 JSON 对象: {state_file}"
         return data, ""
@@ -2714,8 +2720,45 @@ def _read_state_safe(state_file: str):
 
 
 # §5 单构建器通道参数化（2026-09-13 正解实装）：preflight 证据块只此一个构建器，
-# e1e4 / standing 双通道为参数面而非第二构建器（"分叉=第二构建器"与 §3 单源禁双写冲突）。
-_PREFLIGHT_CHANNELS = ("e1e4", "standing")
+# e1e4 / standing / system 三通道为参数面而非第二构建器（"分叉=第二构建器"与 §3 单源禁双写冲突）。
+# 2026-11-03：新增 "system" = 408 分析帧（references/research-408.md 四轴），
+# 用于交叉审查/计划质询的"如何优化"分析；E1/E2/E4 证据与 E3 流程事实不随之替代。
+_PREFLIGHT_CHANNELS = ("e1e4", "standing", "system")
+
+# 408 四轴（确定性常量；与 references/research-408.md §一 逐轴同构，禁第二套措辞）
+_RESEARCH_408_AXES = (
+    ("数据结构", "选型/不变量/时间空间复杂度；先建模再选型"),
+    ("计算机组成", "内存层次/写放大/fsync/原子替换/批量合并"),
+    ("操作系统", "进程线程/锁粒度/死锁超时/崩溃一致性/恢复幂等"),
+    ("计算机网络", "跨进程跨机才答重试/幂等/一致性；单机写 N/A"),
+)
+_RESEARCH_408_DISCIPLINE = "量化写放大、崩溃点显式、缓存非事实源、N/A 写出、结论可证伪"
+
+
+def _research_408_lines() -> list:
+    """408 分析帧证据行（确定性；advisory，不参与任何门禁）。"""
+    out = ["(e) 408 分析帧（advisory；只做分析提示，不参与门禁）:"]
+    for axis, question in _RESEARCH_408_AXES:
+        out.append(f"- {axis}: {question}")
+    out.append(f"- 纪律: {_RESEARCH_408_DISCIPLINE}")
+    out.append("- 出处: references/research-408.md"
+               "（帧判定单源 gk_advance.classify_research_frame）")
+    return out
+
+
+def _resolve_research_frame(task_text: str = "", *, target: str = "",
+                            plan_path: str = "", project_type: str = "") -> str:
+    """自动通道选择用：返回 408 / generic（单源 = gk_advance.classify_research_frame）。
+
+    导入失败/判定异常 ⟹ generic（宁可不注入，也不误判为 408）。
+    """
+    try:
+        from gk_advance import classify_research_frame
+        r = classify_research_frame(task_text, project_type=project_type,
+                                    target=target, plan_path=plan_path)
+        return str((r or {}).get("frame") or "generic")
+    except Exception:  # noqa: BLE001 — 判定不可用 ⟹ 不升级为 408
+        return "generic"
 
 
 def _roundlog_lines(sf: str, show_red_hits: bool) -> list:
@@ -2907,15 +2950,18 @@ def build_preflight_evidence(skill_dir: str, state_file: str = "",
                              channel: str = "e1e4", plan_path: str = "") -> str:
     """构建【preflight 证据摘要】确定性块（③；0-API；供注入方前置到质询 task 文本）。
 
-    单构建器通道参数化（§5 正解实装 2026-09-13）：channel ∈ _PREFLIGHT_CHANNELS——
-      - "e1e4"：E1-E4 评估矩阵分量（触发面谓词 is_eval_matrix_object；输出零回归）：
+    单构建器通道参数化（§5 正解实装 2026-09-13；2026-11-03 增 system）：channel ∈ _PREFLIGHT_CHANNELS——
+      - "e1e4"：E1-E4 证据探针分量（触发面谓词 is_eval_matrix_object；输出零回归）：
           (a) doc-align 当前状态行（check_eval_matrix / cross_review_matrix / doc_freshness）；
           (b) round-log（C5/STAGE_3 轮次语义）；
           (c) E2 finding family=EVAL-MATRIX 现存条目；
       - "standing"：standing 通用质询分量（§5 最小清单，不依赖 E1-E4 触发面）：
           (a) ember replay reconcile 意外项 + gate verdict；
           (b) round-log 摘要（含 red_hits）；
-          (c) 窄任务/异常回填状态。
+          (c) 窄任务/异常回填状态；
+          (d) 锚存在性/漂移；
+          (e) **408 分析帧**（新增 2026-11-03，advisory）；
+      - "system"：只注入 (e) 408 分析帧（交叉审查/计划质询的"如何优化"分析面）。
 
     分量（每行均含 file:line 出处或出处字符串，对齐 subagent_runner evidence 契约
     _EV_CONTRACT_ANCHOR）。降级语义：单源失败 → 该行 N/A + 读取入口注明（不抛异常）；
@@ -2928,12 +2974,17 @@ def build_preflight_evidence(skill_dir: str, state_file: str = "",
         channel = "e1e4"
     sdir = str(skill_dir)
     sf = _resolve_state_file(sdir, state_file)
-    head = ("【preflight 证据摘要】对象=审查层矩阵（E1-E4）" if channel == "e1e4"
-            else "【preflight 证据摘要】通道=standing（通用质询）")
+    head = {
+        "e1e4": "【preflight 证据摘要】对象=审查层矩阵（E1-E4）",
+        "standing": "【preflight 证据摘要】通道=standing（通用质询）",
+        "system": "【preflight 证据摘要】通道=system（408 分析帧）",
+    }[channel]
     lines = [head + " — plan-refinement 质询 preflight 确定性 0-API 预取；"
              "证据行含 file:line 出处，契约=" + _EV_CONTRACT_ANCHOR]
     if channel == "e1e4":
         lines += _build_e1e4_evidence(sdir, sf)
+    elif channel == "system":
+        lines += _research_408_lines()
     else:
         lines += _build_standing_evidence(sdir, sf, plan_path)
         # (d) 锚存在性/漂移（ECC-8E0B6C408BC4；分级字段 = ECC-E98B8F59E750 单源）。
@@ -2957,29 +3008,45 @@ def build_preflight_evidence(skill_dir: str, state_file: str = "",
         except Exception as _e:  # noqa: BLE001 — 边界：证据源异常只 N/A 不阻断
             lines.append(f"- anchor_existence: N/A（证据源异常 {type(_e).__name__}: "
                          + f"{_clip(str(_e), 120)}）")
+        # (e) 408 分析帧（2026-11-03）：standing 自维护类质询默认走 408；advisory 不参与门禁。
+        lines += _research_408_lines()
     return "\n".join(lines)
 
 
 def inject_preflight_evidence(task_text: str, *, target: str = "", plan_path: str = "",
                               skill_dir: str | None = None, state_file: str = "",
-                              force: bool = False, channel: str | None = None) -> str:
+                              force: bool = False, channel: str | None = None,
+                              project_type: str = "") -> str:
     """③ 证据注入：按通道在 task 文本前注入【preflight 证据摘要】。
 
     通道解析（§5 单构建器参数化）：显式 channel > env GATEKEEPER_PREFLIGHT_CHANNEL
-    （回退开关，F6；默认 e1e4）> "e1e4"。非法值 → 回退 e1e4（stderr WARN 不静默）。
+    （回退开关，F6）> **auto**（2026-11-03）。非法值 → 回退 e1e4（stderr WARN 不静默）。
+      - auto 选择：project_type=standing → standing；命中 E1-E4 标记 → e1e4（显式意图优先）；
+        否则 `classify_research_frame` 判 408 → system；其余 e1e4。
       - e1e4：触发 = force=True 或 is_eval_matrix_object(target, task_text, plan_path)
         命中（--task 标记「审查层矩阵」/「E1-E4」，或目标 basename = e1e4-evaluator-matrix.md）；
         未触发 → 原样返回 task_text（向后兼容：既有 plan-refinement 输出结构零改动）。
-      - standing：通用质询即触发面，跳过 E1-E4 谓词恒注入（standing 证据分量）。
+      - standing：通用质询即触发面，跳过 E1-E4 谓词恒注入（standing 证据分量 + 408 帧）。
+      - system：408 分析帧（四轴）；由 auto 在系统类任务上选中，也可显式指定。
     触发 → 返回「摘要块 + 空行 + task_text」；块首含 plan-refinement 角色标记，保证
     subagent_history 200 字符截断窗口内角色/checkpoint（cmd_plan_refinement ckpt）检测
     语义不丢。证据块 = build_preflight_evidence（确定性 0-API，单源 N/A 降级）。
     skill_dir 缺省 = 本模块所在技能仓库根；state_file 解析见 _resolve_state_file。
     """
-    ch = channel or os.environ.get("GATEKEEPER_PREFLIGHT_CHANNEL") or "e1e4"
-    if ch not in _PREFLIGHT_CHANNELS:
+    ch = channel or os.environ.get("GATEKEEPER_PREFLIGHT_CHANNEL") or ""
+    if ch and ch not in _PREFLIGHT_CHANNELS:
         sys.stderr.write(f"[gk_doc_align] WARN preflight channel={ch!r} 非法 → 回退 e1e4\n")
         ch = "e1e4"
+    if not ch:
+        if str(project_type or "").strip().lower() == "standing":
+            ch = "standing"
+        elif is_eval_matrix_object(target=target, task=task_text, plan_path=plan_path):
+            ch = "e1e4"
+        elif _resolve_research_frame(task_text, target=target, plan_path=plan_path,
+                                    project_type=project_type) == "408":
+            ch = "system"
+        else:
+            ch = "e1e4"
     if ch == "e1e4" and not force and not is_eval_matrix_object(target=target, task=task_text, plan_path=plan_path):
         return task_text
     sdir = skill_dir or str(Path(__file__).resolve().parent.parent)
@@ -2994,17 +3061,19 @@ def _preflight_evidence_cli(argv: list) -> int:
     """preflight-evidence CLI 分发面（③；gatekeeper-cli.sh cmd_plan_refinement 直调）。
 
     用法: python3 gk_doc_align.py preflight-evidence --task-text T [--plan-path P]
-          [--target TGT] [--skill-dir D] [--state-file S] [--force]
-          [--channel e1e4|standing]
-    channel 缺省 = env GATEKEEPER_PREFLIGHT_CHANNEL > e1e4（§5 回退开关）。
+          [--target TGT] [--skill-dir D] [--state-file S] [--project-type PT] [--force]
+          [--channel e1e4|standing|system]
+    channel 缺省 = env GATEKEEPER_PREFLIGHT_CHANNEL > auto（2026-11-03：standing 项目 →
+    standing；E1-E4 标记 → e1e4；408 帧 → system；其余 e1e4）。
     e1e4 命中触发 → stdout 打印【preflight 证据摘要】+ 原 task 文本（stdout 非空）；
-    standing 恒触发；e1e4 未命中 → stdout 为空（bash 侧零改动向后兼容）；
+    standing / system 恒触发；e1e4 未命中 → stdout 为空（bash 侧零改动向后兼容）；
     缺 --task-text → usage JSON exit 2。确定性 0-API。
     bash 侧不可 pytest，故 CLI 契约在本模块以函数 + 测试锁定。
     """
     skill_dir = str(Path(__file__).resolve().parent.parent)
     task_text = target = plan_path = state_file = ""
     channel = None
+    project_type = ""
     force = False
     i = 0
     while i < len(argv):
@@ -3027,6 +3096,9 @@ def _preflight_evidence_cli(argv: list) -> int:
         elif a == "--channel" and i + 1 < len(argv):
             channel = argv[i + 1]
             i += 2
+        elif a == "--project-type" and i + 1 < len(argv):
+            project_type = argv[i + 1]
+            i += 2
         elif a == "--force":
             force = True
             i += 1
@@ -3038,7 +3110,8 @@ def _preflight_evidence_cli(argv: list) -> int:
         return 2
     out = inject_preflight_evidence(task_text, target=target, plan_path=plan_path,
                                     skill_dir=skill_dir, state_file=state_file,
-                                    force=force, channel=channel)
+                                    force=force, channel=channel,
+                                    project_type=project_type)
     if out != task_text:
         print(out)
     return 0

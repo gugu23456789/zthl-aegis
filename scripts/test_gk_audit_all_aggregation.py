@@ -244,6 +244,37 @@ def test_all_branch_cleanup_ordering_invariant():
         f"清理语句（L{clean + 1}）早于 python 聚合（L{agg + 1}）⟹ 聚合按路径重读必 ENOENT")
 
 
+def test_domain_failures_not_silently_swallowed():
+    """ECC-7131658C9F77（2026-11-03）：`audit --all` 的域失败不得被 `2>/dev/null` 静默吞掉。
+
+    病象：首轮 `--all` 的 crossr 域返回**空文件 + 非零 rc**，stderr 被丢弃 ⟹ 聚合只能报
+    `load-failed: Expecting value: line 1 column 1`，既看不到真实错误，也拿不到退出码；
+    同一命令单独跑 `audit --crossr` 却成功（1/2 偶发）。
+
+    判据（源码级，0.01s 常驻门）：`--all` 分支的域调用与结果读取必须
+      ① 不把 stderr 丢进 `/dev/null`；
+      ② 保留每域 stderr 与 rc（`.err` / `.rc`）；
+      ③ 空/坏 JSON 合成为具名结果（`empty_or_invalid_result`），而不是只留 parse 异常文本。
+    """
+    lines = CLI_SRC.read_text(encoding="utf-8").splitlines()
+    start = next((i for i, l in enumerate(lines) if l.strip() == '--all|all|"")'), None)
+    assert start is not None, "未找到 cmd_audit 的 --all 分支锚（case 模式行）"
+    end = next((i for i in range(start, len(lines)) if 'echo "$all_results"' in lines[i]), None)
+    assert end is not None, "未找到 --all 分支的最终回包锚（echo $all_results）"
+    seg = "\n".join(lines[start:end])
+    # 只锁「域调用/域结果读取」这两类行：`_audit_timed_run` 内部对 `kill -0` 的 2>/dev/null
+    # 是进程判活语义（与本缺陷无关），不得被本断言误伤。
+    io_lines = [l for l in lines[start:end]
+                if ("audit --$_ad" in l) or ('cat "$_tmp_audit_dir/' in l)
+                or ("audit --report" in l and ">" in l)]
+    assert io_lines, f"未抽到 --all 的域 IO 行：{seg[:300]}"
+    for l in io_lines:
+        assert "2>/dev/null" not in l, (
+            f"域 IO 行仍丢弃 stderr ⟹ 静默吞错、拿不到退出码：{l.strip()}")
+    for token in (".err", ".rc", "empty_or_invalid_result"):
+        assert token in seg, f"缺域失败诊断载体 `{token}` ⟹ 失败不可复核：{seg[:300]}"
+
+
 def test_all_branch_persists_aggregate_and_registers():
     """E18/B4（2026-10-29，0.01s）：`audit --all` 聚合结果必须**落库**并登记审计署。
 

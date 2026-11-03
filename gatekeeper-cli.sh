@@ -8049,8 +8049,28 @@ _verify_remote() {
 
 # [write_guard 裁决 2026-09-06 EXEMPT] _state_write 仅于真实 push 三次失败后（L5085 落 push_failures 供
 # 确定性重试门禁）；status 只读动作不可达写入；push 无 --check 变体。
+# ─── 直推 main 的显式授权判据（2026-11-03 集成修复）────────────────────────────
+# 病象：原实现对**任意**被委托仓的 main/master 一律拒绝，且文案硬写 “This repo uses PR
+#   workflow” —— 把本门禁仓的策略套到旁路仓（实测 git-workflow 仓历史全是直推 main，被误伤）。
+# 现判据三选一（均**显式**、可审计）：
+#   ① `push auth-main` 写的一次性授权文件（原语义，保留）；
+#   ② 本次调用带 `--allow-main`（调用方显式透传，不写盘）；
+#   ③ env `GK_PUSH_ALLOW_MAIN`（逗号/冒号分隔）命中目标仓**绝对路径前缀**或**仓目录名**。
+_push_allow_main_match() {
+  local _ra="$1" _pat
+  [ -n "${GK_PUSH_ALLOW_MAIN:-}" ] || return 1
+  while IFS= read -r _pat; do
+    [ -n "$_pat" ] || continue
+    case "$_ra" in
+      "$_pat"|"$_pat"/*) return 0 ;;
+    esac
+    [ "$(basename "$_ra")" = "$_pat" ] && return 0
+  done < <(printf '%s\n' "${GK_PUSH_ALLOW_MAIN}" | tr ',:' '\n')
+  return 1
+}
+
 cmd_push() {
-  local action="" repo="" remote="origin" branch="" timeout=10 push_url="" token="" push_user="${GK_PUSH_USER:-}"
+  local action="" repo="" remote="origin" branch="" timeout=10 push_url="" token="" push_user="${GK_PUSH_USER:-}" allow_main=0
   # 2026-10-10（finding ECC-6056478D1353 · 摩擦①）：action 只认**非 flag** 首参 —— 原式
   #   `action="$1"` 会把 `push --repo X` 的 `--repo` 当 action 吃掉 ⟹ repo 回落 MAIN_REPO_WSL、
   #   其余 flag 全丢（实测）。改后 `push --repo X` = 省略 action（走 status 分支）。
@@ -8064,6 +8084,7 @@ cmd_push() {
       --timeout) timeout="${2:-}"; shift 2 2>/dev/null || shift ;;
       --push-url) push_url="${2:-}"; shift 2 2>/dev/null || shift ;;
       --push-user) push_user="${2:-}"; shift 2 2>/dev/null || shift ;;
+      --allow-main) allow_main=1; shift ;;
       *) break ;;
     esac
   done
@@ -8152,30 +8173,43 @@ ENDJSON
   fi
 
   # ─── Phase 1: confirm → 校验 token + 推送 ───
-  # Stage gate: confirm 有副作用，必须在活跃 R-phase 内
+  # Stage gate：**只对本门禁仓生效**（2026-11-03 集成修复）。
+  #   原实现对任意 `--repo` 都要求活跃 R-phase ⟹ 旁路仓（如 git-workflow）在门禁 IDLE 时
+  #   永远推不上去，且报错与「推送」无关，属策略越界。判定用 `MAIN_REPO_WSL`（启动期解析）；
+  #   解析不到时 **fail-closed**（按本仓处理 ⟹ 保留 stage 闸）。
+  local _is_own_repo=0
+  if [ -n "${MAIN_REPO_WSL:-}" ] && [ -d "${MAIN_REPO_WSL:-}" ] \
+     && [ "$(cd "$repo" 2>/dev/null && pwd -P)" = "$(cd "$MAIN_REPO_WSL" 2>/dev/null && pwd -P)" ]; then
+    _is_own_repo=1
+  fi
+  # stage 值**照常读取**（下游 L4 交叉审查提示要用），但**只有本门禁仓**用它做闸
   local _cur_stage
   _cur_stage=$(STATE_FILE="$(_gk_py_path "$STATE_FILE")" python3 "$SKILL_DIR/scripts/gk_state_query.py" --get stage --default IDLE 2>/dev/null)
-  if [ "$_cur_stage" = "IDLE" ] || [ "$_cur_stage" = "DONE" ]; then
-    _log_block "push" "confirm rejected: stage=$_cur_stage"
-    echo "{\"ok\":false,\"phase\":\"confirm\",\"error\":\"Push requires active R-phase (current stage: $_cur_stage). Start with spz-gatekeeper-r-sequence skill first.\"}"
-    return 1
+  if [ "$_is_own_repo" = "1" ]; then
+    if [ "$_cur_stage" = "IDLE" ] || [ "$_cur_stage" = "DONE" ]; then
+      _log_block "push" "confirm rejected: stage=$_cur_stage"
+      echo "{\"ok\":false,\"phase\":\"confirm\",\"error\":\"Push requires active R-phase (current stage: $_cur_stage). Start with spz-gatekeeper-r-sequence skill first.\"}"
+      return 1
+    fi
   fi
 
-  # Main branch guard: direct push to main requires temporary authorization
+  # Main branch guard：直推 main/master 需**显式**授权（三选一，见 `_push_allow_main_match` 头注）。
+  #   2026-11-03：原实现无条件拒绝 + 硬写 “This repo uses PR workflow” ⟹ 对旁路仓误伤且归因错误。
   if [ "$branch" = "main" ] || [ "$branch" = "master" ]; then
-    local auth_file="${STATE_FILE%/*}/.push-main-auth.json"
-    local auth_valid=false
+    local auth_file="${STATE_FILE%/*}/.push-main-auth.json" auth_valid=false
     if [ -f "$auth_file" ]; then
       local now; now=$(date +%s 2>/dev/null || python3 -c "import time;print(int(time.time()))" 2>/dev/null || echo "0")
       local expires; expires=$(python3 "$SKILL_DIR/scripts/gk_json_utils.py" field expires --file "$auth_file" --default 0 2>/dev/null || echo "0")
       [ "$now" -lt "$expires" ] && auth_valid=true
     fi
-    if ! $auth_valid; then
+    local _ra; _ra="$(pwd -P)"
+    if ! $auth_valid && [ "$allow_main" != "1" ] && ! _push_allow_main_match "$_ra"; then
       rm -f "$auth_file" 2>/dev/null
-      echo "{\"ok\":false,\"phase\":\"confirm\",\"error\":\"Direct push to '$branch' blocked. This repo uses PR workflow. If PR is unavailable, run: push auth-main (10 min expiry)\"}"
+      echo "{\"ok\":false,\"phase\":\"confirm\",\"error\":\"Direct push to '$branch' blocked by policy\",\"repo\":\"$_ra\",\"hint\":\"Authorize one of: (a) gatekeeper-cli.sh push auth-main (10 min, one-shot); (b) pass --allow-main (explicit, per call); (c) add repo path/name to GK_PUSH_ALLOW_MAIN\"}"
       return 1
     fi
-    rm -f "$auth_file" 2>/dev/null  # one-time use
+    # 一次性授权文件只在**实际被使用**时消费；--allow-main / env 放行不消耗它
+    [ "$auth_valid" = true ] && rm -f "$auth_file" 2>/dev/null
   fi
 
   # Branch conflict guard: check if local is behind remote before pushing
@@ -9555,11 +9589,18 @@ PY
     #   按 raw-车道 finding 却去 `scripts/gk_doc_align.py` 实现 `check_plan_landing_drift`）。修：显式
     #   `--family` 时**必须**与自动判定一致（无命中或判成别族 ⟹ `FAMILY_MISMATCH` fail-loud，禁静默）。
     if [ -n "$family" ]; then
-      local _auto_json _auto_fam
-      _auto_json=$(python3 "$SKILL_DIR/scripts/gk_agent_family.py" resolve "$fid" --state "$_st" 2>>"$GK_DBG_LOG" || true)
-      _auto_fam=$(printf '%s' "$_auto_json" | python3 "$SKILL_DIR/scripts/gk_apply_worktree_cli.py" json-field family 2>/dev/null || echo "")
+      # 2026-11-03 ECC-CC0F58BCC0C8：自动判定失败不得吞成 auto=<none>。
+      #   原 `resolve ... || true` + `json-field family 2>/dev/null || echo ""` 把
+      #   FAMILY_ANCHOR_MISMATCH / 族判定失败 统一退化成 <none> ⟹ 真因不可见。
+      local _auto_json _auto_fam _auto_rc _auto_err _auto_err_j
+      _auto_json=$(python3 "$SKILL_DIR/scripts/gk_agent_family.py" resolve "$fid" --state "$_st" 2>>"$GK_DBG_LOG")
+      _auto_rc=$?
+      _auto_fam=$(printf '%s' "$_auto_json" | python3 "$SKILL_DIR/scripts/gk_apply_worktree_cli.py" json-field family 2>>"$GK_DBG_LOG") || _auto_fam=""
+      _auto_err=$(printf '%s' "$_auto_json" | python3 "$SKILL_DIR/scripts/gk_apply_worktree_cli.py" json-field error 2>>"$GK_DBG_LOG") || _auto_err=""
+      _auto_err_j=$(printf '%s' "$_auto_err" | python3 "$SKILL_DIR/scripts/gk_apply_worktree_cli.py" json-escape 2>>"$GK_DBG_LOG") || _auto_err_j=""
+      [ -n "$_auto_err_j" ] || _auto_err_j='""'
       if [ "$_auto_fam" != "$family" ]; then
-        echo "{\"ok\":false,\"error\":\"FAMILY_MISMATCH\",\"finding\":\"$fid\",\"given\":\"$family\",\"auto\":\"${_auto_fam:-<none>}\",\"hint\":\"--family 是人工覆盖，必须与自动族判定一致；无命中须先登记 references/agent-families/F-*.json 且其 match.any 命中该 finding（禁强塞无关族）\"}"
+        echo "{\"ok\":false,\"error\":\"FAMILY_MISMATCH\",\"finding\":\"$fid\",\"given\":\"$family\",\"auto\":\"${_auto_fam:-<none>}\",\"auto_rc\":${_auto_rc:-0},\"auto_error\":${_auto_err_j},\"hint\":\"--family 是人工覆盖，必须与自动族判定一致；无命中须先登记 references/agent-families/F-*.json 且其 match.any 命中该 finding（禁强塞无关族）\"}"
         return 1
       fi
     fi
@@ -10327,18 +10368,21 @@ except Exception:
   # 2026-09-13 D1 修复（第四轮质询 sub-cdfdc15e1ab0 挑战采纳）：standing 通道派发接线——
   # 此前此处不传 --channel、不设 env，e1e4 谓词不命中 standing 计划 → 证据注入零生效
   # （"代码存在性≠生效性"假绿）。通道推导：env GATEKEEPER_PREFLIGHT_CHANNEL（回退开关，
-  # 最高优先）> gate_data.project_type=standing → standing，否则 e1e4（E1-E4 零回归）。
-  local _pr_channel="e1e4"
+  # 最高优先）> gate_data.project_type=standing → standing；否则留空交 auto（2026-11-03：
+  # E1-E4 标记 → e1e4；408 帧 → system；其余 e1e4 未命中零注入）。
+  local _pr_channel=""
   local _pr_ptype=""
   _pr_ptype=$(python3 "$SKILL_DIR/scripts/gk_state.py" get gate_data.project_type --path "$STATE_FILE" --default '' --default-falsy '' 2>>"$GK_DBG_LOG") || true
   [ "$_pr_ptype" = "standing" ] && _pr_channel="standing"
   [ -n "${GATEKEEPER_PREFLIGHT_CHANNEL:-}" ] && _pr_channel="${GATEKEEPER_PREFLIGHT_CHANNEL}"
+  # 2026-11-03：channel 留空 = auto（gk_doc_align 内按 project_type / E1-E4 标记 / 408 帧选择：
+  # standing → standing；E1-E4 → e1e4；408 → system 四轴；其余 e1e4 且未命中零注入）。
   pr_evidence=$(SKILL_DIR="$(_gk_py_path "$SKILL_DIR")" STATE_FILE="$(_gk_py_path "$STATE_FILE")" python3 "${SKILL_DIR}/scripts/gk_doc_align.py" \
     preflight-evidence --task-text "$full_task" --plan-path "$plan_path" \
-    --state-file "$STATE_FILE" --channel "$_pr_channel" 2>>"$GK_DBG_LOG") || true
+    --state-file "$STATE_FILE" --project-type "$_pr_ptype" --channel "$_pr_channel" 2>>"$GK_DBG_LOG") || true
   if [ -n "$pr_evidence" ]; then
     full_task="${pr_evidence}"$'\n\n'"${full_task}"
-    echo "[ev-inject] E1-E4 审查层矩阵 preflight 证据注入 task（$(printf '%s' "$pr_evidence" | wc -l) 行）$(date -u +%FT%TZ)" >> "$GK_DBG_LOG"
+    echo "[ev-inject] preflight 证据注入 channel=${_pr_channel:-auto}（$(printf '%s' "$pr_evidence" | wc -l) 行）$(date -u +%FT%TZ)" >> "$GK_DBG_LOG"
   fi
 
   # ── T4 收敛前置门（子计划2 §2-T4；F-REV-57 实装，2026-09-14）─────────────────
@@ -11990,25 +12034,44 @@ PYEOF
         fi
         wait "$pid" 2>/dev/null; return 0
       }
+      # 2026-11-03 ECC-7131658C9F77：域结果读取单源 —— 空/坏 JSON 必须给出具名失败
+      # （rc + stderr 尾 + 字节数），禁止用 2>/dev/null 把域错误吞成 "load-failed: line 1"。
+      _audit_read_result() {
+        local _d="$1"
+        local _f="$_tmp_audit_dir/${_d}.json"
+        local _rf="$_tmp_audit_dir/${_d}.rc"
+        local _ef="$_tmp_audit_dir/${_d}.err"
+        local _bytes=0 _rc=-1 _tail=""
+        [ -f "$_f" ] && _bytes=$(wc -c < "$_f" | tr -d ' ')
+        [ -f "$_rf" ] && _rc=$(cat "$_rf")
+        [ -s "$_ef" ] && _tail=$(tail -c 300 "$_ef" | tr '\n' ' ')
+        if [ "${_bytes:-0}" -gt 0 ] && python3 -c 'import json,sys;json.load(open(sys.argv[1]))' "$_f" >/dev/null 2>&1; then
+          cat "$_f"
+        else
+          python3 -c 'import json,sys;d=sys.argv;print(json.dumps({"ok":False,"error":"empty_or_invalid_result","domain":d[1],"rc":int(d[2]) if d[2].lstrip("-").isdigit() else -1,"bytes":int(d[3]) if d[3].isdigit() else 0,"stderr_tail":d[4][:300]}))' "$_d" "$_rc" "${_bytes:-0}" "$_tail"
+        fi
+      }
       # Serial audit domains (2026-09-07 ECC-F78E1B1EF083: 并行 spawn 致聚合 parse failed——
       # 子审计竞态（flock/_state_write 与嵌套 CLI 并发）；改串行保证逐域 JSON 完整落盘)
       # 2026-09-07 audit --all serialization: each domain bounded by _AUDIT_TIMEOUT individually
       for _ad in state docs memory crossr depth; do
-        _audit_timed_run $_AUDIT_TIMEOUT bash "$0" audit --$_ad > "$_tmp_audit_dir/$_ad.json" 2>/dev/null
+        _audit_timed_run $_AUDIT_TIMEOUT bash "$0" audit --$_ad > "$_tmp_audit_dir/$_ad.json" 2> "$_tmp_audit_dir/$_ad.err"
+        echo $? > "$_tmp_audit_dir/$_ad.rc"
       done
       # Report with timeout (may call API via subagent_runner)
       local r_result
-      if _audit_timed_run $_AUDIT_TIMEOUT bash "$0" audit --report --type performance > "$_tmp_audit_dir/report.json" 2>/dev/null; then
-        r_result=$(cat "$_tmp_audit_dir/report.json" 2>/dev/null || echo '{"ok":false}')
+      if _audit_timed_run $_AUDIT_TIMEOUT bash "$0" audit --report --type performance > "$_tmp_audit_dir/report.json" 2> "$_tmp_audit_dir/report.err"; then
+        echo 0 > "$_tmp_audit_dir/report.rc"
       else
-        r_result='{"ok":false,"error":"report timed out","timeout_sec":'$_AUDIT_TIMEOUT'}'
+        echo $? > "$_tmp_audit_dir/report.rc"
       fi
+      r_result=$(_audit_read_result report)
       # Read parallel results
-      local s_result; s_result=$(cat "$_tmp_audit_dir/state.json" 2>/dev/null || echo '{"ok":false}')
-      local d_result; d_result=$(cat "$_tmp_audit_dir/docs.json" 2>/dev/null || echo '{"ok":false}')
-      local m_result; m_result=$(cat "$_tmp_audit_dir/memory.json" 2>/dev/null || echo '{"ok":false}')
-      local c_result; c_result=$(cat "$_tmp_audit_dir/crossr.json" 2>/dev/null || echo '{"ok":false}')
-      local dp_result; dp_result=$(cat "$_tmp_audit_dir/depth.json" 2>/dev/null || echo '{"ok":false}')
+      local s_result; s_result=$(_audit_read_result state)
+      local d_result; d_result=$(_audit_read_result docs)
+      local m_result; m_result=$(_audit_read_result memory)
+      local c_result; c_result=$(_audit_read_result crossr)
+      local dp_result; dp_result=$(_audit_read_result depth)
       # 2026-08-20: 聚合改用 sys.argv 传参（原 '''...''' 三引号嵌入会把 JSON 内 \n/\t 转义
       # 二次解释为真实控制字符 → JSONDecodeError "Invalid control character"；含单引号内容同样破坏三引号串）
       # 2026-09-07 ECC-F78E1B1EF083 根治: argv 传文件内容在 report/depth 大 JSON 时超 ARG_MAX(每参~128K)→parse 失败；

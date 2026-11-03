@@ -1,0 +1,20 @@
+{
+  "family": "F-worktree-family-diag",
+  "match": {
+    "any": ["FAMILY_MISMATCH", "auto=<none>", "auto_error", "族判定失败", "自动族判定"]
+  },
+  "generic_tokens": [],
+  "anchor_symbols": ["FAMILY_MISMATCH", "_auto_json", "_auto_fam"],
+  "tier": 4,
+  "edit_quota": 3,
+  "allowed_paths": ["gatekeeper-cli.sh"],
+  "forbidden_paths": [
+    "docs/", "references/", ".gitignore",
+    "scripts/gk_agent_family.py", "scripts/gk_apply_worktree_cli.py",
+    "scripts/test_apply_worktree_family_diag.py"
+  ],
+  "narrow_task_template": "修 {anchor}。**唯一目标文件 = `gatekeeper-cli.sh` 的 `cmd_apply_worktree` 显式 `--family` 预检段**（唯一 allowed_path）。红先测试已由主 agent 写入 `scripts/test_apply_worktree_family_diag.py::test_family_resolve_error_not_swallowed`，对 HEAD 必红；你**只负责落刀**。**越界即失败**。⚠ **判据自检**：若发现 test_first 存在注释盲或前置未验证，在报告里点出并附一行复现 —— 但仍须先落刀。\n\n## 病象（已实证）\n自动族判定用 `resolve ... || true` 吞掉非零退出，再用 `json-field family 2>/dev/null || echo \"\"` 吞掉解析错误 ⟹ `FAMILY_ANCHOR_MISMATCH` / `族判定失败` 等真因统一退化成 `auto=<none>`，只回一条泛化 hint（禁强塞无关族），操作者无法区分「无族命中」与「落点错配」。\n\n## 落刀清单\n1. `_auto_json=$(... resolve ... 2>>\"$GK_DBG_LOG\")`：**去掉 `|| true`**，紧随 `_auto_rc=$?`。\n2. 新增 `_auto_err`：从 `_auto_json` 取 `error` 字段（`json-field error`），解析失败置空但 stderr 进 `$GK_DBG_LOG`。\n3. `FAMILY_MISMATCH` 回包增加 `\"auto_rc\":${_auto_rc:-0}` 与 `\"auto_error\":\"...\"`（用 `gk_apply_worktree_cli.py json-escape` 转义），保留既有 `auto` / `hint` 字段不变。\n4. 不改族判定本体（`gk_agent_family`）、不改 exit code 语义（仍 return 1）、不改其它分支。\n\n## ⛔ 不得触碰\n- 任何 `PROTECTED_REGION`；`_CMD_REG`；`gk_agent_family.py` / `gk_apply_worktree_cli.py` 本体；测试文件。\n- 回包必须是**单行合法 JSON**；禁止把多行 stderr 原样塞进 JSON。\n\n## 验收（主 agent 跑）\n{verify_cmd}",
+  "test_first": "scripts/test_apply_worktree_family_diag.py::test_family_resolve_error_not_swallowed",
+  "verify_cmd": "bash -c 'cd \"$PWD\" && python -m pytest scripts/test_apply_worktree_family_diag.py -q && bash -n gatekeeper-cli.sh'",
+  "affected_tests": ["scripts/test_apply_worktree_family_diag.py"]
+}

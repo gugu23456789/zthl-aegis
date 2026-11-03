@@ -1,0 +1,1101 @@
+{
+  "schema": "gk-bench-baseline/v1",
+  "created_at": "2026-11-03T13:01:12.109962+00:00",
+  "git_head": "0f735627a3b388bda167c6dc4c64ee8e8669b859",
+  "environment": {
+    "os": "Windows-10-10.0.26100-SP0",
+    "python": "3.11.5",
+    "machine": "AMD64",
+    "cpu_count": 16
+  },
+  "benchmarks": {
+    "state": {
+      "ok": true,
+      "mode": "full",
+      "config": {
+        "state_sizes": [
+          131072,
+          524288
+        ],
+        "payload_sizes": [
+          1024,
+          65536
+        ],
+        "writers": [
+          1,
+          8,
+          32
+        ],
+        "ops_per_worker": 30,
+        "crash_trials": 20
+      },
+      "scenarios": [
+        {
+          "scenario": "w1-p1024-s131072",
+          "writers": 1,
+          "ops_per_worker": 30,
+          "total_ops": 30,
+          "success_ops": 30,
+          "wall_s": 0.6375,
+          "ops_s": 47.06,
+          "latency": {
+            "count": 30,
+            "min_ms": 2.52,
+            "p50_ms": 2.84,
+            "p95_ms": 8.112,
+            "p99_ms": 21.314,
+            "max_ms": 25.439,
+            "mean_ms": 4.078
+          },
+          "write_amp": 0.18,
+          "write_amp_src": "io_write_bytes",
+          "io_write_bytes": 5386,
+          "logical_payload_bytes": 30720,
+          "state_bytes": 131294,
+          "initial_state_bytes": 130237,
+          "final_seq": 30,
+          "checksum_ok": true,
+          "tmp_left": 0,
+          "errors": [],
+          "ok": true
+        },
+        {
+          "scenario": "w8-p1024-s131072",
+          "writers": 8,
+          "ops_per_worker": 30,
+          "total_ops": 240,
+          "success_ops": 240,
+          "wall_s": 2.098,
+          "ops_s": 114.39,
+          "latency": {
+            "count": 240,
+            "min_ms": 2.676,
+            "p50_ms": 27.276,
+            "p95_ms": 119.935,
+            "p99_ms": 158.972,
+            "max_ms": 217.093,
+            "mean_ms": 39.67
+          },
+          "write_amp": 0.74,
+          "write_amp_src": "io_write_bytes",
+          "io_write_bytes": 181418,
+          "logical_payload_bytes": 245760,
+          "state_bytes": 131296,
+          "initial_state_bytes": 130237,
+          "final_seq": 240,
+          "checksum_ok": true,
+          "tmp_left": 0,
+          "errors": [],
+          "ok": true
+        },
+        {
+          "scenario": "w32-p1024-s131072",
+          "writers": 32,
+          "ops_per_worker": 30,
+          "total_ops": 960,
+          "success_ops": 960,
+          "wall_s": 7.1037,
+          "ops_s": 135.14,
+          "latency": {
+            "count": 960,
+            "min_ms": 2.719,
+            "p50_ms": 79.556,
+            "p95_ms": 429.656,
+            "p99_ms": 755.853,
+            "max_ms": 1295.173,
+            "mean_ms": 133.375
+          },
+          "write_amp": 0.47,
+          "write_amp_src": "io_write_bytes",
+          "io_write_bytes": 462267,
+          "logical_payload_bytes": 983040,
+          "state_bytes": 131298,
+          "initial_state_bytes": 130238,
+          "final_seq": 960,
+          "checksum_ok": true,
+          "tmp_left": 0,
+          "errors": [],
+          "ok": true
+        },
+        {
+          "scenario": "w1-p65536-s131072",
+          "writers": 1,
+          "ops_per_worker": 30,
+          "total_ops": 30,
+          "success_ops": 30,
+          "wall_s": 0.6048,
+          "ops_s": 49.61,
+          "latency": {
+            "count": 30,
+            "min_ms": 3.363,
+            "p50_ms": 4.023,
+            "p95_ms": 10.696,
+            "p99_ms": 26.063,
+            "max_ms": 30.856,
+            "mean_ms": 5.414
+          },
+          "write_amp": 0.04,
+          "write_amp_src": "io_write_bytes",
+          "io_write_bytes": 69898,
+          "logical_payload_bytes": 1966080,
+          "state_bytes": 195807,
+          "initial_state_bytes": 130238,
+          "final_seq": 30,
+          "checksum_ok": true,
+          "tmp_left": 0,
+          "errors": [],
+          "ok": true
+        },
+        {
+          "scenario": "w8-p65536-s131072",
+          "writers": 8,
+          "ops_per_worker": 30,
+          "total_ops": 240,
+          "success_ops": 240,
+          "wall_s": 2.1944,
+          "ops_s": 109.37,
+          "latency": {
+            "count": 240,
+            "min_ms": 2.613,
+            "p50_ms": 27.698,
+            "p95_ms": 113.253,
+            "p99_ms": 192.026,
+            "max_ms": 257.218,
+            "mean_ms": 38.613
+          },
+          "write_amp": 0.01,
+          "write_amp_src": "io_write_bytes",
+          "io_write_bytes": 114634,
+          "logical_payload_bytes": 15728640,
+          "state_bytes": 195809,
+          "initial_state_bytes": 130238,
+          "final_seq": 240,
+          "checksum_ok": true,
+          "tmp_left": 0,
+          "errors": [],
+          "ok": true
+        },
+        {
+          "scenario": "w32-p65536-s131072",
+          "writers": 32,
+          "ops_per_worker": 30,
+          "total_ops": 960,
+          "success_ops": 960,
+          "wall_s": 7.5877,
+          "ops_s": 126.52,
+          "latency": {
+            "count": 960,
+            "min_ms": 2.575,
+            "p50_ms": 81.035,
+            "p95_ms": 527.184,
+            "p99_ms": 843.08,
+            "max_ms": 1853.967,
+            "mean_ms": 146.583
+          },
+          "write_amp": 0.01,
+          "write_amp_src": "io_write_bytes",
+          "io_write_bytes": 655527,
+          "logical_payload_bytes": 62914560,
+          "state_bytes": 195811,
+          "initial_state_bytes": 130239,
+          "final_seq": 960,
+          "checksum_ok": true,
+          "tmp_left": 0,
+          "errors": [],
+          "ok": true
+        },
+        {
+          "scenario": "w1-p1024-s524288",
+          "writers": 1,
+          "ops_per_worker": 30,
+          "total_ops": 30,
+          "success_ops": 30,
+          "wall_s": 0.6285,
+          "ops_s": 47.73,
+          "latency": {
+            "count": 30,
+            "min_ms": 2.646,
+            "p50_ms": 3.012,
+            "p95_ms": 11.188,
+            "p99_ms": 29.432,
+            "max_ms": 34.879,
+            "mean_ms": 4.855
+          },
+          "write_amp": 0.17,
+          "write_amp_src": "io_write_bytes",
+          "io_write_bytes": 5356,
+          "logical_payload_bytes": 30720,
+          "state_bytes": 524510,
+          "initial_state_bytes": 523453,
+          "final_seq": 30,
+          "checksum_ok": true,
+          "tmp_left": 0,
+          "errors": [],
+          "ok": true
+        },
+        {
+          "scenario": "w8-p1024-s524288",
+          "writers": 8,
+          "ops_per_worker": 30,
+          "total_ops": 240,
+          "success_ops": 240,
+          "wall_s": 1.9332,
+          "ops_s": 124.15,
+          "latency": {
+            "count": 240,
+            "min_ms": 2.611,
+            "p50_ms": 21.787,
+            "p95_ms": 104.991,
+            "p99_ms": 136.624,
+            "max_ms": 168.143,
+            "mean_ms": 32.799
+          },
+          "write_amp": 0.2,
+          "write_amp_src": "io_write_bytes",
+          "io_write_bytes": 50305,
+          "logical_payload_bytes": 245760,
+          "state_bytes": 524512,
+          "initial_state_bytes": 523453,
+          "final_seq": 240,
+          "checksum_ok": true,
+          "tmp_left": 0,
+          "errors": [],
+          "ok": true
+        },
+        {
+          "scenario": "w32-p1024-s524288",
+          "writers": 32,
+          "ops_per_worker": 30,
+          "total_ops": 960,
+          "success_ops": 960,
+          "wall_s": 7.9075,
+          "ops_s": 121.4,
+          "latency": {
+            "count": 960,
+            "min_ms": 2.869,
+            "p50_ms": 101.793,
+            "p95_ms": 514.419,
+            "p99_ms": 859.877,
+            "max_ms": 1177.605,
+            "mean_ms": 157.907
+          },
+          "write_amp": 1.27,
+          "write_amp_src": "io_write_bytes",
+          "io_write_bytes": 1248971,
+          "logical_payload_bytes": 983040,
+          "state_bytes": 524514,
+          "initial_state_bytes": 523454,
+          "final_seq": 960,
+          "checksum_ok": true,
+          "tmp_left": 0,
+          "errors": [],
+          "ok": true
+        },
+        {
+          "scenario": "w1-p65536-s524288",
+          "writers": 1,
+          "ops_per_worker": 30,
+          "total_ops": 30,
+          "success_ops": 30,
+          "wall_s": 0.6326,
+          "ops_s": 47.43,
+          "latency": {
+            "count": 30,
+            "min_ms": 3.347,
+            "p50_ms": 3.926,
+            "p95_ms": 10.788,
+            "p99_ms": 30.624,
+            "max_ms": 37.426,
+            "mean_ms": 5.577
+          },
+          "write_amp": 0.04,
+          "write_amp_src": "io_write_bytes",
+          "io_write_bytes": 69898,
+          "logical_payload_bytes": 1966080,
+          "state_bytes": 589023,
+          "initial_state_bytes": 523454,
+          "final_seq": 30,
+          "checksum_ok": true,
+          "tmp_left": 0,
+          "errors": [],
+          "ok": true
+        },
+        {
+          "scenario": "w8-p65536-s524288",
+          "writers": 8,
+          "ops_per_worker": 30,
+          "total_ops": 240,
+          "success_ops": 240,
+          "wall_s": 2.3417,
+          "ops_s": 102.49,
+          "latency": {
+            "count": 240,
+            "min_ms": 2.696,
+            "p50_ms": 27.723,
+            "p95_ms": 122.032,
+            "p99_ms": 206.609,
+            "max_ms": 334.628,
+            "mean_ms": 44.05
+          },
+          "write_amp": 0.01,
+          "write_amp_src": "io_write_bytes",
+          "io_write_bytes": 114543,
+          "logical_payload_bytes": 15728640,
+          "state_bytes": 589025,
+          "initial_state_bytes": 523454,
+          "final_seq": 240,
+          "checksum_ok": true,
+          "tmp_left": 0,
+          "errors": [],
+          "ok": true
+        },
+        {
+          "scenario": "w32-p65536-s524288",
+          "writers": 32,
+          "ops_per_worker": 30,
+          "total_ops": 960,
+          "success_ops": 960,
+          "wall_s": 9.2763,
+          "ops_s": 103.49,
+          "latency": {
+            "count": 960,
+            "min_ms": 2.722,
+            "p50_ms": 110.87,
+            "p95_ms": 697.125,
+            "p99_ms": 1134.911,
+            "max_ms": 2848.019,
+            "mean_ms": 203.299
+          },
+          "write_amp": 0.03,
+          "write_amp_src": "io_write_bytes",
+          "io_write_bytes": 2031411,
+          "logical_payload_bytes": 62914560,
+          "state_bytes": 589027,
+          "initial_state_bytes": 523455,
+          "final_seq": 960,
+          "checksum_ok": true,
+          "tmp_left": 0,
+          "errors": [],
+          "ok": true
+        }
+      ],
+      "crash": [
+        {
+          "trial": 1,
+          "seq_before_kill": 5,
+          "final_seq": 8,
+          "checksum_ok": true,
+          "state_bytes": 130236,
+          "tmp_left": 0,
+          "ok": true
+        },
+        {
+          "trial": 2,
+          "seq_before_kill": 3,
+          "final_seq": 7,
+          "checksum_ok": true,
+          "state_bytes": 130236,
+          "tmp_left": 0,
+          "ok": true
+        },
+        {
+          "trial": 3,
+          "seq_before_kill": 3,
+          "final_seq": 8,
+          "checksum_ok": true,
+          "state_bytes": 130236,
+          "tmp_left": 0,
+          "ok": true
+        },
+        {
+          "trial": 4,
+          "seq_before_kill": 3,
+          "final_seq": 8,
+          "checksum_ok": true,
+          "state_bytes": 130236,
+          "tmp_left": 0,
+          "ok": true
+        },
+        {
+          "trial": 5,
+          "seq_before_kill": 5,
+          "final_seq": 10,
+          "checksum_ok": true,
+          "state_bytes": 130236,
+          "tmp_left": 0,
+          "ok": true
+        },
+        {
+          "trial": 6,
+          "seq_before_kill": 5,
+          "final_seq": 10,
+          "checksum_ok": true,
+          "state_bytes": 130236,
+          "tmp_left": 0,
+          "ok": true
+        },
+        {
+          "trial": 7,
+          "seq_before_kill": 4,
+          "final_seq": 9,
+          "checksum_ok": true,
+          "state_bytes": 130236,
+          "tmp_left": 0,
+          "ok": true
+        },
+        {
+          "trial": 8,
+          "seq_before_kill": 4,
+          "final_seq": 8,
+          "checksum_ok": true,
+          "state_bytes": 130236,
+          "tmp_left": 0,
+          "ok": true
+        },
+        {
+          "trial": 9,
+          "seq_before_kill": 5,
+          "final_seq": 9,
+          "checksum_ok": true,
+          "state_bytes": 130236,
+          "tmp_left": 0,
+          "ok": true
+        },
+        {
+          "trial": 10,
+          "seq_before_kill": 4,
+          "final_seq": 9,
+          "checksum_ok": true,
+          "state_bytes": 130237,
+          "tmp_left": 0,
+          "ok": true
+        },
+        {
+          "trial": 11,
+          "seq_before_kill": 5,
+          "final_seq": 10,
+          "checksum_ok": true,
+          "state_bytes": 130237,
+          "tmp_left": 0,
+          "ok": true
+        },
+        {
+          "trial": 12,
+          "seq_before_kill": 4,
+          "final_seq": 9,
+          "checksum_ok": true,
+          "state_bytes": 130237,
+          "tmp_left": 0,
+          "ok": true
+        },
+        {
+          "trial": 13,
+          "seq_before_kill": 4,
+          "final_seq": 9,
+          "checksum_ok": true,
+          "state_bytes": 130237,
+          "tmp_left": 0,
+          "ok": true
+        },
+        {
+          "trial": 14,
+          "seq_before_kill": 5,
+          "final_seq": 9,
+          "checksum_ok": true,
+          "state_bytes": 130237,
+          "tmp_left": 0,
+          "ok": true
+        },
+        {
+          "trial": 15,
+          "seq_before_kill": 4,
+          "final_seq": 8,
+          "checksum_ok": true,
+          "state_bytes": 130237,
+          "tmp_left": 0,
+          "ok": true
+        },
+        {
+          "trial": 16,
+          "seq_before_kill": 5,
+          "final_seq": 9,
+          "checksum_ok": true,
+          "state_bytes": 130237,
+          "tmp_left": 0,
+          "ok": true
+        },
+        {
+          "trial": 17,
+          "seq_before_kill": 5,
+          "final_seq": 10,
+          "checksum_ok": true,
+          "state_bytes": 130237,
+          "tmp_left": 0,
+          "ok": true
+        },
+        {
+          "trial": 18,
+          "seq_before_kill": 4,
+          "final_seq": 8,
+          "checksum_ok": true,
+          "state_bytes": 130237,
+          "tmp_left": 0,
+          "ok": true
+        },
+        {
+          "trial": 19,
+          "seq_before_kill": 4,
+          "final_seq": 8,
+          "checksum_ok": true,
+          "state_bytes": 130237,
+          "tmp_left": 0,
+          "ok": true
+        },
+        {
+          "trial": 20,
+          "seq_before_kill": 4,
+          "final_seq": 8,
+          "checksum_ok": true,
+          "state_bytes": 130237,
+          "tmp_left": 0,
+          "ok": true
+        }
+      ]
+    },
+    "satellite": {
+      "ok": true,
+      "mode": "full",
+      "config": {
+        "cases": [
+          [
+            1000,
+            1,
+            "finding"
+          ],
+          [
+            1000,
+            100,
+            "finding"
+          ],
+          [
+            3000,
+            100,
+            "finding"
+          ],
+          [
+            1000,
+            1,
+            "history"
+          ],
+          [
+            1000,
+            100,
+            "history"
+          ],
+          [
+            3000,
+            100,
+            "history"
+          ]
+        ],
+        "payloads": [
+          1024
+        ],
+        "state_bytes": 131072,
+        "reclaim_records": 50
+      },
+      "scenarios": [
+        {
+          "scenario": "finding-n1000-b1-p1024",
+          "kind": "finding",
+          "records": 1000,
+          "batch_size": 1,
+          "calls": 1000,
+          "success_calls": 1000,
+          "wall_s": 120.3409,
+          "calls_s": 8.31,
+          "latency": {
+            "count": 1000,
+            "min_ms": 88.021,
+            "p50_ms": 115.908,
+            "p95_ms": 159.173,
+            "p99_ms": 180.197,
+            "max_ms": 406.545,
+            "mean_ms": 120.269
+          },
+          "write_amp": 1.61,
+          "write_amp_src": "io_write_bytes",
+          "io_write_bytes": 1691148,
+          "logical_payload_bytes": 1049890,
+          "state_bytes": 130239,
+          "sidecar_bytes": 322000,
+          "shard_bytes": 1050890,
+          "leaves": 1000,
+          "checksum_ok": true,
+          "errors": [],
+          "ok": true
+        },
+        {
+          "scenario": "finding-n1000-b100-p1024",
+          "kind": "finding",
+          "records": 1000,
+          "batch_size": 100,
+          "calls": 10,
+          "success_calls": 10,
+          "wall_s": 1.2988,
+          "calls_s": 7.7,
+          "latency": {
+            "count": 10,
+            "min_ms": 106.552,
+            "p50_ms": 123.361,
+            "p95_ms": 158.33,
+            "p99_ms": 164.53,
+            "max_ms": 166.08,
+            "mean_ms": 128.383
+          },
+          "write_amp": 1.01,
+          "write_amp_src": "io_write_bytes",
+          "io_write_bytes": 1057330,
+          "logical_payload_bytes": 1049890,
+          "state_bytes": 130241,
+          "sidecar_bytes": 3260,
+          "shard_bytes": 1050890,
+          "leaves": 10,
+          "checksum_ok": true,
+          "errors": [],
+          "ok": true
+        },
+        {
+          "scenario": "finding-n3000-b100-p1024",
+          "kind": "finding",
+          "records": 3000,
+          "batch_size": 100,
+          "calls": 30,
+          "success_calls": 30,
+          "wall_s": 4.0559,
+          "calls_s": 7.4,
+          "latency": {
+            "count": 30,
+            "min_ms": 98.132,
+            "p50_ms": 129.761,
+            "p95_ms": 178.496,
+            "p99_ms": 191.775,
+            "max_ms": 196.561,
+            "mean_ms": 133.705
+          },
+          "write_amp": 1.01,
+          "write_amp_src": "io_write_bytes",
+          "io_write_bytes": 3174210,
+          "logical_payload_bytes": 3151890,
+          "state_bytes": 130241,
+          "sidecar_bytes": 9780,
+          "shard_bytes": 3154890,
+          "leaves": 30,
+          "checksum_ok": true,
+          "errors": [],
+          "ok": true
+        },
+        {
+          "scenario": "history-n1000-b1-p1024",
+          "kind": "history",
+          "records": 1000,
+          "batch_size": 1,
+          "calls": 1000,
+          "success_calls": 1000,
+          "wall_s": 132.3968,
+          "calls_s": 7.55,
+          "latency": {
+            "count": 1000,
+            "min_ms": 75.597,
+            "p50_ms": 127.311,
+            "p95_ms": 175.124,
+            "p99_ms": 201.651,
+            "max_ms": 336.773,
+            "mean_ms": 132.328
+          },
+          "write_amp": 1.61,
+          "write_amp_src": "io_write_bytes",
+          "io_write_bytes": 1690887,
+          "logical_payload_bytes": 1049890,
+          "state_bytes": 130239,
+          "sidecar_bytes": 322000,
+          "shard_bytes": 1050890,
+          "leaves": 1000,
+          "checksum_ok": true,
+          "errors": [],
+          "ok": true
+        },
+        {
+          "scenario": "history-n1000-b100-p1024",
+          "kind": "history",
+          "records": 1000,
+          "batch_size": 100,
+          "calls": 10,
+          "success_calls": 10,
+          "wall_s": 1.4767,
+          "calls_s": 6.77,
+          "latency": {
+            "count": 10,
+            "min_ms": 120.472,
+            "p50_ms": 140.047,
+            "p95_ms": 177.822,
+            "p99_ms": 184.531,
+            "max_ms": 186.208,
+            "mean_ms": 146.164
+          },
+          "write_amp": 1.01,
+          "write_amp_src": "io_write_bytes",
+          "io_write_bytes": 1057330,
+          "logical_payload_bytes": 1049890,
+          "state_bytes": 130241,
+          "sidecar_bytes": 3260,
+          "shard_bytes": 1050890,
+          "leaves": 10,
+          "checksum_ok": true,
+          "errors": [],
+          "ok": true
+        },
+        {
+          "scenario": "history-n3000-b100-p1024",
+          "kind": "history",
+          "records": 3000,
+          "batch_size": 100,
+          "calls": 30,
+          "success_calls": 30,
+          "wall_s": 4.0826,
+          "calls_s": 7.35,
+          "latency": {
+            "count": 30,
+            "min_ms": 109.979,
+            "p50_ms": 131.107,
+            "p95_ms": 166.545,
+            "p99_ms": 183.053,
+            "max_ms": 183.948,
+            "mean_ms": 134.808
+          },
+          "write_amp": 1.01,
+          "write_amp_src": "io_write_bytes",
+          "io_write_bytes": 3174210,
+          "logical_payload_bytes": 3151890,
+          "state_bytes": 130241,
+          "sidecar_bytes": 9780,
+          "shard_bytes": 3154890,
+          "leaves": 30,
+          "checksum_ok": true,
+          "errors": [],
+          "ok": true
+        }
+      ],
+      "gc": [
+        {
+          "ok": true,
+          "wall_s": 0.0373,
+          "before_bytes": 130239,
+          "after_bytes": 130239,
+          "removed_count": 1,
+          "applied": 1,
+          "spilled": 0,
+          "leaves_after": 1001,
+          "error": "",
+          "scenario": "finding-n1000-b1-p1024"
+        },
+        {
+          "ok": true,
+          "wall_s": 0.0223,
+          "before_bytes": 130241,
+          "after_bytes": 130241,
+          "removed_count": 1,
+          "applied": 1,
+          "spilled": 0,
+          "leaves_after": 11,
+          "error": "",
+          "scenario": "finding-n1000-b100-p1024"
+        }
+      ],
+      "reclaim": [
+        {
+          "ok": true,
+          "wall_s": 0.067,
+          "dry_run": true,
+          "would_reclaim": 0,
+          "held": 50,
+          "live": 0,
+          "shard_reclaimable": 0,
+          "state_bytes": 130239,
+          "append_ok": true,
+          "kind": "finding"
+        },
+        {
+          "ok": true,
+          "wall_s": 0.0665,
+          "dry_run": true,
+          "would_reclaim": 0,
+          "held": 50,
+          "live": 0,
+          "shard_reclaimable": 0,
+          "state_bytes": 130239,
+          "append_ok": true,
+          "kind": "history"
+        }
+      ]
+    },
+    "gate": {
+      "ok": true,
+      "mode": "full",
+      "config": {
+        "state_sizes": [
+          131072,
+          524288
+        ],
+        "payload_sizes": [
+          64,
+          1024
+        ],
+        "ops": 30
+      },
+      "scenarios": [
+        {
+          "scenario": "read-s131072",
+          "op": "read",
+          "ops": 30,
+          "success": 30,
+          "latency": {
+            "count": 30,
+            "min_ms": 2.058,
+            "p50_ms": 2.609,
+            "p95_ms": 6.741,
+            "p99_ms": 26.127,
+            "max_ms": 33.908,
+            "mean_ms": 4.138
+          },
+          "write_amp": null,
+          "state_bytes": 130233,
+          "checksum_ok": true,
+          "errors": [],
+          "ok": true
+        },
+        {
+          "scenario": "set-nested-s131072-p64",
+          "op": "set_nested",
+          "ops": 30,
+          "success": 30,
+          "latency": {
+            "count": 30,
+            "min_ms": 2.628,
+            "p50_ms": 2.999,
+            "p95_ms": 16.841,
+            "p99_ms": 32.666,
+            "max_ms": 36.482,
+            "mean_ms": 5.549
+          },
+          "write_amp": 1.35,
+          "write_amp_src": "io_write_bytes",
+          "state_bytes": 130239,
+          "checksum_ok": true,
+          "errors": [],
+          "ok": true
+        },
+        {
+          "scenario": "update-gate-data-s131072-p64",
+          "op": "update_gate_data",
+          "ops": 30,
+          "success": 30,
+          "latency": {
+            "count": 30,
+            "min_ms": 10.079,
+            "p50_ms": 12.95,
+            "p95_ms": 17.119,
+            "p99_ms": 17.985,
+            "max_ms": 18.214,
+            "mean_ms": 13.149
+          },
+          "write_amp": 1.42,
+          "write_amp_src": "io_write_bytes",
+          "state_bytes": 130245,
+          "checksum_ok": true,
+          "errors": [],
+          "ok": true
+        },
+        {
+          "scenario": "set-nested-s131072-p1024",
+          "op": "set_nested",
+          "ops": 30,
+          "success": 30,
+          "latency": {
+            "count": 30,
+            "min_ms": 2.615,
+            "p50_ms": 3.019,
+            "p95_ms": 4.832,
+            "p99_ms": 11.155,
+            "max_ms": 13.736,
+            "mean_ms": 3.644
+          },
+          "write_amp": 0.12,
+          "write_amp_src": "io_write_bytes",
+          "state_bytes": 130239,
+          "checksum_ok": true,
+          "errors": [],
+          "ok": true
+        },
+        {
+          "scenario": "update-gate-data-s131072-p1024",
+          "op": "update_gate_data",
+          "ops": 30,
+          "success": 30,
+          "latency": {
+            "count": 30,
+            "min_ms": 9.822,
+            "p50_ms": 12.378,
+            "p95_ms": 16.068,
+            "p99_ms": 17.067,
+            "max_ms": 17.429,
+            "mean_ms": 12.922
+          },
+          "write_amp": 0.17,
+          "write_amp_src": "io_write_bytes",
+          "state_bytes": 130245,
+          "checksum_ok": true,
+          "errors": [],
+          "ok": true
+        },
+        {
+          "scenario": "read-s524288",
+          "op": "read",
+          "ops": 30,
+          "success": 30,
+          "latency": {
+            "count": 30,
+            "min_ms": 4.916,
+            "p50_ms": 6.69,
+            "p95_ms": 9.163,
+            "p99_ms": 10.671,
+            "max_ms": 11.189,
+            "mean_ms": 6.68
+          },
+          "write_amp": null,
+          "state_bytes": 523449,
+          "checksum_ok": true,
+          "errors": [],
+          "ok": true
+        },
+        {
+          "scenario": "set-nested-s524288-p64",
+          "op": "set_nested",
+          "ops": 30,
+          "success": 30,
+          "latency": {
+            "count": 30,
+            "min_ms": 2.645,
+            "p50_ms": 3.393,
+            "p95_ms": 7.808,
+            "p99_ms": 10.728,
+            "max_ms": 11.547,
+            "mean_ms": 4.164
+          },
+          "write_amp": 1.35,
+          "write_amp_src": "io_write_bytes",
+          "state_bytes": 523455,
+          "checksum_ok": true,
+          "errors": [],
+          "ok": true
+        },
+        {
+          "scenario": "update-gate-data-s524288-p64",
+          "op": "update_gate_data",
+          "ops": 30,
+          "success": 30,
+          "latency": {
+            "count": 30,
+            "min_ms": 24.6,
+            "p50_ms": 31.706,
+            "p95_ms": 39.715,
+            "p99_ms": 46.213,
+            "max_ms": 48.636,
+            "mean_ms": 32.664
+          },
+          "write_amp": 1.42,
+          "write_amp_src": "io_write_bytes",
+          "state_bytes": 523461,
+          "checksum_ok": true,
+          "errors": [],
+          "ok": true
+        },
+        {
+          "scenario": "set-nested-s524288-p1024",
+          "op": "set_nested",
+          "ops": 30,
+          "success": 30,
+          "latency": {
+            "count": 30,
+            "min_ms": 2.537,
+            "p50_ms": 3.166,
+            "p95_ms": 6.375,
+            "p99_ms": 11.415,
+            "max_ms": 13.404,
+            "mean_ms": 3.997
+          },
+          "write_amp": 0.12,
+          "write_amp_src": "io_write_bytes",
+          "state_bytes": 523455,
+          "checksum_ok": true,
+          "errors": [],
+          "ok": true
+        },
+        {
+          "scenario": "update-gate-data-s524288-p1024",
+          "op": "update_gate_data",
+          "ops": 30,
+          "success": 30,
+          "latency": {
+            "count": 30,
+            "min_ms": 23.982,
+            "p50_ms": 28.785,
+            "p95_ms": 42.723,
+            "p99_ms": 47.565,
+            "max_ms": 49.415,
+            "mean_ms": 31.029
+          },
+          "write_amp": 0.17,
+          "write_amp_src": "io_write_bytes",
+          "state_bytes": 523461,
+          "checksum_ok": true,
+          "errors": [],
+          "ok": true
+        }
+      ]
+    },
+    "release": {
+      "ok": false,
+      "mode": "release",
+      "results": [
+        {
+          "name": "doc-release",
+          "argv": [
+            "gk_doc_release.py",
+            "--strict",
+            "--summary"
+          ],
+          "wall_s": 32.465,
+          "rc": 1,
+          "stdout_bytes": 80,
+          "stderr_tail": "",
+          "json": null,
+          "ok": false
+        },
+        {
+          "name": "ci-security-lint",
+          "argv": [
+            "gk_ci_security_lint.py",
+            "--json"
+          ],
+          "wall_s": 0.487,
+          "rc": 0,
+          "stdout_bytes": 121,
+          "stderr_tail": "",
+          "json": null,
+          "ok": true
+        }
+      ]
+    }
+  }
+}

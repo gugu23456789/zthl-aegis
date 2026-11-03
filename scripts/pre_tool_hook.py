@@ -1001,6 +1001,44 @@ def _egress_identity(tool_name, tool_input):
     return "McpEgress", url
 
 
+# ── Gate R0.18【蓝色大肥鱼与章鱼浏览器工具面：install / record 写面闸】（2026-11-03）──
+# 真机 25 工具实测：`install_browser` 会下载/安装 Chromium（网络 + 落盘）；
+#   `browser_record_start/stop/generate_steps/generate_skill` 会把录像/技能写盘；
+#   两者都不在 MCP_WRITE_VERBS / MCP_EXEC_TOOLS / R0.14 精确集里 ⟹ 原样可达。
+# 本闸只拦这两类；本地读/UI（dom_tree/screenshot/click/type/fill/press/wait/tab/session）放行。
+# 逃生舱：GK_MCP_ALLOW_BROWSER_INSTALL=1 / GK_MCP_ALLOW_BROWSER_RECORD=1（运维显式放行）。
+BROWSER_TOOLFACE_GATE_NAME = "蓝色大肥鱼与章鱼浏览器工具面【install/record 写面闸】"
+BROWSER_INSTALL_TOOL = "install_browser"
+BROWSER_RECORD_WRITE_TOOLS = frozenset((
+    "browser_record_start", "browser_record_stop",
+    "browser_record_generate_steps", "browser_record_generate_skill"))
+BROWSER_RECORD_READ_TOOLS = frozenset((
+    "browser_record_doctor", "browser_record_status",
+    "browser_record_list", "browser_record_show"))
+BROWSER_LOCAL_UI_TOOLS = frozenset((
+    "browser_dom_tree", "browser_screenshot", "browser_click", "browser_type",
+    "browser_fill", "browser_press", "browser_wait", "browser_switch_tab",
+    "browser_close_tab", "browser_list_tabs", "browser_close_session"))
+
+
+def _browser_toolface_gate(tool_name, tool_input):
+    """→ BLOCK 原因字符串；非 MCP / 非这两类 → 空串（恒等）。"""
+    inner, _args = _mcp_inner_tool(tool_name, tool_input)
+    if not inner:
+        return ""
+    n = inner.lower()
+    if n == BROWSER_INSTALL_TOOL and os.environ.get(
+            "GK_MCP_ALLOW_BROWSER_INSTALL", "0") != "1":
+        return (BROWSER_TOOLFACE_GATE_NAME + ": `install_browser` 会下载/安装 Chromium"
+                "（网络 + 落盘）。请手工执行 `octop-browser install-browser`；"
+                "确需 agent 直调时显式设 GK_MCP_ALLOW_BROWSER_INSTALL=1。")
+    if n in BROWSER_RECORD_WRITE_TOOLS and os.environ.get(
+            "GK_MCP_ALLOW_BROWSER_RECORD", "0") != "1":
+        return (BROWSER_TOOLFACE_GATE_NAME + f": `{inner}` 会把录像/技能写盘；"
+                "确需 agent 直调时显式设 GK_MCP_ALLOW_BROWSER_RECORD=1。")
+    return ""
+
+
 def _wsl_quoting_trap(command: str) -> str | None:
     """检测 WSL 引号陷阱（PS 宿主展开 + 5.1 native arg mangling 两种机制）。命中返回 block 原因，安全返回 None。
     纯语法检测、无状态依赖 → 普适安全 gate（治理范围外也执行，2026-08-09）。
@@ -3860,6 +3898,12 @@ def main():
               "契约：**一切出网走 `subagent_runner._prior_art_fetch`**（或**受治车道**的**白名单域**）；"
               "浏览器 MCP 导航/取网/`evaluate` = 无台账的第二出网通道 ⟹ 拒。"
               "逃生舱（仅运维显式放行）：GK_MCP_EGRESS_GATE=0。")
+
+    # ── Gate R0.18【octop 浏览器工具面】：install / record 写面（普适面，先于 scope_out）──
+    _bt_block = _browser_toolface_gate(tool_name, tool_input)
+    if _bt_block:
+        _log_hook(f"MCP-BROWSER-TOOLFACE-BLOCK: {tool_name}")
+        block(_bt_block)
 
     # ── H-SLSN 激活检测（2026-08-27，ECC-8570E847C7C1）──
     # 双条件与：① hook 生效（PreToolUse 被触发 = 本函数在跑） ② 用户指令含 Use Skill: spz-gatekeeper-r-sequence
