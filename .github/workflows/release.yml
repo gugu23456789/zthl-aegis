@@ -84,10 +84,13 @@ jobs:
       - name: release-gate benchmark (SLA record)
         # S5：发布门耗时纳入 SLA —— 只记录与 WARN（CI 抖动大），不阻断发版；
         #   基线滚动由维护者按 nightly 产物人工 `--init-baseline`。
+        # 2026-11-04：公开树只导出 references 子集，doc-release --strict 必然报「文件缺失」
+        #   （私有面文档未随包）⟹ 该步只记录 rc/耗时，不阻断发布。
+        continue-on-error: true
         run: |
           set -o pipefail
           mkdir -p dist/bench
-          python scripts/gk_bench_release.py --json --out-dir dist/bench > dist/bench/release.json
+          python scripts/gk_bench_release.py --json --out-dir dist/bench > dist/bench/release.json || true
           python scripts/gk_bench_compare.py --baseline references/bench-baseline.json \
             --release dist/bench/release.json --only release --json \
             | tee dist/bench/release-compare.json

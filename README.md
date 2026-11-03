@@ -315,8 +315,8 @@ python scripts/gk_doc_release.py --strict
 - 仓内不存凭据；`.keys/` 与环境文件被忽略。
 - CLI 从环境读 API key（`GATEKEEPER_API_KEY` / `DEEPSEEK_API_KEY`），无 key 时降级为本地零 API 的 monitor 模式。
 - state、计划备份、生成报告、评审缓存均被 git ignore；只跟踪代码、参考与测试。
-- 漏洞报告：见 [`SECURITY.md`](SECURITY.md)（请走私报，不要开公开 issue）。部署注意事项与密钥轮换见
-  [`references/security-measures.md`](references/security-measures.md)。
+- 漏洞报告：见 [`SECURITY.md`](SECURITY.md)（请走私报，不要开公开 issue）；事故响应见
+  [`references/security-incident-response.md`](references/security-incident-response.md)。
 
 ### 贡献
 
