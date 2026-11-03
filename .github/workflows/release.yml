@@ -106,6 +106,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
         run: |
+          NOTES=(--generate-notes)
+          [ -f "RELEASE-NOTES-$VERSION.md" ] && NOTES=(--notes-file "RELEASE-NOTES-$VERSION.md")
           gh release create "$VERSION" \
             --verify-tag \
             "dist/zthl-aegis-$VERSION.zip" \
@@ -114,4 +116,4 @@ jobs:
             "dist/SBOM.cdx.json" \
             "dist/release-manifest.json" \
             --title "ZTHL Aegis $VERSION" \
-            --notes-file "RELEASE-NOTES-$VERSION.md"
+            "${NOTES[@]}"
