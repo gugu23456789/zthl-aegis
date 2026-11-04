@@ -20,6 +20,8 @@ import gk_zenodo_sync as Z  # noqa: E402
 def _dist(tmp_path, version="v0.9.6.3"):
     for n in ["zthl-aegis-%s.zip" % version] + list(Z.BASE_FILES):
         (tmp_path / n).write_bytes(b"x")
+    (tmp_path / "PROVENANCE.json").write_text(json.dumps(
+        {"source": {"commit": "0229405abcdef1234", "tag": version}}), encoding="utf-8")
     return tmp_path
 
 
@@ -90,7 +92,10 @@ def test_full_flow(tmp_path, capsys, monkeypatch):
     assert meta["version"] == "v0.9.6.3"
     assert meta["title"] == "ZTHL Aegis v0.9.6.3"          # 不继承旧草稿的旧标题
     assert meta["license"] == {"id": "other-open"}         # 不落成默认 cc-by-4.0
-    assert "MulanPSL2" in meta["description"]              # 正文写明真实许可
+    desc = meta["description"]
+    assert "MulanPSL2" in desc                             # 正文写明真实许可
+    assert "v0.9.6.3" in desc and "0229405" in desc        # 描述按本版 tag/commit 生成
+    assert "v0.9.6.2" not in desc                          # 不继承旧正文
     # 空日期项必须剔除（否则 Zenodo 400: metadata.dates Invalid date provided）
     assert "dates" not in meta
 

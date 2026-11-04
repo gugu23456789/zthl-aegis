@@ -186,6 +186,37 @@ def check_archive(path):
     return 0
 
 
+def _read_provenance(dist):
+    """读 `dist/PROVENANCE.json` 的 `source`（commit/tag）；缺失或坏读 ⟹ {}。"""
+    try:
+        with open(os.path.join(str(dist), "PROVENANCE.json"), encoding="utf-8") as f:
+            return (json.load(f) or {}).get("source") or {}
+    except (OSError, ValueError):
+        return {}
+
+
+def build_description(version, source):
+    """**确定性生成**归档描述。
+
+    2026-11-04 实测坑：描述此前从首个 deposit 继承，v0.9.6.7 的正文仍写着
+    「GitHub Release v0.9.6.2 … commit 0229405」与 `zthl-aegis-v0.9.6.2.zip`。
+    """
+    commit = str((source or {}).get("commit") or "")
+    tag = str((source or {}).get("tag") or version)
+    src = "（tag %s → commit %s）" % (tag, commit[:7]) if commit else "（tag %s）" % tag
+    return (
+        "<p>ZTHL Aegis：面向 AI 编码代理的治理与审计框架（gatekeeper），提供命令/工具面门禁、"
+        "状态持久化（WAL + checkpoint）、基准套件与发布可核验链。</p>"
+        "<p>本归档对应 GitHub Release %s%s，包含确定性打包的源码 zip、SHA256SUMS、"
+        "PROVENANCE.json（来源仓/commit/tag 与排除面）、CycloneDX 1.5 SBOM 及逐文件清单。</p>"
+        "<p>核验方式：<br>1) sha256sum -c SHA256SUMS<br>"
+        "2) 读取 PROVENANCE.json 核对 source_commit / source_tag / policy sha256<br>"
+        "3) GitHub 侧：gh attestation verify zthl-aegis-%s.zip --repo gugu23456789/zthl-aegis</p>"
+        "<p>许可：Mulan Permissive Software License v2"
+        "（https://license.coscl.org.cn/MulanPSL2）</p>"
+    ) % (version, src, version)
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="gk_zenodo_sync.py")
     ap.add_argument("--concept", help="Concept recid（如 23934594）")
@@ -286,11 +317,8 @@ def main(argv=None):
     if not a.keep_license:
         # Mulan PSL v2 不在 Zenodo 内置列表 ⟹ other-open + 正文写明（否则默认 CC BY 是**错误声明**）
         meta["license"] = {"id": a.license_id}
-        _lic = ("许可：Mulan Permissive Software License v2"
-                "（https://license.coscl.org.cn/MulanPSL2）")
-        _desc = str(meta.get("description") or "")
-        if "MulanPSL2" not in _desc:
-            meta["description"] = (_desc + "<p>" + _lic + "</p>") if _desc else "<p>" + _lic + "</p>"
+    # 描述**整体重写**：继承来的旧正文会写着上一版的 tag/commit 与旧 zip 名
+    meta["description"] = build_description(a.version, _read_provenance(a.dist))
     meta["version"] = a.version
     meta["publication_date"] = datetime.date.today().isoformat()
     body = json.dumps({"metadata": meta}).encode("utf-8")
