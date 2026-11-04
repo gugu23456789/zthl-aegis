@@ -41,7 +41,9 @@ jobs:
           python scripts/gk_bench_state.py --full --json --out-dir dist/bench
           python scripts/gk_bench_satellite.py --full --json --out-dir dist/bench
           python scripts/gk_bench_gate.py --full --json --out-dir dist/bench
-          python scripts/gk_bench_release.py --json --out-dir dist/bench
+          # 公开树只导出 references 子集 ⟹ doc-release --strict 必然 rc=1；
+          #   本步只采集耗时/rc 供 SLA 观测，不因私有面文档缺失判红。
+          python scripts/gk_bench_release.py --json --out-dir dist/bench || true
       - name: compare vs committed baseline
         run: |
           set -o pipefail
