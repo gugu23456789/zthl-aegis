@@ -1,0 +1,47 @@
+name: zenodo-archive
+
+# 手动补档 / 重试：对**已存在**的 Release 重新执行 Zenodo 归档。
+# 用途：自动归档步骤失败后重跑（脚本会复用上次残留的草稿），或补历史版本。
+# 与 release.yml 的区别：只做归档，不打包、不建 Release，失败直接可见（不 continue-on-error）。
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "已发布的 Release tag（如 v0.9.6.4）"
+        required: true
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+concurrency:
+  group: zenodo-archive-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  archive:
+    name: archive release assets to Zenodo
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: "3.12"
+      - name: download release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag }}
+        run: gh release download "$TAG" --dir dist
+      - name: sync to Zenodo
+        env:
+          ZENODO_TOKEN: ${{ secrets.ZTHL }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          CONCEPT=$(python -c "import json;print(json.load(open('references/archive.json'))['concept_doi'].rsplit('.',1)[-1])")
+          python scripts/gk_zenodo_sync.py --concept "$CONCEPT" --version "$TAG" --dist dist

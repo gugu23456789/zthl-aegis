@@ -89,10 +89,34 @@ def plan_files(dist, version):
 
 
 def _clean_meta(meta):
-    """去掉只读/由服务端生成的键，其余原样回写。"""
+    """去掉只读/由服务端生成的键，并清掉会让 Zenodo 校验 400 的空值项。
+
+    2026-11-04 实测：旧记录携带 `dates: [{"type": "issued", "date": ""}]`，
+    整体回写时 Zenodo 报 `metadata.dates: Invalid date provided.`（v0.9.6.4 归档失败根因）。
+    故 dates 逐项过滤：`date` 为空的条目直接丢弃，全空则删掉该键。
+    """
     drop = {"doi", "prereserve_doi", "relations", "_deposit", "owners", "created",
             "modified", "recid", "conceptrecid", "resource_type", "id", "conceptdoi"}
-    return {k: v for k, v in (meta or {}).items() if k not in drop and v not in (None, "", [], {})}
+    out = {k: v for k, v in (meta or {}).items() if k not in drop and v not in (None, "", [], {})}
+    dates = out.get("dates")
+    if isinstance(dates, list):
+        kept = [d for d in dates
+                if isinstance(d, dict) and str(d.get("date") or "").strip()]
+        if kept:
+            out["dates"] = kept
+        else:
+            out.pop("dates", None)
+    return out
+
+
+def find_draft(rec, token):
+    """复用**已存在的草稿**（上次失败留下的），避免 `newversion` 因草稿占用而报错。"""
+    st, obj = _req("GET", "%s/deposit/depositions/%s" % (API, rec), token)
+    if st != 200 or not isinstance(obj, dict):
+        return None
+    ld = ((obj.get("links") or {}).get("latest_draft") or "").rstrip("/")
+    did = ld.rsplit("/", 1)[-1]
+    return did if did.isdigit() and did != str(rec) else None
 
 
 def main(argv=None):
@@ -127,18 +151,24 @@ def main(argv=None):
                          ensure_ascii=False))
         return 0
 
-    st, obj = _req("POST", "%s/deposit/depositions/%s/actions/newversion" % (API, rec), token,
-                   body=b"")
-    if st not in (200, 201) or not isinstance(obj, dict):
-        print(json.dumps({"ok": False, "error": "newversion 失败", "status": st,
-                          "detail": obj}, ensure_ascii=False))
-        return 1
-    draft_url = ((obj.get("links") or {}).get("latest_draft") or "").rstrip("/")
-    draft = draft_url.rsplit("/", 1)[-1]
-    if not draft.isdigit():
-        print(json.dumps({"ok": False, "error": "newversion 未返回 draft id",
-                          "links": obj.get("links")}, ensure_ascii=False))
-        return 1
+    # 复用上次失败留下的草稿；没有才 newversion（否则 Zenodo 会因草稿占用拒绝建新版本）
+    draft = find_draft(rec, token)
+    if draft:
+        # 提示走 stderr：stdout 只留**单条**最终 JSON（调用方按单条解析）
+        print("复用已有草稿 %s" % draft, file=sys.stderr)
+    else:
+        st, obj = _req("POST", "%s/deposit/depositions/%s/actions/newversion" % (API, rec), token,
+                       body=b"")
+        if st not in (200, 201) or not isinstance(obj, dict):
+            print(json.dumps({"ok": False, "error": "newversion 失败", "status": st,
+                              "detail": obj}, ensure_ascii=False))
+            return 1
+        draft_url = ((obj.get("links") or {}).get("latest_draft") or "").rstrip("/")
+        draft = draft_url.rsplit("/", 1)[-1]
+        if not draft.isdigit():
+            print(json.dumps({"ok": False, "error": "newversion 未返回 draft id",
+                              "links": obj.get("links")}, ensure_ascii=False))
+            return 1
 
     st, obj = _req("GET", "%s/deposit/depositions/%s" % (API, draft), token)
     if st != 200 or not isinstance(obj, dict):

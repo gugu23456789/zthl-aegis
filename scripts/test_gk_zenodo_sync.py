@@ -60,7 +60,8 @@ def test_full_flow(tmp_path, capsys, monkeypatch):
         if url.endswith("/actions/newversion"):
             return 201, {"links": {"latest_draft": "https://zenodo.org/api/deposit/depositions/777"}}
         if method == "GET" and url.endswith("/deposit/depositions/777"):
-            return 200, {"metadata": {"title": "T", "doi": "10.1/x", "description": "D"},
+            return 200, {"metadata": {"title": "T", "doi": "10.1/x", "description": "D",
+                                      "dates": [{"type": "issued", "date": ""}]},
                          "files": [{"id": "f1", "links": {"self": "https://z/api/deposit/depositions/777/files/f1"}}]}
         if method == "POST" and url.endswith("/files"):
             return 201, {"id": "new"}
@@ -88,6 +89,36 @@ def test_full_flow(tmp_path, capsys, monkeypatch):
     assert "doi" not in meta and "relations" not in meta
     assert meta["version"] == "v0.9.6.3"
     assert meta["title"] == "T"
+    # 空日期项必须剔除（否则 Zenodo 400: metadata.dates Invalid date provided）
+    assert "dates" not in meta
+
+
+def test_reuse_existing_draft(tmp_path, capsys, monkeypatch):
+    """上次失败留下的草稿必须被复用，不能再次 newversion（否则 409/400）。"""
+    monkeypatch.setenv("ZENODO_TOKEN", "t0ken")
+    calls = []
+
+    def fake(method, url, token=None, body=None, headers=None, timeout=120):
+        calls.append((method, url))
+        if "/records?q=conceptrecid:" in url:
+            return 200, {"hits": {"hits": [{"id": 23934595}]}}
+        if method == "GET" and url.endswith("/deposit/depositions/23934595"):
+            return 200, {"links": {"latest_draft": "https://zenodo.org/api/deposit/depositions/888"},
+                         "metadata": {"title": "T"}}
+        if method == "GET" and url.endswith("/deposit/depositions/888"):
+            return 200, {"metadata": {"title": "T"}, "files": []}
+        if method == "PUT":
+            return 200, {"metadata": {"title": "T"}}
+        if url.endswith("/actions/publish"):
+            return 202, {"doi": "10.5281/zenodo.888"}
+        return 201, {}
+
+    monkeypatch.setattr(Z, "_req", fake)
+    rc, out = _run(capsys, "--concept", "23934594", "--version", "v0.9.6.3",
+                   "--dist", str(_dist(tmp_path)))
+    assert rc == 0
+    assert out["record"] == "888"
+    assert not any(u.endswith("/actions/newversion") for _, u in calls)
 
 
 def test_newversion_failure_exit_1(tmp_path, capsys, monkeypatch):
