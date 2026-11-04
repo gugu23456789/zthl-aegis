@@ -153,6 +153,38 @@ def test_find_draft_by_concept_search(tmp_path, capsys, monkeypatch):
     assert not any(u.endswith("/actions/newversion") for _, u in calls)
 
 
+def test_published_record_without_state_is_not_draft(tmp_path, capsys, monkeypatch):
+    """检索结果**没有 state/submitted 字段**的已发布记录，不得被当成草稿（403 Bucket is locked）。"""
+    monkeypatch.setenv("ZENODO_TOKEN", "t0ken")
+    calls = []
+
+    def fake(method, url, token=None, body=None, headers=None, timeout=120):
+        calls.append((method, url))
+        if "/records?q=conceptrecid:" in url:
+            return 200, {"hits": {"hits": [{"id": 23934595}]}}
+        if method == "GET" and "/deposit/depositions?q=conceptrecid:" in url:
+            return 200, [{"id": 23934595}, {"id": 23935725}]      # 两条都已发布、且无 state
+        if method == "GET" and url.endswith("/deposit/depositions/23934595"):
+            return 200, {"links": {}, "metadata": {"title": "T"}}
+        if url.endswith("/actions/newversion"):
+            return 201, {"links": {"latest_draft": "https://zenodo.org/api/deposit/depositions/999"}}
+        if method == "GET" and url.endswith("/deposit/depositions/999"):
+            return 200, {"metadata": {"title": "T"}, "files": []}
+        if method == "PUT":
+            return 200, {}
+        if url.endswith("/actions/publish"):
+            return 202, {"doi": "10.5281/zenodo.999"}
+        return 201, {}
+
+    monkeypatch.setattr(Z, "_req", fake)
+    rc, out = _run(capsys, "--concept", "23934594", "--version", "v0.9.6.5",
+                   "--dist", str(_dist(tmp_path, "v0.9.6.5")))
+    assert rc == 0
+    assert out["record"] == "999"                                  # 走了 newversion
+    assert any(u.endswith("/actions/newversion") for _, u in calls)
+    assert not any(m == "DELETE" for m, _ in calls)                 # 没去删已发布记录的文件
+
+
 def test_newversion_failure_exit_1(tmp_path, capsys, monkeypatch):
     monkeypatch.setenv("ZENODO_TOKEN", "t0ken")
     calls = []

@@ -109,13 +109,30 @@ def _clean_meta(meta):
     return out
 
 
+def _is_draft(h, rec):
+    """草稿判据（**保守**）：必须显式是未发布态，且不得是已发布记录本身。
+
+    2026-11-04 实测坑：`conceptrecid` 检索返回的条目**不含 `state`**，
+    用「state != done」会把**已发布记录**当成草稿 ⟹ 上传撞 `403 Bucket is locked`。
+    优先看 `submitted` 布尔；缺省再看 `state`，两者都没有 ⟹ 不当草稿。
+    """
+    if not isinstance(h, dict):
+        return False
+    hid = str(h.get("id") or "")
+    if not hid.isdigit() or hid == str(rec):
+        return False
+    if "submitted" in h:
+        return not bool(h.get("submitted"))
+    return str(h.get("state") or "").lower() in ("unsubmitted", "inprogress")
+
+
 def find_draft(rec, concept, token):
     """找**已存在的草稿**（上次失败留下的），避免 `newversion` 撞上「Please remove all files first」。
 
     两条路（2026-11-04 实测：只靠 (a) 不够 —— legacy API 的 `links.latest_draft`
     在草稿已带文件时不返回，导致重复 `newversion` 被 400 拒绝）：
       (a) 记录自身的 `links.latest_draft`；
-      (b) 按 `conceptrecid` 检索全部 deposit，取 state != "done" 的最大 id。
+      (b) 按 `conceptrecid` 检索全部 deposit，用 `_is_draft` 判据取最大 id。
     """
     st, obj = _req("GET", "%s/deposit/depositions/%s" % (API, rec), token)
     if st == 200 and isinstance(obj, dict):
@@ -126,9 +143,7 @@ def find_draft(rec, concept, token):
     url = "%s/deposit/depositions?q=conceptrecid:%s&size=20&all_versions=true" % (API, concept)
     st, obj = _req("GET", url, token)
     hits = obj if isinstance(obj, list) else ((obj or {}).get("hits") or {}).get("hits") or []
-    drafts = [h for h in hits
-              if isinstance(h, dict) and str(h.get("state") or "") != "done"
-              and str(h.get("id") or "").isdigit()]
+    drafts = [h for h in hits if _is_draft(h, rec)]
     if drafts:
         return str(max(drafts, key=lambda h: int(h["id"]))["id"])
     return None
@@ -173,6 +188,8 @@ def main(argv=None):
 
     # 复用上次失败留下的草稿；没有才 newversion（否则 Zenodo 会因草稿占用拒绝建新版本）
     draft = find_draft(rec, a.concept, token)
+    if draft and str(draft) == str(rec):
+        draft = None   # 硬保护：已发布记录的 bucket 是锁定的，绝不当草稿写
     if draft:
         # 提示走 stderr：stdout 只留**单条**最终 JSON（调用方按单条解析）
         print("复用已有草稿 %s" % draft, file=sys.stderr)
