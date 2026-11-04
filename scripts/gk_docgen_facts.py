@@ -39,6 +39,32 @@ def _refs_top_md(sd: Path) -> int:
     return len(_git_ref_names(sd))
 
 
+def _static_roles(sd: Path) -> list:
+    """从源码静态提取 `ROLE_TOOLS` 的角色名 —— 供**未装第三方依赖**的 CI 使用。
+
+    2026-11-04：preflight 作业不装 openai/agents，`import subagent_runner` 失败 ⟹
+    `roles=[]` ⟹ GK-FACTS「子代理角色」从 8 变 0 ⟹ 日常 CI 假红。静态解析只读文本，
+    与 import 路径同源（同一个字典字面量），不引入第二份角色清单。
+    """
+    try:
+        text = _read(sd / "scripts" / "subagent_runner.py")
+    except OSError:
+        return []
+    lines = text.splitlines()
+    start = next((i for i, ln in enumerate(lines)
+                  if re.match(r"^ROLE_TOOLS(?::[^=]+)?\s*=\s*\{", ln)), None)
+    if start is None:
+        return []
+    out = []
+    for ln in lines[start + 1:]:
+        if ln.startswith("}"):
+            break
+        m = re.match(r'\s{4}"([A-Za-z0-9_.-]+)"\s*:', ln)
+        if m:
+            out.append(m.group(1))
+    return sorted(out)
+
+
 def collect(skill_dir: str = "") -> dict:
     """从**活文件**采集事实（只读；失败项 None，不猜）。"""
     sd = Path(skill_dir) if skill_dir else _SKILL_DIR
@@ -76,8 +102,8 @@ def collect(skill_dir: str = "") -> dict:
         sys.path.insert(0, str(sd / "scripts"))
         import subagent_runner as SR
         facts["roles"] = sorted(SR.ROLE_TOOLS)
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception:  # noqa: BLE001 — CI 未装依赖时静态回退（同一字典字面量）
+        facts["roles"] = _static_roles(sd)
     try:
         facts["red_vectors"] = len(json.loads(
             _read(sd / "references" / "red-vectors.json"))["vectors"])

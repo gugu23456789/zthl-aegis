@@ -80,3 +80,22 @@ def test_state_capacity_and_wall_blocks_reflect_constants():
         assert "≥ %s%%" % pct in wall
     assert "WALL_BLOCK" in wall and "512 KB" in wall
     assert "ECC_MAX_ENTRIES=256" in wall and "ECC_MAX_OPEN=96" in wall
+
+
+# ── CI 无依赖回退（2026-11-04）──────────────────────────────────────────────
+# preflight 作业不装 openai/agents ⟹ import subagent_runner 失败 ⟹ 角色数从 8 变 0
+# ⟹ GK-FACTS 假红（v0.9.6.12 实测）。静态解析必须与同一字典字面量等价。
+
+def test_static_roles_include_known_entries():
+    roles = F._static_roles(ROOT)
+    assert len(roles) >= 8, roles
+    for name in ("default", "scanner", "exploiter", "auditor", "reporter"):
+        assert name in roles, (name, roles)
+
+
+def test_static_roles_matches_live_when_importable():
+    try:
+        import subagent_runner as SR
+    except Exception:  # noqa: BLE001 — CI 未装依赖时跳过对照臂
+        return
+    assert F._static_roles(ROOT) == sorted(SR.ROLE_TOOLS)
