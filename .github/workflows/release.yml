@@ -122,11 +122,12 @@ jobs:
             "${NOTES[@]}"
       - name: archive to Zenodo (new version)
         # 每个 Release 自动归档为 Zenodo 新版本（Concept DOI 自动指向最新）：
-        #   未配置 secrets.ZENODO_TOKEN 时脚本自行跳过（exit 0），存档失败不阻断发版。
+        #   未配置 token 时脚本自行跳过（exit 0），存档失败不阻断发版。
         # Concept recid 取自包内 `references/archive.json` 的 Concept DOI（单一事实源）。
+        # 仓库 secret 名为 `ZTHL`（2026-11-04 建立），脚本仍读环境变量 ZENODO_TOKEN。
         continue-on-error: true
         env:
-          ZENODO_TOKEN: ${{ secrets.ZENODO_TOKEN }}
+          ZENODO_TOKEN: ${{ secrets.ZTHL }}
           VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
         run: |
           CONCEPT=$(python -c "import json;print(json.load(open('references/archive.json'))['concept_doi'].rsplit('.',1)[-1])")
