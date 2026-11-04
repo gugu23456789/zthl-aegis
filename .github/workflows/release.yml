@@ -47,7 +47,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: install test deps
-        run: python -m pip install --upgrade pip pytest pytest-xdist cryptography pyyaml==6.0.2
+        run: python -m pip install --upgrade pip pytest pytest-xdist cryptography pyyaml==6.0.2 openai openai-agents pydantic
       - name: workflow security gate
         run: python scripts/gk_ci_security_lint.py --json
       - name: package/hook integrity
