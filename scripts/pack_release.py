@@ -217,7 +217,12 @@ def pack(tree: str, out: str, version: str, forbidden: str = "",
             "provenance": os.path.join(out, "PROVENANCE.json")}
 
 
-def main(argv=None) -> int:
+def build_parser() -> argparse.ArgumentParser:
+    """CLI 契约**单源**：`main()` 与发布预检（`gk_release_preflight.py`）共用。
+
+    2026-11-04 事故：release.yml 传 `--source-*` 而本脚本不认 ⟹ 发版 CI 连续三版在
+    pack 步 argparse 退出 2。预检必须能从同一 parser 读出「支持哪些 flag」。
+    """
     ap = argparse.ArgumentParser(prog="pack_release.py")
     ap.add_argument("--tree", required=True)
     ap.add_argument("--out", required=True)
@@ -227,7 +232,11 @@ def main(argv=None) -> int:
     ap.add_argument("--source-commit", default="")
     ap.add_argument("--source-tag", default="")
     ap.add_argument("--json", action="store_true")
-    ns = ap.parse_args(argv)
+    return ap
+
+
+def main(argv=None) -> int:
+    ns = build_parser().parse_args(argv)
     r = pack(ns.tree, ns.out, ns.version, ns.forbidden,
              source_repo=ns.source_repo, source_commit=ns.source_commit,
              source_tag=ns.source_tag)

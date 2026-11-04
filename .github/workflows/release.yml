@@ -1,7 +1,8 @@
 name: release
 
-# 发布纪律（对齐 references/ci-pipeline-template.md §3.6 / §5 / §6）：
-#   tag → 全量 smoke → 确定性打包 → 校验和回验 → GitHub Release（附 zip + manifest + SHA256SUMS）
+# 发布纪律（对齐 references/ci-pipeline-template.md §3.6 / §5 / §6 / §8）：
+#   tag → 全量 smoke → **发布预检（参数/产物/资产契约）** → 确定性打包（zip + SHA256SUMS +
+#   PROVENANCE + manifest）→ SBOM → 校验和回验 → GitHub Release（7 资产）
 on:
   push:
     tags: ["v*"]
@@ -58,6 +59,12 @@ jobs:
       - name: resident feature coverage (self-description)
         # 发布面门禁：常驻功能必须在自述文档得到反映，自动刷新文档不得漂移。
         run: python scripts/gk_doc_features.py
+      - name: release preflight (contract + fixture + docs + assets)
+        # 2026-11-04：把「workflow ↔ 脚本参数契约 / PROVENANCE 产出 / 7 个发布资产」
+        # 变成**打包前**的 fail-loud 判据。事故：v0.9.6.8–v0.9.6.10 连续三版
+        # 在 pack 步 argparse 退出 2（workflow 传 --source-*，脚本不认），
+        # 而 publish 要求的 dist/PROVENANCE.json 从未产出。
+        run: python scripts/gk_release_preflight.py
       - name: archive preflight (offline + Zenodo dry-run)
         # 发包预检（**阻断**）：先离线校验 archive.json，再解析 Concept DOI 到 Zenodo 最新记录。
         # 解析不到就不发包 —— 避免「发布后才发现归档失败、再补一版」。
@@ -122,15 +129,20 @@ jobs:
         run: |
           NOTES=(--generate-notes)
           [ -f "RELEASE-NOTES-$VERSION.md" ] && NOTES=(--notes-file "RELEASE-NOTES-$VERSION.md")
-          gh release create "$VERSION" \
-            --verify-tag \
-            "dist/zthl-aegis-$VERSION.zip" \
-            "dist/SHA256SUMS" \
-            "dist/PROVENANCE.json" \
-            "dist/SBOM.cdx.json" \
-            "dist/release-manifest.json" \
-            --title "ZTHL Aegis $VERSION" \
-            "${NOTES[@]}"
+          # 7 个资产 = 5 核心 + 2 基准；基准步 continue-on-error，缺失则降级为 5 个（不静默造假）。
+          ASSETS=(
+            "dist/zthl-aegis-$VERSION.zip"
+            "dist/SHA256SUMS"
+            "dist/PROVENANCE.json"
+            "dist/SBOM.cdx.json"
+            "dist/release-manifest.json"
+          )
+          for f in dist/bench/release.json dist/bench/release-compare.json; do
+            [ -f "$f" ] && ASSETS+=("$f")
+          done
+          echo "release assets: ${#ASSETS[@]}"
+          gh release create "$VERSION" --verify-tag "${ASSETS[@]}" \
+            --title "ZTHL Aegis $VERSION" "${NOTES[@]}"
       - name: archive to Zenodo (new version)
         # 每个 Release 自动归档为 Zenodo 新版本（Concept DOI 自动指向最新）：
         #   未配置 token 时脚本自行跳过（exit 0，属**配置态**而非失败）。

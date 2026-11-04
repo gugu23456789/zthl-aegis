@@ -368,6 +368,19 @@ security-audit:
   ① 离线可校验（schema + `10.5281/zenodo.<digits>`），② 联网能解析到存档站最新记录。
   离线校验进 CI（确定性、不依赖网络），联网 dry-run 进发包预检（**阻断**）。
   存档步骤本身**禁 `continue-on-error`**：v0.9.6.5 曾因它把 `403 Bucket is locked` 藏成绿色作业。
+- **发布流水线契约预检**（2026-11-04，`scripts/gk_release_preflight.py`）：把 workflow 与发布脚本
+  之间的三处**跨文件契约**在打包前机检，任一不满足即阻断：
+  ① 参数契约：workflow 里 `pack_release.py` 用到的 flag ⊆ 脚本 parser（事故：v0.9.6.8–v0.9.6.10
+     连续三版传 `--source-*` 而脚本不认 ⟹ pack 步 argparse 退出 2）；
+  ② 产物契约：夹具真跑一次 pack，必须产出 zip / SHA256SUMS / release-manifest.json /
+     PROVENANCE.json 四件套，且 `PROVENANCE.source`（repo/commit/tag）可核；
+  ③ 资产契约：publish 步必须挂 **7 个资产** = zip + SHA256SUMS + PROVENANCE + SBOM +
+     manifest + `dist/bench/release.json` + `dist/bench/release-compare.json`
+     （基准步 `continue-on-error`，文件缺失时降级为 5 个，但**挂载点**必须在，禁止静默缺项）。
+- **导出期文档自洽**（2026-11-04）：`oss_scrub.py export` 在导出树内自动跑
+  `gk_docgen_facts.py --write`（`DOCFACTS OK / SKIP`，执行失败 fail-loud）。事实块含本仓
+  `references/*.md` 计数（私仓 50 / 公开 28）⟹ 「同步后在目标仓手工 --write」必然每版漂移；
+  生成器必须支持「无 git 时按目录清单回退」，否则导出树会把索引整段清空。
 - 非审计类项目：仅保留原生构建 + CTest 作为发布门禁
 
 ## 6. 产物与失败诊断
@@ -414,6 +427,10 @@ security-audit:
 - **报告出口 ≠ 门禁**：SARIF 上传 / artifact 上传失败可以容忍（配置态），
   但生成 SARIF 的 `--gate` 步必须真实失败；二者不得混为一个 continue-on-error 步
 - 发布 job 必须有 `attest-build-provenance`（`id-token: write` / `attestations: write`）；`environment: release` 可选——**单人维护不要配 required reviewers**，GitHub 不允许触发者自审，会永久等待
+- **workflow ↔ 脚本参数契约不得靠人记**（2026-11-04）：v0.9.6.8–v0.9.6.10 连续三版发版失败，
+  根因是 workflow 传 `--source-repo/--source-commit/--source-tag` 而 `pack_release.py` 不认，
+  外加 publish 要求的 `dist/PROVENANCE.json` 从未产出。修法不是补一次参数，而是把契约做成
+  **打包前机检**（`gk_release_preflight.py`）：参数集合、产物四件套、7 个资产挂载点。
 - Pages 部署：github-pages 环境 deployment branch 白名单漏加 main → 部署失败
 - GitCode 环境无 GitHub Actions 等效语义，模板不可直接照搬（需移植）
 

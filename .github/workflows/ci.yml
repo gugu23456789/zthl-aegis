@@ -53,6 +53,27 @@ jobs:
           python scripts/gk_bomb_inventory.py --assert-baseline docs/analysis/bomb-inventory-20261104.json
           python scripts/gk_bomb_inventory.py --max-payload 96
 
+  preflight:
+    # 2026-11-04：把发布契约放到**日常 CI** 拦，而不是等 tag 推上去才炸。
+    #   事故：v0.9.6.8–v0.9.6.10 三版发版失败（workflow 传 --source-*，脚本不认；
+    #   publish 要 PROVENANCE.json 却从未产出）——这类跨文件漂移必须在 push/PR 阶段红。
+    name: preflight (release contracts / docs / package integrity)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: "3.12"
+      - name: release preflight (fail-loud)
+        # ① 参数契约 ② 夹具打包四件套 ③ 事实块 ④ 覆盖门 ⑤ 7 个资产挂载点
+        run: python scripts/gk_release_preflight.py
+      - name: package/hook integrity
+        run: python scripts/gk_package_integrity.py --json
+
   venv-gate:
     # 2026-11-02 owner 要求：CI 必须在内置虚拟环境里完整跑一遍。
     # 背景：package-integrity 曾因「跑 pytest 却没装 pytest」整 job 假红；
