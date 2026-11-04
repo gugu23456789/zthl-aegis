@@ -105,3 +105,34 @@ def test_pack_excludes_runtime_artifacts(tmp_path):
     r = P.pack(str(t), str(tmp_path / "dist"), "v1")
     paths = {f["path"] for f in r["manifest"]["files"]}
     assert paths == {"LICENSE", "README.md", "scripts/a.py"}, paths
+
+
+# ── CI 契约：source 绑定 + PROVENANCE.json（2026-11-04）─────────────────────
+# 病象：release.yml 传 `--source-repo/--source-commit/--source-tag` 且 publish 步要求
+# `dist/PROVENANCE.json`，而脚本两者都没有 ⟹ v0.9.6.8–v0.9.6.10 发版作业连续三版
+# 在 pack 步 argparse 退出 2。此处钉死「参数可接受 + 文件必产出 + 字段可核」。
+
+def test_pack_cli_accepts_source_flags_and_writes_provenance(tmp_path):
+    t = _tree(tmp_path)
+    out = tmp_path / "dist"
+    rc = P.main(["--tree", str(t), "--out", str(out), "--version", "v9.9.9",
+                 "--source-repo", "org/repo", "--source-commit", "deadbeef",
+                 "--source-tag", "v9.9.9", "--json"])
+    assert rc == 0
+    prov = json.loads((out / "PROVENANCE.json").read_text(encoding="utf-8"))
+    assert prov["schema"] == "zthl-provenance/1"
+    assert prov["version"] == "v9.9.9"
+    assert prov["source"] == {"repo": "org/repo", "commit": "deadbeef", "tag": "v9.9.9"}
+    names = {s["name"] for s in prov["subject"]}
+    assert names == {"zthl-aegis-v9.9.9.zip", "SHA256SUMS"}, names
+    manifest = json.loads((out / "release-manifest.json").read_text(encoding="utf-8"))
+    sha = {s["name"]: s["sha256"] for s in prov["subject"]}
+    assert sha["zthl-aegis-v9.9.9.zip"] == manifest["zip_sha256"]
+
+
+def test_pack_provenance_source_null_when_absent(tmp_path):
+    t = _tree(tmp_path)
+    out = tmp_path / "dist"
+    assert P.pack(str(t), str(out), "v1")["ok"]
+    prov = json.loads((out / "PROVENANCE.json").read_text(encoding="utf-8"))
+    assert prov["source"] == {"repo": None, "commit": None, "tag": None}

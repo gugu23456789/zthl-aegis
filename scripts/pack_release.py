@@ -6,6 +6,7 @@
   <out>/<name>-<version>.zip        确定性 zip（固定 mtime、路径排序、排除运行期产物）
   <out>/SHA256SUMS                 逐文件 sha256（不含自身；随包内根目录一份）
   <out>/release-manifest.json      文件数 / 逐文件 sha256 / zip sha256 / 身份与禁词反查结果
+  <out>/PROVENANCE.json            来源绑定（repo / commit / tag）+ 主体 sha256（发布资产必需）
 
 纪律（沿 CI 模版）：
   · **拒发**：身份字面量 / 密钥形态 / 禁词命中 ⟹ exit 2，**不产出 zip**（fail-closed）。
@@ -112,7 +113,8 @@ def _load_terms(path: str) -> list:
     return terms
 
 
-def pack(tree: str, out: str, version: str, forbidden: str = "") -> dict:
+def pack(tree: str, out: str, version: str, forbidden: str = "",
+         source_repo: str = "", source_commit: str = "", source_tag: str = "") -> dict:
     tree = os.path.abspath(tree)
     out = os.path.abspath(out)
     if not os.path.isdir(tree):
@@ -190,8 +192,29 @@ def pack(tree: str, out: str, version: str, forbidden: str = "") -> dict:
               encoding="utf-8", newline="\n") as f:
         json.dump(manifest, f, ensure_ascii=False, indent=2)
         f.write("\n")
+    # 2026-11-04（CI 契约修复）：release.yml 的 publish 步要求 `dist/PROVENANCE.json`
+    #   （并传 `--source-repo/--source-commit/--source-tag`），原实现既不产出该文件也不认这些
+    #   参数 ⟹ 发版作业在 pack 步直接 argparse 退出 2（v0.9.6.8–v0.9.6.10 连续三版）。
+    provenance = {
+        "schema": "zthl-provenance/1",
+        "version": version,
+        "source": {"repo": source_repo or None, "commit": source_commit or None,
+                   "tag": source_tag or None},
+        "subject": [
+            {"name": os.path.basename(zip_path), "sha256": zip_sha},
+            {"name": "SHA256SUMS", "sha256": sum_sha},
+        ],
+        "file_count": len(file_rows),
+        "created_at": manifest["created_at"],
+        "builder": {"tool": "scripts/pack_release.py", "deterministic": True},
+    }
+    with open(os.path.join(out, "PROVENANCE.json"), "w",
+              encoding="utf-8", newline="\n") as f:
+        json.dump(provenance, f, ensure_ascii=False, indent=2)
+        f.write("\n")
     return {"ok": True, "zip": zip_path, "zip_sha256": zip_sha,
-            "file_count": len(file_rows), "manifest": manifest}
+            "file_count": len(file_rows), "manifest": manifest,
+            "provenance": os.path.join(out, "PROVENANCE.json")}
 
 
 def main(argv=None) -> int:
@@ -200,9 +223,14 @@ def main(argv=None) -> int:
     ap.add_argument("--out", required=True)
     ap.add_argument("--version", required=True)
     ap.add_argument("--forbidden", default="")
+    ap.add_argument("--source-repo", default="")
+    ap.add_argument("--source-commit", default="")
+    ap.add_argument("--source-tag", default="")
     ap.add_argument("--json", action="store_true")
     ns = ap.parse_args(argv)
-    r = pack(ns.tree, ns.out, ns.version, ns.forbidden)
+    r = pack(ns.tree, ns.out, ns.version, ns.forbidden,
+             source_repo=ns.source_repo, source_commit=ns.source_commit,
+             source_tag=ns.source_tag)
     if ns.json:
         print(json.dumps({k: v for k, v in r.items() if k != "files"}, ensure_ascii=False, indent=2))
     if not r.get("ok"):
