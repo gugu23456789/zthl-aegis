@@ -256,7 +256,7 @@ GATEKEEPER_KEY_FILE=/run/secrets/ds_key          # 显式指定 key 文件（CI 
 | 变量 | 默认 | 用途 |
 |---|---|---|
 | `GATEKEEPER_API_KEY` / `DEEPSEEK_API_KEY` | 未设（可用 `set-key` 持久化到 `.keys/api_key`） | LLM 侧密钥；缺失 = 仅本地 monitor/agent 车道 |
-| `MIMO_API_KEY` | 未设 | 容灾提供方密钥（第二腿） |
+| `MIMO_API_KEY` | （空） | 容灾提供方密钥（第二腿）；未配置则**跳过该腿**，不影响 DeepSeek 主链 |
 | `DEEPSEEK_BASE_URL` | `https://api.deepseek.com` | DeepSeek 兼容端点 |
 | `GK_CRITIC_MODEL` | `deepseek-flash` | CLI 评审车道的 critic 模型 |
 | `GK_REASONING_EFFORT` | `max` | critic 的推理强度 |

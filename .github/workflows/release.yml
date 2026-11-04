@@ -128,7 +128,7 @@ jobs:
           VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
         run: |
           NOTES=(--generate-notes)
-          [ -f "RELEASE-NOTES-$VERSION.md" ] && NOTES=(--notes-file "RELEASE-NOTES-$VERSION.md")
+          [ -f "RELEASE-NOTES/RELEASE-NOTES-$VERSION.md" ] && NOTES=(--notes-file "RELEASE-NOTES/RELEASE-NOTES-$VERSION.md")
           # 7 个资产 = 5 核心 + 2 基准；基准步 continue-on-error，缺失则降级为 5 个（不静默造假）。
           ASSETS=(
             "dist/zthl-aegis-$VERSION.zip"

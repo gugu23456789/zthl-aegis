@@ -264,7 +264,7 @@ with `0600`.
 | Variable | Default | Purpose |
 |---|---|---|
 | `GATEKEEPER_API_KEY` / `DEEPSEEK_API_KEY` | unset (`set-key` persists to `.keys/api_key`) | LLM-side key; absent = local-only monitor/agent lanes |
-| `MIMO_API_KEY` | unset | Failover provider key (second leg) |
+| `MIMO_API_KEY` | (empty) | Failover provider key (second leg); the leg is skipped unless set |
 | `DEEPSEEK_BASE_URL` | `https://api.deepseek.com` | DeepSeek-compatible endpoint |
 | `GK_CRITIC_MODEL` | `deepseek-flash` | Critic model for CLI review lanes |
 | `GK_REASONING_EFFORT` | `max` | Reasoning effort for the critic |

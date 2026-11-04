@@ -38,7 +38,7 @@ d13fe45 feat: initial SPZ Gatekeeper R-Phase Pipeline v3.x
 | Provider | Key 名称 | 存储位置 | CLI 命令 |
 |:--|:--|:--|:--|
 | DeepSeek | `DEEPSEEK_API_KEY` | Windows User 环境变量 | `set-key deepseek sk-xxx` |
-| MiMo | `MIMO_API_KEY` | Windows User 环境变量 | `set-key mimo tp-xxx` |
+| MiMo | `MIMO_API_KEY` | Windows User 环境变量 | `set-key mimo sk-...`（`tp-*` 属已弃 Token Plan 版，勿用） |
 
 **轮换流程**: `bash gatekeeper-cli.sh set-key <provider> <new-key>` → 同时更新 WSL env + Windows User env (持久化)
 
