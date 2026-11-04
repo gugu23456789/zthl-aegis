@@ -74,10 +74,13 @@ def collect(skill_dir: str = "") -> dict:
     except (OSError, subprocess.SubprocessError):
         pass
     try:
-        sys.path.insert(0, str(sd / "scripts"))
-        import subagent_runner as SR
-        facts["roles"] = sorted(SR.ROLE_TOOLS)
-    except Exception:  # noqa: BLE001
+        # 静态解析：`ROLE_TOOLS` 的键。**不得** import subagent_runner —— 它依赖 openai，
+        #   CI 未安装时导入失败会让角色数变成 0，导致事实块被误判漂移（2026-11-04 实测）。
+        src = _read(sd / "scripts" / "subagent_runner.py")
+        m = re.search(r"(?ms)^ROLE_TOOLS:.*?=\s*\{(.*?)^\}", src)
+        facts["roles"] = (sorted(set(re.findall(r'(?m)^\s+"([A-Za-z0-9_-]+)"\s*:', m.group(1))))
+                          if m else [])
+    except OSError:
         pass
     try:
         facts["red_vectors"] = len(json.loads(
