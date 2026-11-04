@@ -120,3 +120,60 @@ jobs:
             "dist/release-manifest.json" \
             --title "ZTHL Aegis $VERSION" \
             "${NOTES[@]}"
+
+  sync-main:
+    name: sync main to latest tag
+    # 发布成功后让 main 与最新 tag 对齐（2026-11-04，用户裁定「main 需自动同步最新 tag」）：
+    #   - tag 比 main 新（tag 打在侧支/游离提交上）⟹ **快进** main 到 tag；
+    #   - main 比 tag 新（发布后又提交）⟹ 只告警写 job summary，不改写历史；
+    #   - 已分叉 ⟹ 失败，交人工处理。
+    # 注意：GITHUB_TOKEN 推 main 不会触发其他 workflow —— 这里快进到的提交正是 tag 提交，
+    #   其 CI 已在 tag 上跑过，无需再触发。
+    needs: release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: fast-forward main / report drift
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          git fetch --tags --force origin
+          TAG_SHA=$(git rev-parse "refs/tags/$TAG^{commit}")
+          MAIN_SHA=$(git rev-parse origin/main)
+          echo "tag=$TAG ($TAG_SHA)  main=$MAIN_SHA"
+
+          if [ "$TAG_SHA" = "$MAIN_SHA" ]; then
+            echo "main 已与 $TAG 同步"
+            echo "main 已与 \`$TAG\` 同步（\`$TAG_SHA\`）" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          if git merge-base --is-ancestor "$TAG_SHA" "$MAIN_SHA"; then
+            AHEAD=$(git rev-list --count "$TAG_SHA..$MAIN_SHA")
+            echo "::warning::main 领先 $TAG $AHEAD 个提交（尚未发版）"
+            {
+              echo "### main 领先 \`$TAG\` $AHEAD 个提交（尚未发版）"
+              echo '```'
+              git log --oneline "$TAG_SHA..$MAIN_SHA"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          if git merge-base --is-ancestor "$MAIN_SHA" "$TAG_SHA"; then
+            git push "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
+              "$TAG_SHA:refs/heads/main"
+            echo "main 已快进到 $TAG（$TAG_SHA）"
+            echo "main 已快进到 \`$TAG\`（\`$TAG_SHA\`）" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          echo "::error::main 与 $TAG 已分叉，需人工处理"
