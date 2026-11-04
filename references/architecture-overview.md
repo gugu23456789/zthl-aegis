@@ -94,6 +94,8 @@ spz-gatekeeper-r-sequence/
 │   ├── flywheel-implementation-plan.md
 │   ├── superagent-comparison.md
 │   ├── credit-economy.md
+│   ├── oss-hooks.md
+│   ├── oss-moa-phase-provenance.md
 │   ├── research-408.md
 │   ├── ecc-write-spec.md
 │   ├── ecc-analysis-findings.md

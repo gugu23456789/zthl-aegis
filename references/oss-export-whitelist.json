@@ -65,6 +65,7 @@
   "forbidden_exemptions": [
     {"pattern": "^references/(convergence-evaluator\\.md|moa-kappa-ledger\\.json|red-arm-templates\\.json|sequence-node-safety-net-template\\.md|xspi-defense\\.md)$", "terms": ["κ_tilt", "κ_cap", "tilt_total", "φ(κ"], "reason": "MoA 机制文档（owner 2026-11-01 裁定转公开，v0.9.4 已随包发布）：κ 记号在这几份文档里是机制正身，不是稿件指纹；只豁免这 4 个记号，其余反查词（稿件术语/预印本/路径）照常拦截"},
     {"pattern": "^scripts/(test_)?gk_moa_[a-z0-9_]+\\.py$", "terms": ["κ_tilt", "κ_cap", "tilt_total", "φ(κ"], "reason": "MoA 生产件与测试（owner 2026-11-01 裁定转公开）：κ_cap / κ_tilt / tilt_total / φ(κ 是代码标识符与断言字面量；同文件内其它反查词仍拦截"},
+    {"pattern": "^references/oss-moa-phase-provenance\\.md$", "terms": ["κ_tilt", "κ_cap", "tilt_total", "φ(κ"], "reason": "公开面 MoA provenance 正本（2026-11-04 由公开仓回灌私仓以统一 references 计数）：κ 记号是机制正身，且该文件已随公开包发布"},
     {"pattern": "^scripts/test_gk_finding_compound\\.py$", "terms": ["φ(κ"], "reason": "finding 复合去重测试里的 φ(κ 断言字面量（与 MoA 记号同形）；只豁免该词"},
     {"pattern": "^references/oss-export-whitelist\\.json$", "terms": ["κ_tilt", "κ_cap", "tilt_total", "φ(κ"], "reason": "本文件是豁免配置正本，必须写出被豁免的词面（条目与 reason 都会出现）；对自身豁免这 4 个记号以避免配置自锁"}
   ]

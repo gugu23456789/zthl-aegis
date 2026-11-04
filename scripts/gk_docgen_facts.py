@@ -34,6 +34,11 @@ def _read(p: Path) -> str:
     return p.read_text(encoding="utf-8", errors="replace")
 
 
+def _refs_top_md(sd: Path) -> int:
+    """顶层 `references/*.md` 计数 —— 与索引同源（`_git_ref_names`，git 优先/目录回退）。"""
+    return len(_git_ref_names(sd))
+
+
 def collect(skill_dir: str = "") -> dict:
     """从**活文件**采集事实（只读；失败项 None，不猜）。"""
     sd = Path(skill_dir) if skill_dir else _SKILL_DIR
@@ -64,15 +69,9 @@ def collect(skill_dir: str = "") -> dict:
     except OSError:
         pass
     try:
-        r = subprocess.run(["git", "-C", str(sd), "ls-files", "references/"],
-                           capture_output=True, text=True, timeout=30)
-        if r.returncode == 0:
-            facts["refs_tracked"] = len([
-                p for p in r.stdout.splitlines()
-                if p.startswith("references/") and "/" not in p.split("/", 1)[1]
-                and p.endswith(".md")])
-    except (OSError, subprocess.SubprocessError):
-        pass
+        facts["refs_tracked"] = _refs_top_md(sd)
+    except Exception:  # noqa: BLE001 — 计数失败不阻断，render 侧按 None 处理
+        facts["refs_tracked"] = None
     try:
         sys.path.insert(0, str(sd / "scripts"))
         import subagent_runner as SR
@@ -150,15 +149,23 @@ _CATEGORY = {
 
 
 def _git_ref_names(sd: Path) -> list:
+    """顶层 `references/*.md` 文件名 —— git 索引优先，无 git（导出树）按目录清单。
+
+    2026-11-04：导出树默认不是 git 仓库 ⟹ 原实现返回空 ⟹ `GK-REFS` 索引被清空
+    （v0.9.6.9 导出实测：README 索引少 59 行）。回退保证导出期即可生成完整索引。
+    """
     try:
         r = subprocess.run(["git", "-C", str(sd), "ls-files", "references/"],
                            capture_output=True, text=True, timeout=30)
-        if r.returncode != 0:
-            return []
-        return sorted(n for n in (p.split("/", 1)[1] for p in r.stdout.splitlines()
-                                  if p.startswith("references/"))
-                      if n.endswith(".md") and "/" not in n)
+        if r.returncode == 0:
+            return sorted(n for n in (p.split("/", 1)[1] for p in r.stdout.splitlines()
+                                      if p.startswith("references/"))
+                          if n.endswith(".md") and "/" not in n)
     except (OSError, subprocess.SubprocessError):
+        pass
+    try:
+        return sorted(p.name for p in (sd / "references").glob("*.md") if p.is_file())
+    except OSError:
         return []
 
 
