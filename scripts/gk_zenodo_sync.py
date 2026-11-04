@@ -149,31 +149,83 @@ def find_draft(rec, concept, token):
     return None
 
 
+def check_archive(path):
+    """**离线**校验 `references/archive.json`（CI / 发包预检用，不联网、不需 token）。
+
+    判据（任一不满足 ⟹ exit 2）：
+      · `schema == "gk-archive-meta/1"`；
+      · `concept_doi` 形如 `10.5281/zenodo.<digits>`；
+      · `zenodo_record` 为空或纯数字；
+      · `swhid` 为空或字符串。
+    """
+    import re as _re
+    try:
+        with open(path, encoding="utf-8") as f:
+            meta = json.load(f)
+    except (OSError, ValueError) as e:
+        print(json.dumps({"ok": False, "error": "archive.json 不可读：%s" % e},
+                         ensure_ascii=False))
+        return 2
+    errs = []
+    if meta.get("schema") != "gk-archive-meta/1":
+        errs.append("schema 必须为 gk-archive-meta/1")
+    doi = str(meta.get("concept_doi") or "")
+    if not _re.match(r"^10\.5281/zenodo\.\d+$", doi):
+        errs.append("concept_doi 必须形如 10.5281/zenodo.<digits>")
+    rec = str(meta.get("zenodo_record") or "")
+    if rec and not rec.isdigit():
+        errs.append("zenodo_record 必须为空或纯数字")
+    if not isinstance(meta.get("swhid", ""), str):
+        errs.append("swhid 必须为字符串")
+    if errs:
+        print(json.dumps({"ok": False, "errors": errs, "path": str(path)},
+                         ensure_ascii=False))
+        return 2
+    print(json.dumps({"ok": True, "path": str(path), "concept_doi": doi,
+                      "zenodo_record": rec}, ensure_ascii=False))
+    return 0
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="gk_zenodo_sync.py")
-    ap.add_argument("--concept", required=True, help="Concept recid（如 23934594）")
-    ap.add_argument("--version", required=True, help="发布版本号，如 v0.9.6.3")
+    ap.add_argument("--concept", help="Concept recid（如 23934594）")
+    ap.add_argument("--version", help="发布版本号，如 v0.9.6.3")
     ap.add_argument("--dist", default="dist", help="发布产物目录")
     ap.add_argument("--title", default="", help="标题（默认 `ZTHL Aegis <version>`）")
     ap.add_argument("--license-id", default="other-open",
                     help="Zenodo 许可证 id；Mulan PSL v2 不在内置列表 ⟹ other-open，正文里写明")
     ap.add_argument("--keep-license", action="store_true",
                     help="沿用草稿自带 license（默认覆盖，避免继承成 cc-by-4.0）")
+    ap.add_argument("--check-archive", metavar="PATH", default="",
+                    help="离线校验 archive.json（CI / 发包预检；不需要 token）")
     ap.add_argument("--dry-run", action="store_true")
     a = ap.parse_args(argv)
+    if a.check_archive:
+        return check_archive(a.check_archive)
+    if not a.concept or not a.version:
+        print(json.dumps({"ok": False, "error": "缺 --concept / --version"},
+                         ensure_ascii=False))
+        return 2
+    if not str(a.concept).isdigit():
+        print(json.dumps({"ok": False,
+                          "error": "--concept 必须是纯数字 recid（取自 archive.json 的 Concept DOI 尾段）",
+                          "concept": a.concept}, ensure_ascii=False))
+        return 2
 
     token = os.environ.get("ZENODO_TOKEN", "").strip()
     files = plan_files(a.dist, a.version)
     missing = [str(p) for _, p in files if not p.is_file()]
-    if missing:
-        print(json.dumps({"ok": False, "error": "附件缺失", "missing": missing},
-                         ensure_ascii=False))
-        return 2
     if not token:
         print(json.dumps({"ok": True, "status": "skipped",
                           "reason": "ZENODO_TOKEN 未配置（跳过存档，不影响发版）",
-                          "files": [n for n, _ in files]}, ensure_ascii=False))
+                          "files": [n for n, _ in files], "missing": missing},
+                         ensure_ascii=False))
         return 0
+    # 真跑必须附件齐全；`--dry-run` 用于 CI / 发包预检（此时 dist 可能尚未产出）
+    if missing and not a.dry_run:
+        print(json.dumps({"ok": False, "error": "附件缺失", "missing": missing},
+                         ensure_ascii=False))
+        return 2
 
     rec = latest_record_id(a.concept, token)
     if not rec:
@@ -182,8 +234,8 @@ def main(argv=None):
         return 1
     if a.dry_run:
         print(json.dumps({"ok": True, "status": "dry-run", "latest_record": rec,
-                          "version": a.version, "files": [n for n, _ in files]},
-                         ensure_ascii=False))
+                          "version": a.version, "files": [n for n, _ in files],
+                          "missing": missing}, ensure_ascii=False))
         return 0
 
     # 复用上次失败留下的草稿；没有才 newversion（否则 Zenodo 会因草稿占用拒绝建新版本）

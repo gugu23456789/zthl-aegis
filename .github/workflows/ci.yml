@@ -49,6 +49,10 @@ jobs:
         # 常驻功能（WAL/基准/MCP 工具面/来源链）必须写进自述文档；
         # 同时校验 GK-FACTS/GK-REFS/容量水位表等自动刷新文档未漂移。
         run: python scripts/gk_doc_features.py
+      - name: archive metadata (offline check)
+        # 发布面预检（阻断、**离线**）：`references/archive.json` 的 Concept DOI 必须合法。
+        # 联网型 dry-run 只在发包预检跑（见 release.yml），避免 CI 被 Zenodo 抖动拖红。
+        run: python scripts/gk_zenodo_sync.py --check-archive references/archive.json
 
   venv-gate:
     # 2026-11-02 owner 要求：CI 必须在内置虚拟环境里完整跑一遍。

@@ -315,6 +315,10 @@ dead-code-multilang:
 - **release gate**：生成合法夹具 → 审计 → 断言 `policy_mode=release`、verdict/final_verdict 非 block、budgets 有 `declared` 阈值
 - **challenge gate**：manifest 聚合（N 项混合）→ 断言 `policy_mode=challenge`、block 计数正确、分组摘要存在
 - **quality gate**：覆盖 / 空壳风险 / 预算接线 / 发布就绪 四合一
+- **外部存档预检**（2026-11-04）：包内 `references/archive.json` 的 Concept DOI 必须
+  ① 离线可校验（schema + `10.5281/zenodo.<digits>`），② 联网能解析到存档站最新记录。
+  离线校验进 CI（确定性、不依赖网络），联网 dry-run 进发包预检（**阻断**）。
+  存档步骤本身**禁 `continue-on-error`**：v0.9.6.5 曾因它把 `403 Bucket is locked` 藏成绿色作业。
 - 非审计类项目：仅保留原生构建 + CTest 作为发布门禁
 
 ## 6. 产物与失败诊断

@@ -185,6 +185,56 @@ def test_published_record_without_state_is_not_draft(tmp_path, capsys, monkeypat
     assert not any(m == "DELETE" for m, _ in calls)                 # 没去删已发布记录的文件
 
 
+def _archive(tmp_path, **kw):
+    data = {"schema": "gk-archive-meta/1", "concept_doi": "10.5281/zenodo.23934594",
+            "zenodo_record": "23934595", "swhid": ""}
+    data.update(kw)
+    p = tmp_path / "archive.json"
+    p.write_text(json.dumps(data), encoding="utf-8")
+    return p
+
+
+def test_check_archive_ok(tmp_path, capsys):
+    rc = Z.main(["--check-archive", str(_archive(tmp_path))])
+    out = json.loads(capsys.readouterr().out)
+    assert rc == 0 and out["ok"] is True
+    assert out["concept_doi"] == "10.5281/zenodo.23934594"
+
+
+def test_check_archive_bad_doi(tmp_path, capsys):
+    p = _archive(tmp_path, concept_doi="https://doi.org/10.5281/zenodo.23934594")
+    assert Z.main(["--check-archive", str(p)]) == 2
+
+
+def test_check_archive_bad_schema(tmp_path, capsys):
+    p = _archive(tmp_path, schema="other/1")
+    assert Z.main(["--check-archive", str(p)]) == 2
+
+
+def test_dry_run_allows_missing_dist(tmp_path, capsys, monkeypatch):
+    """CI / 发包预检时 dist 尚未产出 ⟹ dry-run 只报告缺失，不判失败。"""
+    monkeypatch.setenv("ZENODO_TOKEN", "t0ken")
+
+    def fake(method, url, token=None, body=None, headers=None, timeout=120):
+        return 200, {"hits": {"hits": [{"id": 23934595}]}}
+
+    monkeypatch.setattr(Z, "_req", fake)
+    rc, out = _run(capsys, "--concept", "23934594", "--version", "v0.9.6.6",
+                   "--dist", str(tmp_path / "nope"), "--dry-run")
+    assert rc == 0
+    assert out["status"] == "dry-run"
+    assert len(out["missing"]) == 5
+
+
+def test_bad_concept_exit_2(tmp_path, capsys, monkeypatch):
+    """Concept recid 必须是纯数字（防止把 DOI 前缀/URL 直接塞进来）。"""
+    monkeypatch.setenv("ZENODO_TOKEN", "t0ken")
+    rc, out = _run(capsys, "--concept", "10.5281/zenodo.23934594", "--version", "v0.9.6.6",
+                   "--dist", str(_dist(tmp_path, "v0.9.6.6")))
+    assert rc == 2
+    assert "纯数字" in out["error"]
+
+
 def test_newversion_failure_exit_1(tmp_path, capsys, monkeypatch):
     monkeypatch.setenv("ZENODO_TOKEN", "t0ken")
     calls = []

@@ -58,6 +58,17 @@ jobs:
       - name: resident feature coverage (self-description)
         # 发布面门禁：常驻功能必须在自述文档得到反映，自动刷新文档不得漂移。
         run: python scripts/gk_doc_features.py
+      - name: archive preflight (offline + Zenodo dry-run)
+        # 发包预检（**阻断**）：先离线校验 archive.json，再解析 Concept DOI 到 Zenodo 最新记录。
+        # 解析不到就不发包 —— 避免「发布后才发现归档失败、再补一版」。
+        # 只读：dry-run 不发写请求；pack 之前附件尚未产出，故允许 missing。
+        env:
+          VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+          ZENODO_TOKEN: ${{ secrets.ZTHL }}
+        run: |
+          python scripts/gk_zenodo_sync.py --check-archive references/archive.json
+          CONCEPT=$(python -c "import json;print(json.load(open('references/archive.json'))['concept_doi'].rsplit('.',1)[-1])")
+          python scripts/gk_zenodo_sync.py --concept "$CONCEPT" --version "$VERSION" --dist dist --dry-run
       - name: pack (deterministic zip + SHA256SUMS + PROVENANCE + manifest)
         env:
           VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
@@ -122,10 +133,11 @@ jobs:
             "${NOTES[@]}"
       - name: archive to Zenodo (new version)
         # 每个 Release 自动归档为 Zenodo 新版本（Concept DOI 自动指向最新）：
-        #   未配置 token 时脚本自行跳过（exit 0），存档失败不阻断发版。
+        #   未配置 token 时脚本自行跳过（exit 0，属**配置态**而非失败）。
+        #   ⚠ 不得 `continue-on-error`：`ci-pipeline-template.md` §7.1/§8 明确「吞失败 = 假绿 = 无防御」，
+        #     2026-11-04 v0.9.6.5 就因它把 `403 Bucket is locked` 藏成了绿色作业。
         # Concept recid 取自包内 `references/archive.json` 的 Concept DOI（单一事实源）。
         # 仓库 secret 名为 `ZTHL`（2026-11-04 建立），脚本仍读环境变量 ZENODO_TOKEN。
-        continue-on-error: true
         env:
           ZENODO_TOKEN: ${{ secrets.ZTHL }}
           VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
