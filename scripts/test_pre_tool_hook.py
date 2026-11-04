@@ -3501,3 +3501,49 @@ class TestWorktreeRouteGate:
     def test_inline_escape(self):
         assert pre_tool_hook._wt_route_gate("GK_ALLOW_WT_ADD=1 git worktree add /x HEAD") is None
 
+
+
+class TestR020NonInteractiveGitGate:
+    """Gate R0.20（2026-11-04）：`git push` 到无凭据 https remote 必须被拦（禁弹登录框）。"""
+
+    def test_https_without_helper_blocked(self, monkeypatch):
+        monkeypatch.delenv("GIT_TERMINAL_PROMPT", raising=False)
+        r = pre_tool_hook._interactive_git_reason(
+            "git push origin master", "https://atomgit.com/a/b.git", "")
+        assert r.startswith("BLOCK:") and "credential.helper" in r
+
+    def test_ssh_remote_allowed(self):
+        assert pre_tool_hook._interactive_git_reason(
+            "git push", "git@github.com:a/b.git", "") == ""
+
+    def test_helper_configured_allowed(self):
+        assert pre_tool_hook._interactive_git_reason(
+            "git push", "https://x/y.git", "manager-core") == ""
+
+    def test_explicit_noninteractive_allowed(self):
+        assert pre_tool_hook._interactive_git_reason(
+            "GIT_TERMINAL_PROMPT=0 git push", "https://x/y.git", "") == ""
+
+    def test_non_push_command_allowed(self):
+        assert pre_tool_hook._interactive_git_reason(
+            "git status", "https://x/y.git", "") == ""
+        assert pre_tool_hook._interactive_git_reason(
+            "git log --grep push", "https://x/y.git", "") == ""
+
+    def test_prompt_prone_host_blocked_even_with_helper(self, monkeypatch):
+        """实测教训：helper 配的是 GitHub，atomgit 无凭据仍会弹登录 ⟹ 该 host 默认拦。"""
+        monkeypatch.delenv("GIT_TERMINAL_PROMPT", raising=False)
+        r = pre_tool_hook._interactive_git_reason(
+            "git push", "https://atomgit.com/a/b.git", "manager-core")
+        assert r.startswith("BLOCK:")
+
+    def test_guard_short_circuits_without_spawning(self, monkeypatch):
+        called = {"n": 0}
+
+        def _boom(*a, **k):
+            called["n"] += 1
+            return ("", "")
+
+        monkeypatch.setattr(pre_tool_hook, "_git_remote_and_helper", _boom)
+        assert pre_tool_hook._git_push_guard("echo hi") == ""
+        assert called["n"] == 0

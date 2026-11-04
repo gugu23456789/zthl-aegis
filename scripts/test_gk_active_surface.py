@@ -314,21 +314,37 @@ def _sandbox_guard_state(tmp_path, worktree, extras, *, stage="ECO-EDIT", gate_d
     return st
 
 
+def _wsl(p) -> str:
+    """Windows 绝对路径 → WSL `/mnt/<drive>/...`（分类学 #13）。
+
+    只用于**交给 bash 的脚本路径**（bash 自己打不开 `C:\\...`）；参数与 `STATE_FILE`
+    保持原形态 —— 判定层已是**双形态比较**（`gk_route_center._path_forms`，方案 C）。
+    """
+    s = str(p).replace("\\", "/")
+    if len(s) > 1 and s[1] == ":":
+        s = "/mnt/" + s[0].lower() + s[2:]
+    return s
+
+
 def _gate_env(state_file):
-    """显式清空 `GK_SESSION_ID` / `GK_BUDGET_OVERRIDE` ⟹ 预算走**全局**口径且逃逸舱不介入。"""
-    return {**os.environ, "STATE_FILE": str(state_file),
+    """显式清空 `GK_SESSION_ID` / `GK_BUDGET_OVERRIDE` ⟹ 预算走**全局**口径且逃逸舱不介入。
+
+    `STATE_FILE` 必须是 **WSL 形态**：bash 侧要 `[ -f ]` 判存在，`C:\\...` 在 WSL 里不存在
+    ⟹ 会被当成"显式但缺失"再回落到真实 state（假红）。python 侧由 `_gk_py_path` 转回盘符形态。
+    """
+    return {**os.environ, "STATE_FILE": _wsl(state_file),
             "GK_SESSION_ID": "", "GK_BUDGET_OVERRIDE": "0"}
 
 
 def _run_guard_edit(state_file, path):
-    p = subprocess.run(["bash", str(CLI), "guard-edit", str(path)],
+    p = subprocess.run(["bash", _wsl(CLI), "guard-edit", str(path)],
                        capture_output=True, text=True, timeout=180,
                        env=_gate_env(state_file))
     return p.returncode, _last_json(p.stdout), (p.stdout or "") + (p.stderr or "")
 
 
 def _run_pre_tool_check(state_file, path, cwd):
-    p = subprocess.run(["bash", str(CLI), "pre-tool-check", "edit", str(path)],
+    p = subprocess.run(["bash", _wsl(CLI), "pre-tool-check", "edit", str(path)],
                        capture_output=True, text=True, timeout=180,
                        env=_gate_env(state_file), cwd=str(cwd))
     return p.returncode, (p.stdout or "")

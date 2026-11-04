@@ -3654,6 +3654,97 @@ _N9_BG_AMP_PAT = r'(?:^|[^>&])&(?:[^&]|$)'
 _N9_WAIT_PAT = r'\bwait\b'
 
 
+# 已知"本机 helper 未必覆盖"的 host（2026-11-04 实测：atomgit 无凭据 ⟹ 弹登录框）。
+_PROMPT_PRONE_HOSTS = ("atomgit.com",)
+
+
+def _git_push_guard(command: str, cwd: str = "") -> str:
+    """返回 BLOCK 文案；空串 = 放行。**纯判定在 `_interactive_git_reason`（可单测）**。
+
+    只拦"会弹登录框"的一种：`git push` + `https://` remote + 无 `credential.helper`
+    + 命令未带 `GIT_TERMINAL_PROMPT=0`。SSH remote、已配 helper、显式非交互一律放行。
+    `GK_ALLOW_INTERACTIVE_GIT=1` 可整条豁免（人工确认后临时用）。
+    """
+    if os.environ.get("GK_ALLOW_INTERACTIVE_GIT") == "1":
+        return ""
+    cmd = command or ""
+    # 快路径：非 push / 已显式非交互 ⟹ 不 spawn git（hook 在每个工具调用都会跑）。
+    if not _is_git_push(cmd):
+        return ""
+    if "GIT_TERMINAL_PROMPT=0" in cmd:
+        return ""
+    url, helper = _git_remote_and_helper(cmd, cwd)
+    return _interactive_git_reason(cmd, url, helper)
+
+
+def _is_git_push(cmd: str) -> bool:
+    """判定命令里是否真有 `git … push` 子命令（**不看参数里的 push 字样**）。
+
+    `git log --grep push` / `echo push` 不得命中；`git -C <p> push origin x` 必须命中。
+    """
+    for part in re.split(r"[;&|\n]", cmd or ""):
+        toks = part.split()
+        for i, t in enumerate(toks):
+            if t.strip("\"'") != "git":
+                continue
+            j = i + 1
+            while j < len(toks):
+                tj = toks[j]
+                if tj in ("-C", "-c", "--git-dir", "--work-tree", "--namespace"):
+                    j += 2
+                    continue
+                if tj.startswith("-"):
+                    j += 1
+                    continue
+                return tj == "push"
+    return False
+
+
+def _interactive_git_reason(command: str, url: str, helper: str) -> str:
+    """纯函数：给定命令/远端 URL/credential.helper，判断是否必然弹登录。"""
+    cmd = command or ""
+    if not _is_git_push(cmd):
+        return ""
+    # 只信**命令内**显式声明（`GIT_TERMINAL_PROMPT=0 git push`）。
+    # ⚠ 不信进程 env：宿主本身可能已设 `GIT_TERMINAL_PROMPT=0`/`GCM_INTERACTIVE=Never`，
+    #   但实际弹窗来自宿主 Git 集成（2026-11-04 实测），env 值不构成"不会弹"的证据。
+    if "GIT_TERMINAL_PROMPT=0" in cmd:
+        return ""
+    if not url.startswith("https://"):
+        return ""
+    host = url.split("://", 1)[1].split("/", 1)[0].split("@")[-1].lower()
+    # 2026-11-04 实测教训：**有 credential.helper 也不代表该 host 有可用凭据**——
+    #   本机 helper 配的是 GitHub token，atomgit 无凭据时 git 仍会弹登录框
+    #   （被宿主接管成「Trae git 登录」）。故对已知"凭据未必覆盖"的 host 一律默认拦。
+    if (helper or "").strip() and not any(h in host for h in _PROMPT_PRONE_HOSTS):
+        return ""
+    return ("BLOCK: git push 将触发交互式登录（remote=%s，credential.helper=%s），"
+            "已拦截以防宿主弹登录框。修法：为该 host 配置 token/credential helper；"
+            "或显式 `GIT_TERMINAL_PROMPT=0` 让它在无凭据时立刻失败。" % (url, helper or "none"))
+
+
+def _git_remote_and_helper(command: str, cwd: str = "") -> tuple:
+    """读 `origin` URL 与 `credential.helper`（只读；任何异常 → 空串，不误拦）。"""
+    repo = cwd or os.getcwd()
+    m = re.search(r"git\s+-C\s+(?:\"([^\"]+)\"|'([^']+)'|(\S+))", command or "")
+    if m:
+        repo = next(g for g in m.groups() if g)
+    env = dict(os.environ, GIT_TERMINAL_PROMPT="0", GIT_ASKPASS="echo")
+    try:
+        url = subprocess.run(["git", "-C", repo, "remote", "get-url", "origin"],
+                             capture_output=True, text=True, timeout=4,
+                             env=env).stdout.strip()
+    except Exception:  # noqa: BLE001 — 判定失败不误拦
+        url = ""
+    try:
+        helper = subprocess.run(["git", "config", "--get", "credential.helper"],
+                                capture_output=True, text=True, timeout=4,
+                                env=env, cwd=repo).stdout.strip()
+    except Exception:  # noqa: BLE001
+        helper = ""
+    return url, helper
+
+
 def _n9_parallel_dispatch(command: str):
     """N9 机检（Gate R0.10 检测体）：派发并行闸。命中 → (reason, hint)；无命中 → None。"""
     import re
@@ -3939,6 +4030,13 @@ def main():
     #   默认只许「本侧 + 脱敏」；`--reveal` / `--cross-side` 需 GK_WATCH_APPROVED=1。
     #   allow/deny 都落访客记录（与 state 同目录的 watch-log sidecar）。
     if tool_name == "RunCommand":
+        # ── Gate R0.20【非交互凭据闸】(2026-11-04)：禁止触发交互式 git 登录 ──────────
+        #   病象：`git push` 到无凭据的 https remote（如 atomgit）会弹登录框，
+        #   被宿主 IDE 接管成"Trae git 登录"（用户明确要求无限拦截该机制）。
+        #   判据：https remote + 无 credential.helper + 命令未声明 GIT_TERMINAL_PROMPT=0。
+        _git_blk = _git_push_guard(tool_input.get("command", ""), cwd)
+        if _git_blk:
+            block(_git_blk)
         _wg = _watch_gate(tool_input.get("command", ""))
         if _wg.get("matched"):
             _record_watch_visit(_wg, cwd)

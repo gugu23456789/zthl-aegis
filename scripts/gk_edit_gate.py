@@ -47,6 +47,25 @@ _RE_PROTECTED_PATH = re.compile(r"build/|\.git/|node_modules/", re.IGNORECASE)
 
 _CLOSED_STAGES = ("IDLE", "DONE")
 
+
+def _host_form(p) -> str:
+    """把任意形态转成**当前进程可做文件系统操作**的形态（方案 C 的 IO 半边）。
+
+    用户裁定「AB 都不行，锁在任一平台会阻断跨平台调用」⟹ 比较用双形态（`_path_forms`），
+    但 `realpath/isfile` 这类 **IO** 必须用本机形态，否则：
+      · Windows python 收到 `/mnt/c/x` → `C:\\mnt\\c\\x`（不存在）；
+      · POSIX python 收到 `C:\\x` → 相对路径（不存在）。
+    只做"读取本机形态"，不改变任何判定口径。
+    """
+    s = str(p or "")
+    if os.name == "nt":
+        m = re.match(r"^/mnt/([A-Za-z])/(.*)$", s.replace("\\", "/"))
+        return ("%s:/%s" % (m.group(1).upper(), m.group(2))) if m else s
+    s = s.replace("\\", "/")
+    if len(s) > 1 and s[1] == ":":
+        return "/mnt/%s/%s" % (s[0].lower(), s[2:])
+    return s
+
 # 2026-10-09：**整体写**工具（归一后小写）。打在**已存在**文件上 = 整文件覆盖 ⟹ 见 OVERWRITE_EXISTING_FILE。
 # 带锚工具（edit/searchreplace）与 deletefile **不在此列**（前二者本就局部；删除另有语义）。
 _WHOLE_FILE_WRITE_TOOLS = ("write", "createfile")
@@ -158,9 +177,11 @@ def evaluate(state_path: str, path: str, session_id: str = "",
 
     if not str(path or "").strip():
         return _blk("REALPATH_UNRESOLVED", "empty --path")
-    real = os.path.realpath(path)
-    if path != real and path != os.path.realpath(path):
-        # 与 `pre_tool_check` 同形：`readlink -f` 与 `realpath` 双双 != 原串 ⟹ 经软链/挂载进入。
+    # 2026-11-04（方案 C）：IO 用本机形态；比较仍走 `in_active_surface` 的双形态。
+    _hp = _host_form(path)
+    real = os.path.realpath(_hp)
+    if os.path.normcase(real) != os.path.normcase(_hp):
+        # 与 `pre_tool_check` 同形：realpath 解析出不同路径 ⟹ 经软链/挂载进入。
         return _blk("JUNCTION_REDIRECT", "%s -> %s" % (path, real))
     checks.append({"id": "JUNCTION_REDIRECT", "verdict": "allow", "detail": real})
 

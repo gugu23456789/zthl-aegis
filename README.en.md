@@ -34,6 +34,34 @@ dependencies and reference implementations are used under their respective licen
 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) and [`references/`](references/). This repository is
 not a commercial commitment, legal advice, or authorization to operate any third-party system.
 
+### Intended use and boundaries (responsible-use statement)
+
+This repository is a **governance and audit tool for software engineering processes**. Its intended use
+is limited to stage gating, audit trails, and quality review for software you own or are authorized to
+work on.
+
+**Prohibited**: using this project, or any part of it, for unauthorized intrusion, bypassing access
+controls, delivering malicious payloads, establishing persistence, evading security auditing, or any
+unlawful purpose. The built-in interception/detection features exist to **defend this project's own
+engineering chain**; they do not provide offensive capability and grant no authorization over any system.
+
+**Liability boundaries**:
+
+- Provided without warranty of any kind (see the Mulan PSL v2 disclaimer); you are responsible for
+  deployment, configuration, and consequences of use.
+- Not legal, compliance, or security-certification advice; consult a qualified third party.
+- Default settings are **not** a hardening baseline; production use requires your own threat modeling,
+  least privilege, and key management.
+- This project does not proactively probe or scan third-party systems, and must not be repurposed to do so.
+
+**Responsible disclosure**: please do **not** open a public issue for security problems. Follow
+[`SECURITY.md`](SECURITY.md) and contact the maintainer privately; we will confirm, fix, and coordinate
+disclosure. Exploit requests and automated attack payloads are out of scope.
+
+**AI capability boundaries**: review/triage features are **advisory only** — they never change a verdict.
+"Pre-submission simulated review" is a self-check before submission; it produces no referee report and
+does not replace any venue's review process.
+
 ### What it does
 
 - **Stage gates** — work moves through explicit stages (`discover` → `guard-edit` → `advance`),
@@ -120,7 +148,7 @@ Data and contract templates: `references/red-arm-templates.json` (red-team arms)
 | CI / build | Red CI, workflow changes, WASM build failures | `scripts/ci_smoke.sh`, `ci-diagnose`, `pre-check wasm` |
 | Keys / signatures | Leakage, replacement, expiry, tampered trust anchors | Key-integrity checks + Ed25519 verification |
 | State integrity | Tampering, concurrent read-modify-write, partial writes | `gk_json_utils.state_lock` + checksum + single write entry |
-| Budget / economy | Edit quota, raises, entropy, appeals | `gk_budget_ledger` + `gk_gate_entropy` + `gk_gate_appeal` |
+| Budget / economy | Edit quota, raises, entropy, appeals, credit score | `gk_budget_ledger` + `gk_credit_ledger` ([spec](references/credit-economy.md)) + `gk_gate_entropy` + `gk_gate_appeal` |
 | Audit / red team | Governance defects | `audit --red` + `RED-*` stations |
 | Convergence early stop (A8/RCA) | Idle iteration (scores flat / `μ` not falling) | `gk_convergence_evaluator.py` + `pre-check convergence` |
 

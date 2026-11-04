@@ -27,6 +27,28 @@
 并在 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) 与 [`references/`](references/) 中标注。
 本仓不构成商业承诺、法律意见，也不构成对任何第三方系统的授权。
 
+### 用途与使用边界（负责任使用声明）
+
+本仓是**软件开发过程的治理与审计工具**，设计用途仅限：授权范围内的自研/受托软件工程的流程门禁、
+审计留痕与质量复核。
+
+**明确禁止**：将本项目或其任何组件用于未经授权的系统入侵、绕过他人访问控制、恶意载荷投递、
+隐藏持久化、规避安全审计，或任何违法用途。项目内置的拦截/检测能力用于**防御自身工程链路**，
+不提供攻击能力，也不构成对任何系统的授权。
+
+**责任边界**：
+
+- 不做任何形式担保（见 Mulan PSL v2 免责条款）；部署、配置与使用后果由使用者自行负责。
+- 不构成法律、合规或安全认证意见；合规要求请咨询具备资质的第三方。
+- 默认配置**不是**安全加固基线；生产部署须自行完成威胁建模、最小权限与密钥管理。
+- 本项目不针对第三方系统做主动探测/扫描，也不得被改造用于此类用途。
+
+**负责任披露**：发现安全问题请**不要**公开提交 issue，先按 [`SECURITY.md`](SECURITY.md) 私下联系维护者；
+我们会确认、修复并在修复后协调披露。恶意利用报告与自动化攻击载荷不在受理范围。
+
+**AI 能力边界**：评审/分诊等辅助能力**只给建议、不改判定**（advisory only）；「论文写作投稿前置
+模拟评审」是**投稿前自检**，不产出审稿意见、不替代任何会议的评审流程。
+
 ### 它做什么
 
 - **阶段门**：工作沿显式阶段推进（`discover` → `guard-edit` → `advance`），越阶段编辑是**拒绝**，
@@ -127,7 +149,7 @@ SPZ 工具链中的 `spz2glb`（3D 资产转换与 glTF/GLB 管线，含浏览�
 | CI / 构建 | CI 红、workflow 变更、WASM 构建失败 | `scripts/ci_smoke.sh`、`ci-diagnose`、`pre-check wasm` |
 | 密钥 / 签名 | 泄露、替换、过期、签发面篡改 | 密钥完整性校验 + Ed25519 验签 |
 | 状态完整性 | 篡改、并发读-改-写、半写 | `gk_json_utils.state_lock` + checksum + 单一写入口 |
-| 经济 / 额度 | 编辑配额、提额、熵、申诉 | `gk_budget_ledger` + `gk_gate_entropy` + `gk_gate_appeal` |
+| 经济 / 额度 | 编辑配额、提额、熵、申诉、信用分 | `gk_budget_ledger` + `gk_credit_ledger`（[正本](references/credit-economy.md)）+ `gk_gate_entropy` + `gk_gate_appeal` |
 | 审计 / 红队 | 治理面缺陷 | `audit --red` + `RED-*` 站 |
 | 收敛早停（A8/RCA） | 迭代审查空转（分数不涨 / `μ` 不降） | `gk_convergence_evaluator.py` + `pre-check convergence` |
 
@@ -370,3 +392,26 @@ python scripts/gk_doc_release.py --strict
   `temperature`/`seed` 由后端或常量决定，判据文案与校准门槛（`MIN_N` / `ρ` / 一致率）是代码常量。
   后续收成「模型无关插槽」：统一配置（端点、模型 id、参数、prompt 版本、阈值）+ provider 适配器，
   并把每次裁决的模型版本/参数写进留痕。
+
+### 常驻功能与自述覆盖（resident features）
+
+发布门 `gk_doc_features.py` 要求下列常驻能力在自述文档中可检索；新增同类能力须同时登记
+`references/resident-features.json`。
+
+| 机制 | 入口 / 文件 | 说明 |
+|:--|:--|:--|
+| 状态 WAL | `gk_state_wal` / `checkpoint` | 长寿命 state 的预写日志与检查点；崩溃后按片恢复 |
+| 基准 | `gk_bench_state` · `bench-nightly` · `references/bench-baseline.json` | 状态基准与夜间回归基线 |
+| 供应链清单 | `PROVENANCE.json` · `SBOM.cdx.json`（CycloneDX） | 发布包附带来源与依赖清单 |
+| MCP 加载器 | `gk_mcp_loader` | MCP 工具面加载与闸门接入 |
+| 浏览器工具面 | `R0.18` | 浏览器类工具的可执行面校验 |
+| 外部存档 | `references/archive.json`（Concept DOI） | 发布物外部归档与 DOI 解析 |
+| 余额审计 | `balance --audit` / `balance --record` / `balance --usage` | 定期或随机采样；判 `DROP_FAST`/`INSUFFICIENT_BALANCE`/`CACHE_COLLAPSE`（复用 `gk_cache_observe`） |
+| 安装钩子同步 | `gk_hook_manage.py sync` | 判漂移→改→回读校验；无漂移零写入；`safe` 面覆盖原生写与 MCP 写形态 |
+| 写入落盘校验 | `gk_edit_verify` | sha256 / 锚点 / 行号回读比对，防「改了但没落盘」 |
+| 恶意代码模式 | `gk_threat_patterns` + Gate R0.19 | 单一模式源；EDIT 载荷范围内外同判 |
+| 信用分账本 | `gk_credit_ledger` / `credit-ledger.jsonl` | 旁挂 append-only + 封印；非对称定价（`success +5` / `fail −15` / `overspend −10` / `exempt −1`）；跨会话 `score = Σdelta`；**只读观测**，无门禁消费（见 [credit-economy.md](references/credit-economy.md)） |
+| SARIF 输出 | `gk_sarif.py` | 静态结果归一为 SARIF 2.1.0，`--gate` 让 error 级真实失败 |
+| 相位探针（私仓） | `phase-probe` | 公开包返回 `PLUGIN_NOT_SHIPPED`；统计与臂设计不随公开包 |
+
+| 外部归档同步 | `gk_zenodo_sync` | 存档预检 + Concept DOI 解析，解析不到不发包 |

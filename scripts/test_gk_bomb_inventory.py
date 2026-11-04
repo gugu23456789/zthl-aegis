@@ -85,3 +85,28 @@ def test_max_payload_ratchet(tmp_path):
 
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-q"]))
+
+
+def test_public_baseline_strips_absolute_paths(tmp_path):
+    """2026-11-04 工程债：`--public-baseline` 冻结时把 file 脱敏为仓内相对形态。
+
+    `--assert-baseline` 只用 (func,cat,sha)，file 仅为展示；但 `pack_release.py` 的
+    身份扫描会把绝对路径判为残留 ⟹ 公开面基线必须零绝对路径，且仍能 NO_NEW。
+    """
+    cli = tmp_path / "cli.sh"
+    cli.write_text(BASE_CLI, encoding="utf-8")
+    out = tmp_path / "public-base.json"
+    rc, d = _run(None, "--cli", str(cli), "--public-baseline", str(out), "--note", "public")
+    assert rc == 0 and d["ok"] is True
+
+    snap = json.loads(out.read_text(encoding="utf-8"))
+    files = [it.get("file", "") for it in snap["items"]]
+    assert files, "基线为空，测试无意义"
+    for f in files:
+        assert not Path(f).is_absolute(), f
+        assert ":" not in f[:3], f          # 不带 Windows 盘符
+        assert not f.startswith("/mnt/"), f
+        assert ".." not in Path(f).parts, f
+
+    rc, d = _run(None, "--cli", str(cli), "--assert-baseline", str(out))
+    assert rc == 0 and d["verdict"] == "NO_NEW"

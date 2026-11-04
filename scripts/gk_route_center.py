@@ -1379,6 +1379,43 @@ def _session_token() -> str:
     return tok if _DOMAIN_TOKEN_RE.match(tok) else ""
 
 
+def _path_forms(p) -> frozenset:
+    """路径的**等价形态集合**（方案 C：双形态并存，不锁单一平台）。
+
+    用户裁定（2026-11-04）：「AB 都不行，锁在任一平台会阻断跨平台调用」。
+    A（统一转 Windows 形态）与 B（统一转 WSL 形态）都会让另一半平台的调用方失效：
+      · 转 `C:/…` ⟹ WSL 里的 `Path("C:/…")` 是相对路径，文件系统操作全空；
+      · 转 `/mnt/c/…` ⟹ Windows python 读到 `C:\\mnt\\c\\…`，同样是错的。
+    正解 = **比较时接受两种形态**，存储与 IO 保持调用方原样：
+      `C:\\x` ↔ `/mnt/c/x` 视为同一路径；`\\` 与 `/` 等价；大小写不敏感。
+    """
+    s = str(p or "").replace("\\", "/").rstrip("/")
+    if not s:
+        return frozenset()
+    forms = {s.lower()}
+    m = re.match(r"^([A-Za-z]):/(.*)$", s)
+    if m:
+        forms.add(("/mnt/%s/%s" % (m.group(1).lower(), m.group(2))).lower())
+    m = re.match(r"^/mnt/([A-Za-z])/(.*)$", s)
+    if m:
+        forms.add(("%s:/%s" % (m.group(1).lower(), m.group(2))).lower())
+    return frozenset(forms)
+
+
+def _keep_form(p) -> str:
+    """保留调用方形态的轻归一（只把 `\\` 换 `/` 并去尾斜杠，**不做盘符↔/mnt 转换**）。"""
+    return str(p or "").replace("\\", "/").rstrip("/")
+
+
+def _under_any(child, root) -> bool:
+    """`child` 是否在 `root` 之下（目录边界），任一形态组合成立即真（方案 C）。"""
+    for c in _path_forms(child):
+        for r in _path_forms(root):
+            if c == r or c.startswith(r + "/"):
+                return True
+    return False
+
+
 def _domain_roots(state, token) -> list:
     """域桶 `gate_data.wt_domain[<token>][]`（§17-2；fail-soft：非 dict / 非 list / 元素非 str / 空串 ⟹ 忽略）。"""
     if not token or not isinstance(state, dict):
@@ -1404,20 +1441,27 @@ def active_roots(state) -> list:
     """
     if not isinstance(state, dict):
         return []
-    out = []
-    w = _as_norm(state.get("worktree", ""))
-    if w:
-        out.append(w)
+    out, seen = [], set()
+
+    def _add(raw):
+        n = _keep_form(raw)
+        if not n:
+            return
+        key = _path_forms(n)
+        if key in seen:
+            return
+        seen.add(key)
+        out.append(n)
+
+    _add(state.get("worktree", ""))
     extra = state.get("worktrees_extra")
     if isinstance(extra, list):
         for e in extra:
-            n = _as_norm(e) if isinstance(e, str) else ""
-            if n and n not in out:
-                out.append(n)
+            if isinstance(e, str):
+                _add(e)
     # §17-2 域桶并入：token 只取 env `GK_SESSION_ID`（方案 a）；缺失/非法 ⟹ 空 ⟹ 零回归。
     for n in _domain_roots(state, _session_token()):
-        if n not in out:
-            out.append(n)
+        _add(n)
     return out
 
 
@@ -1428,11 +1472,13 @@ def in_active_surface(path, state) -> bool:
     裸 `startswith(wt)` 会被**同前缀兄弟目录**绕过（`ECC-73ACEA635A78`：`wt=/a/b` 放行 `/a/bc/x`）
     ⟹ 此处加 `/` 边界。roots 空 ⟹ `False`（hook 侧 fail-closed；CLI 侧另有 legacy-skip，见下）。
     """
-    p = _as_norm(path)
+    p = _keep_form(path)
     if not p:
         return False
     for r in active_roots(state):
-        if p == r or p.startswith(r + "/"):
+        # 方案 C（2026-11-04）：双形态比较 —— `C:\x` 与 `/mnt/c/x` 等价，
+        # 不再把任一侧强制转成另一平台的形态（否则跨平台调用恒不命中）。
+        if _under_any(p, r):
             return True
     return False
 

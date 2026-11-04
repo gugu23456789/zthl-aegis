@@ -17,13 +17,13 @@ updated: 2026-11-02
 <!-- GK-FACTS:START（由 scripts/gk_docgen_facts.py 生成，勿手改） -->
 | 事实 | 值 | 来源（可复算） |
 |:--|:--|:--|
-| CLI 行数 | 12616 | `wc -l gatekeeper-cli.sh` |
+| CLI 行数 | 12779 | `wc -l gatekeeper-cli.sh` |
 | CLI 命令数 | 52 | `^_CMD_REG[` 计数 |
 | 红队站点 | 16 | `gk_chain.py` 的 `Step("RED-*")` |
 | 自检检查函数 | 37 | `gk_self_check.py` 的 `def check_*` |
-| references 入库 md | 47 | `git ls-files references/*.md`（顶层） |
+| references 入库 md | 28 | `git ls-files references/*.md`（顶层） |
 | 子代理角色 | 8 | `subagent_runner.ROLE_TOOLS` |
-| hook R0 门禁 | Gate R0.1–R0.17（17 个） | `pre_tool_hook.py` 的 `Gate R0.N` |
+| hook R0 门禁 | Gate R0.1–R0.20（19 个） | `pre_tool_hook.py` 的 `Gate R0.N` |
 | 红队向量 | 156 | `references/red-vectors.json` |
 | 情报源 | 24 | `references/red-intel-sources.json` |
 | 解释器解析 | `scripts/py_resolve.sh`（发现式，无绝对路径） | `scripts/py_resolve.sh` |
@@ -93,6 +93,7 @@ spz-gatekeeper-r-sequence/
 │   ├── e1e4-evaluator-matrix.md
 │   ├── flywheel-implementation-plan.md
 │   ├── superagent-comparison.md
+│   ├── credit-economy.md
 │   ├── research-408.md
 │   ├── ecc-write-spec.md
 │   ├── ecc-analysis-findings.md
@@ -130,6 +131,21 @@ Agent 阶段推进 ──► gatekeeper-cli.sh advance ──► 硬证据（CLI
 红队/审计     ──► _red_attacks.py（16 站）──► ECC finding 台账
                  └─ 向量登记 = references/red-vectors.json（代码只做执行器）
 ```
+
+**经济回路（额度银行 ↔ 审计署 ↔ finding）**：有向图，且**含一个设计内的环**——审计署把
+`success/fail/overspend` 回填进信用账本，额度银行再按 score 做额度动作；finding → 账本那条
+反向边被**刻意切断**（点线 = 禁写 `outcome.ref`，防一债一票被双边计价）。
+
+```mermaid
+flowchart LR
+  B["额度银行<br/>budget / credit 账本"] -- "提额 / 预算留痕" --> A["审计署<br/>outcome / 对账"]
+  A -- "success +5 · fail −15 · overspend −10" --> B
+  A -- "缺陷登记" --> F["ECC finding 台账"]
+  F -. "禁写 outcome.ref（一债一票）" .-> B
+```
+
+完整三环（三角内循环、提额全生命周期、finding 多来源闭环）见 `references/credit-economy.md` §8；
+`score` 默认**只读观测**（N 门默认 advisory，`GK_CREDIT_FLOOR_ENFORCE=1` 才阻断）。
 
 **状态单源**：`.gatekeeper.state`（2.6 MB 墙 + 50/80/90/95% 水位，95% 拒写）。
 形态与分工（base / domain / legacy_plan / worktree_local / artifact）、卫星片容量（10 轮 × 6 臂）、
@@ -204,3 +220,9 @@ TTL/GC、回收判据全在 `references/state-storage.md`，本文不复制。
 | `scripts/` 逐文件长注释 | 改为职责分组；逐文件细节以目录与 `cli-protocol.md` 为准 |
 
 > 维护纪律：本文件任何数字都必须可机检复算；改代码导致数字变化时**同批**更新，否则按过时文档处理。
+
+## 常驻子系统索引（自动覆盖检查用）
+
+- **状态 WAL**：`gk_state_wal` 提供预写日志与 checkpoint，读取侧按片并集重建。
+- **基准**：`gk_bench_*`（状态基准、发布耗时基准）与夜间回归基线。
+- **MCP 工具面**：`gk_mcp_loader` 负责加载与闸门接入。

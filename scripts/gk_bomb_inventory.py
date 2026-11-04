@@ -26,6 +26,7 @@ NEW 的判定 = 基线里不存在 `(func, cat, code_sha)` 三元组。
 import argparse
 import hashlib
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -174,6 +175,8 @@ def main(argv=None) -> int:
     ap.add_argument("--freeze", default=None,
                     help="把当前扫描冻结为基线文件（含 frozen_at/note，供 --assert-baseline 使用）")
     ap.add_argument("--note", default="", help="与 --freeze 同用：写入基线的说明")
+    ap.add_argument("--public-baseline", default=None,
+                    help="冻结为**公开面**基线：file 脱敏为仓内相对路径（供 pack/release 身份扫描）")
     args = ap.parse_args(argv)
 
     cli = args.cli or str(Path(__file__).resolve().parent.parent / "gatekeeper-cli.sh")
@@ -183,15 +186,28 @@ def main(argv=None) -> int:
 
     r = scan(cli)
 
-    if args.freeze:
+    if args.freeze or args.public_baseline:
         import datetime
-        fp = Path(args.freeze)
+        fp = Path(args.freeze or args.public_baseline)
         fp.parent.mkdir(parents=True, exist_ok=True)
         snap = {"schema": "gk-bomb-inventory/1",
                 "frozen_at": datetime.datetime.now(datetime.timezone.utc)
                              .strftime("%Y-%m-%dT%H:%M:%SZ"),
                 "note": args.note}
         snap.update(r)
+        if args.public_baseline:
+            # 公开面脱敏（2026-11-04）：`--assert-baseline` 只用 (func,cat,sha)，`file` 仅展示，
+            # 但 `pack_release.py` 的身份扫描会把绝对路径判为残留 ⟹ 冻结前转仓内相对形态。
+            root = os.path.realpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+            for it in snap.get("items", []):
+                raw = str(it.get("file") or "")
+                try:
+                    rel = os.path.relpath(os.path.realpath(raw), root)
+                except (OSError, ValueError):
+                    rel = raw
+                if rel.startswith("..") or os.path.isabs(rel):
+                    rel = os.path.basename(raw)
+                it["file"] = rel.replace(os.sep, "/")
         fp.write_text(json.dumps(snap, ensure_ascii=False, indent=2), encoding="utf-8")
         print(json.dumps({"ok": True, "frozen": str(fp), "total": r["total"],
                           "payload": r["by_cat"].get("payload", 0)}, ensure_ascii=False))

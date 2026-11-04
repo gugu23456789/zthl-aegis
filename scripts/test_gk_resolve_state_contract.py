@@ -166,6 +166,74 @@ def test_domain_declared_but_state_missing_fails_closed(tmp_path, monkeypatch):
     assert r["expected"] == "", r
 
 
+# ── 维：显式态 × 域解析（2026-11-04，408 分析 F1：禁静默换账本）────────────────
+
+def test_domain_explicit_conflict_fails_closed(tmp_path, monkeypatch):
+    """显式 STATE_FILE + 声明域且落点不同 ⟹ fail-closed，不得静默路由到域 state。"""
+    monkeypatch.setenv("GK_STATE_DOMAIN_ROUTE", "1")
+    sd = tmp_path / "skill"
+    base = _state(sd / ".gatekeeper.state", worktree=str(sd))
+    _state(sd / ".gatekeeper.state.gp.r1", worktree=str(sd))
+    r = gsr.resolve_state(str(sd), state_file=str(base), domain="gp.r1",
+                          state_file_explicit=True)
+    assert r["source"] == "state_domain", r
+    assert r["error"] == "STATE_DOMAIN_EXPLICIT_CONFLICT", r
+    assert r["expected"] == "" and r["domain"] == "gp.r1", r
+
+
+def test_domain_explicit_other_token_maps_to_conflict(tmp_path, monkeypatch):
+    """显式 state 文件名自带**别的**域 token ⟹ 归一到 EXPLICIT_CONFLICT（不暴露两套码）。
+
+    依据：`resolve_domain_state` 对「当前 state 已带域且 ≠ 声明域」抛 FINDING_DOMAIN_MISMATCH；
+    在显式态下这不是第二类故障，而是同一个「显式选择 vs 声明域」取舍 ⟹ 统一错误码，
+    调用方只需一套处置（discover 的 J14 臂即断言该码）。
+    """
+    monkeypatch.setenv("GK_STATE_DOMAIN_ROUTE", "1")
+    sd = tmp_path / "skill"
+    cur = _state(sd / ".gatekeeper.state.other.plan", worktree=str(sd))
+    _state(sd / ".gatekeeper.state.gp.r1", worktree=str(sd))
+    r = gsr.resolve_state(str(sd), state_file=str(cur), domain="gp.r1",
+                          state_file_explicit=True)
+    assert r["source"] == "state_domain", r
+    assert r["error"] == "STATE_DOMAIN_EXPLICIT_CONFLICT", r
+    assert r["expected"] == "", r
+
+
+def test_domain_explicit_same_path_is_idempotent(tmp_path, monkeypatch):
+    """显式 STATE_FILE 恰等于域 state ⟹ 幂等放行（对齐 discover 的 L1289 口径）。"""
+    monkeypatch.setenv("GK_STATE_DOMAIN_ROUTE", "1")
+    sd = tmp_path / "skill"
+    dom = _state(sd / ".gatekeeper.state.gp.r1", worktree=str(sd))
+    r = gsr.resolve_state(str(sd), state_file=str(dom), domain="gp.r1",
+                          state_file_explicit=True)
+    assert r.get("error") in (None, ""), r
+    assert r["source"] == "state_domain" and r["expected"] == str(dom), r
+
+
+def test_domain_explicit_conflict_not_triggered_when_route_off(tmp_path, monkeypatch):
+    """`GK_STATE_DOMAIN_ROUTE=0` ⟹ 1b 不触发，显式态原样返回（逃生口仍有效）。"""
+    monkeypatch.setenv("GK_STATE_DOMAIN_ROUTE", "0")
+    sd = tmp_path / "skill"
+    base = _state(sd / ".gatekeeper.state", worktree=str(sd))
+    _state(sd / ".gatekeeper.state.gp.r1", worktree=str(sd))
+    r = gsr.resolve_state(str(sd), state_file=str(base), domain="gp.r1",
+                          state_file_explicit=True)
+    assert r.get("error") in (None, ""), r
+    assert r["source"] == "current" and r["expected"] == str(base), r
+
+
+def test_domain_non_explicit_still_routes(tmp_path, monkeypatch):
+    """非显式态零回归：声明域 ⟹ source=state_domain + expected=域 state。"""
+    monkeypatch.setenv("GK_STATE_DOMAIN_ROUTE", "1")
+    sd = tmp_path / "skill"
+    base = _state(sd / ".gatekeeper.state", worktree=str(sd))
+    dom = _state(sd / ".gatekeeper.state.gp.r1", worktree=str(sd))
+    r = gsr.resolve_state(str(sd), state_file=str(base), domain="gp.r1",
+                          state_file_explicit=False)
+    assert r.get("error") in (None, ""), r
+    assert r["source"] == "state_domain" and r["expected"] == str(dom), r
+
+
 # ── 维：STATE_FILE（显式异路径）───────────────────────────────────────────────
 
 def test_explicit_state_file_outside_skill_root_is_current(tmp_path):

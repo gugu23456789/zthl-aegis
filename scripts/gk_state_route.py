@@ -578,9 +578,28 @@ def resolve_state(skill_dir: str, state_file: str = "", plan_pointer: str = "",
             msg = str(e)
             code = ("STATE_DOMAIN_MISMATCH" if "FINDING_DOMAIN_MISMATCH" in msg
                     else "STATE_DOMAIN_MISSING")
+            # 显式态下「当前 state 文件名自带**别的**域 token」= 显式选择与声明域冲突
+            #   （同一个取舍问题，不是两件事）⟹ 归一到 EXPLICIT_CONFLICT，避免调用方
+            #   为同一个语义写两套处置。非显式态保持原码（跨仓写同一 ledger 的拦截不变）。
+            if explicit and code == "STATE_DOMAIN_MISMATCH":
+                code = "STATE_DOMAIN_EXPLICIT_CONFLICT"
             return {"expected": "", "current": current, "conflict": False,
                     "corrected": False, "candidates": [], "warning": msg,
                     "source": "state_domain", "domain": dom, "error": code}
+        # 2026-11-04（408 分析 F1；对齐 discover 的 STATE_DOMAIN_EXPLICIT_CONFLICT）：
+        #   显式注入态（测试/集成/论文仓库等，`STATE_FILE_EXPLICIT=1`）**不得被计划声明域
+        #   静默顶替** —— 原实现 1b 不看 explicit（step 4 safety_net 却看），且启动块
+        #   `gatekeeper-cli.sh` 会无条件采用 `source=state_domain` 的 expected ⟹ 显式 state
+        #   被换账本、无任何 WARN（实测：显式 wtA 被路由到域 state wtB）。现 fail-closed：
+        #   · target == current ⟹ 幂等放行（显式 state 本就是该域 state，对齐 discover L1289）
+        #   · target != current ⟹ 显式报错，由 error 通道统一停机（启动块 L663 / 取数中枢）
+        if explicit and _norm(target) != _norm(current):
+            return {"expected": "", "current": current, "conflict": False,
+                    "corrected": False, "candidates": [], "source": "state_domain",
+                    "domain": dom,
+                    "warning": f"显式 STATE_FILE 与计划声明域冲突: {current} ≠ {target}"
+                               f"（显式态优先，不静默换账本）",
+                    "error": "STATE_DOMAIN_EXPLICIT_CONFLICT"}
         return {"expected": target, "current": current, "conflict": False,
                 "corrected": False, "candidates": [target],
                 "warning": None, "source": "state_domain", "domain": dom}

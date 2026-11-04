@@ -2,19 +2,115 @@
   "schema": "gk-resident-features/1",
   "note": "常驻功能 → 自述文档覆盖登记表。新增常驻能力时必须在此登记，否则发布门 gk_doc_features 判红。",
   "features": [
-    {"id": "state-wal", "doc": "README.md", "pattern": "gk_state_wal"},
-    {"id": "wal-checkpoint", "doc": "README.md", "pattern": "checkpoint"},
-    {"id": "bench-state", "doc": "README.md", "pattern": "gk_bench_state"},
-    {"id": "bench-nightly", "doc": "README.md", "pattern": "bench-nightly"},
-    {"id": "bench-baseline", "doc": "README.md", "pattern": "bench-baseline\\.json"},
-    {"id": "provenance-json", "doc": "README.md", "pattern": "PROVENANCE\\.json"},
-    {"id": "sbom-cyclonedx", "doc": "README.md", "pattern": "SBOM\\.cdx\\.json|CycloneDX"},
-    {"id": "mcp-loader", "doc": "README.md", "pattern": "gk_mcp_loader"},
-    {"id": "browser-toolface-gate", "doc": "README.md", "pattern": "R0\\.18"},
-    {"id": "archive-concept-doi", "doc": "README.md", "pattern": "Concept DOI"},
-    {"id": "zenodo-sync", "doc": "README.md", "pattern": "gk_zenodo_sync"},
-    {"id": "arch-wal", "doc": "references/architecture-overview.md", "pattern": "gk_state_wal"},
-    {"id": "arch-bench", "doc": "references/architecture-overview.md", "pattern": "gk_bench_"},
-    {"id": "arch-mcp", "doc": "references/architecture-overview.md", "pattern": "gk_mcp_loader"}
+    {
+      "id": "state-wal",
+      "doc": "README.md",
+      "pattern": "gk_state_wal"
+    },
+    {
+      "id": "wal-checkpoint",
+      "doc": "README.md",
+      "pattern": "checkpoint"
+    },
+    {
+      "id": "bench-state",
+      "doc": "README.md",
+      "pattern": "gk_bench_state"
+    },
+    {
+      "id": "bench-nightly",
+      "doc": "README.md",
+      "pattern": "bench-nightly"
+    },
+    {
+      "id": "bench-baseline",
+      "doc": "README.md",
+      "pattern": "bench-baseline\\.json"
+    },
+    {
+      "id": "provenance-json",
+      "doc": "README.md",
+      "pattern": "PROVENANCE\\.json"
+    },
+    {
+      "id": "sbom-cyclonedx",
+      "doc": "README.md",
+      "pattern": "SBOM\\.cdx\\.json|CycloneDX"
+    },
+    {
+      "id": "mcp-loader",
+      "doc": "README.md",
+      "pattern": "gk_mcp_loader"
+    },
+    {
+      "id": "browser-toolface-gate",
+      "doc": "README.md",
+      "pattern": "R0\\.18"
+    },
+    {
+      "id": "archive-concept-doi",
+      "doc": "README.md",
+      "pattern": "Concept DOI"
+    },
+    {
+      "id": "zenodo-sync",
+      "doc": "README.md",
+      "pattern": "gk_zenodo_sync"
+    },
+    {
+      "id": "arch-wal",
+      "doc": "references/architecture-overview.md",
+      "pattern": "gk_state_wal"
+    },
+    {
+      "id": "arch-bench",
+      "doc": "references/architecture-overview.md",
+      "pattern": "gk_bench_"
+    },
+    {
+      "id": "arch-mcp",
+      "doc": "references/architecture-overview.md",
+      "pattern": "gk_mcp_loader"
+    },
+    {
+      "id": "balance-audit",
+      "doc": "README.md",
+      "pattern": "balance --audit"
+    },
+    {
+      "id": "hook-sync",
+      "doc": "README.md",
+      "pattern": "gk_hook_manage\\.py sync"
+    },
+    {
+      "id": "edit-verify",
+      "doc": "README.md",
+      "pattern": "gk_edit_verify"
+    },
+    {
+      "id": "threat-patterns",
+      "doc": "README.md",
+      "pattern": "gk_threat_patterns"
+    },
+    {
+      "id": "sarif-output",
+      "doc": "README.md",
+      "pattern": "gk_sarif\\.py"
+    },
+    {
+      "id": "credit-ledger",
+      "doc": "README.md",
+      "pattern": "gk_credit_ledger"
+    },
+    {
+      "id": "credit-economy-spec",
+      "doc": "references/credit-economy.md",
+      "pattern": "额度银行"
+    },
+    {
+      "id": "credit-finding-boundary",
+      "doc": "references/credit-economy.md",
+      "pattern": "_FINDING_ID_RE"
+    }
   ]
 }

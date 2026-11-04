@@ -663,7 +663,13 @@ print('|'.join([str(d.get('corrected',False)), d.get('expected',''), str(d.get('
     if [ -n "$_gkr_err" ]; then
       echo "ERROR[state-routing]: $_gkr_err — $_gkr_w" >&2
       echo "ERROR[state-routing]: $_gkr_err — $_gkr_w $GK_SID_TAG" >> "$GK_DBG_LOG"
-      echo "{\"ok\":false,\"error\":\"$_gkr_err\",\"warning\":\"$_gkr_w\",\"channel\":\"state-routing\",\"fix\":\"建域化 state，或 GK_STATE_DOMAIN_ROUTE=0 关闭域解析\"}"
+      # 2026-11-04：显式-域冲突的修法是**取舍**（二选一），不是"建域化 state"——域 state 可能
+      #   已存在；沿用通用文案会把调用方引向错误动作（与 discover 分支同口径）。
+      if [ "$_gkr_err" = "STATE_DOMAIN_EXPLICIT_CONFLICT" ]; then
+        echo "{\"ok\":false,\"error\":\"$_gkr_err\",\"warning\":\"$_gkr_w\",\"channel\":\"state-routing\",\"fix\":\"去掉显式 STATE_FILE（让域绑定生效），或显式 GK_STATE_DOMAIN_ROUTE=0 声明放弃域解析\"}"
+      else
+        echo "{\"ok\":false,\"error\":\"$_gkr_err\",\"warning\":\"$_gkr_w\",\"channel\":\"state-routing\",\"fix\":\"建域化 state，或 GK_STATE_DOMAIN_ROUTE=0 关闭域解析\"}"
+      fi
       exit 1
     fi
   fi
@@ -981,7 +987,7 @@ _conv_state_path() {
   #   （**非** `PLAN_FILE`），且须 `--derive-domain` 才启用该分支 ⟹ 两者缺一，中枢就收不到计划、
   #   域不可派生、**静默回落 base**（跨代混账 = F-REV-63）。此处与启动块（L297）**同口径**补齐。
   _o=$(SKILL_DIR="$(_gk_py_path "$SKILL_DIR")" STATE_FILE="$(_gk_py_path "$STATE_FILE")" PLAN_FILE="$PLAN_FILE" \
-       GK_PLAN_FILE="${GK_PLAN_FILE:-$PLAN_FILE}" \
+       GK_PLAN_FILE="${GK_PLAN_FILE:-$PLAN_FILE}" STATE_FILE_EXPLICIT="${STATE_FILE_EXPLICIT:-0}" \
        python3 "$SKILL_DIR/scripts/gk_route_center.py" resolve-state --derive-domain 2>>"$GK_DBG_LOG" || true)
   _p=$(python3 -c "
 import sys, json
@@ -1260,9 +1266,14 @@ except Exception:
         fi
         echo "INFO[build-state]: 域 state 首建/确认 $_dom（$_bs_json）" >> "$GK_DBG_LOG"
       fi
-      local _dom_json _dom_state _dom_err
-      _dom_json=$(SKILL_DIR="$(_gk_py_path "$SKILL_DIR")" python3 "$SKILL_DIR/scripts/gk_route_center.py" resolve-state \
-                    --state-file "$_DEFAULT_STATE_FILE" --plan-pointer /nonexistent \
+      local _dom_json _dom_state _dom_err _dom_base="$_DEFAULT_STATE_FILE"
+      # 2026-11-04（408 分析 F3）：显式 STATE_FILE 下域解析基址必须与**被保护/被写**的 state
+      #   同源。原固定用 `_DEFAULT_STATE_FILE` ⟹ 域落点恒按默认 state 同级推导，与显式 state
+      #   分叉（实测：显式态下报 `STATE_DOMAIN_MISSING`，而真正该报的是显式-域冲突）。
+      [ "${STATE_FILE_EXPLICIT:-0}" = "1" ] && _dom_base="$STATE_FILE"
+      _dom_json=$(SKILL_DIR="$(_gk_py_path "$SKILL_DIR")" STATE_FILE_EXPLICIT="${STATE_FILE_EXPLICIT:-0}" \
+                    python3 "$SKILL_DIR/scripts/gk_route_center.py" resolve-state \
+                    --state-file "$_dom_base" --plan-pointer /nonexistent \
                     --domain "$_dom" 2>>"$GK_DBG_LOG" || echo '{}')
       _dom_state=$(printf '%s' "$_dom_json" | python3 "$SKILL_DIR/scripts/gk_json_utils.py" \
         field expected --default '' 2>>"$GK_DBG_LOG")
@@ -1272,6 +1283,13 @@ except Exception:
         # fail-closed：声明域后不静默回退（对齐 gk_finding.resolve_domain_state / ECC-C98BDE1D2B3B）
         # REV-5（缺口 c）：失败即清理旧指针（否则后续进程跟随**上一次**绑定的旧指针）
         _disc_clear_pointer
+        # 2026-11-04（408 分析 F1/F3）：显式态与声明域冲突由 1b 直接报错（不再静默换账本）。
+        #   该错误的修法**不是**"建域化 state"（域 state 可能已存在，冲突点是取舍），
+        #   故单列 fix 文案，避免把用户引向错误动作。
+        if [ "$_dom_err" = "STATE_DOMAIN_EXPLICIT_CONFLICT" ]; then
+          echo "{\"ok\":false,\"error\":\"STATE_DOMAIN_EXPLICIT_CONFLICT\",\"domain\":\"$_dom\",\"state_file\":\"$STATE_FILE\",\"fix\":\"去掉显式 STATE_FILE（让域绑定生效），或显式 GK_STATE_DOMAIN_ROUTE=0 声明放弃域解析\"}"
+          return 1
+        fi
         echo "{\"ok\":false,\"error\":\"$_dom_err\",\"domain\":\"$_dom\",\"fix\":\"建域化 state（骨架可克隆自 $_DEFAULT_STATE_FILE），或移除计划 META 的 state_domain，或 GK_STATE_DOMAIN_ROUTE=0 关闭域解析\"}"
         return 1
       fi

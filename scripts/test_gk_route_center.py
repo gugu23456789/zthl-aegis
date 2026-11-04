@@ -1524,3 +1524,32 @@ class TestL4DomainRoute:
                 bad.append(f"{p.name}: state_domain={dom!r}")
         assert not bad, ("计划 META 的 state_domain 非合法域 token（成为会话来源即 "
                          "STATE_DOMAIN_TOKEN_INVALID → CLI exit 1）: " + "; ".join(bad))
+
+# ── 方案 C（2026-11-04，用户裁定「AB 都不行，锁在任一平台会阻断跨平台调用」）──────────
+def test_path_forms_bimorphic():
+    """`C:\\x` ↔ `/mnt/c/x` 互为等价形态；`\\` 与 `/` 等价；大小写不敏感。"""
+    assert grc._path_forms(r"<home>\x") == grc._path_forms("<home>/x")
+    assert grc._path_forms("<home>/x") == grc._path_forms("<home>/x")
+    assert grc._path_forms("/tmp/x") == frozenset({"/tmp/x"})
+
+
+def test_in_active_surface_cross_platform():
+    """roots 存任一形态，目标用另一形态也必须命中（禁"锁单一平台"）。"""
+    win_state = {"worktree": r"<home>\proj", "worktrees_extra": []}
+    assert grc.in_active_surface("<home>/proj/a.py", win_state) is True
+    assert grc.in_active_surface(r"<home>\proj\a.py", win_state) is True
+
+    wsl_state = {"worktree": "<home>/proj", "worktrees_extra": ["<home>/extra"]}
+    assert grc.in_active_surface(r"<home>\proj\a.py", wsl_state) is True
+    assert grc.in_active_surface("<home>/extra/b.py", wsl_state) is True
+
+    # 目录边界仍在：同前缀兄弟目录不得放行（ECC-73ACEA635A78）
+    assert grc.in_active_surface(r"<home>\projX\a.py", wsl_state) is False
+
+
+def test_active_roots_keeps_caller_form():
+    """roots 不再被强制转成 `/mnt` 形态；等价形态去重后只留一条。"""
+    st = {"worktree": r"<home>\proj", "worktrees_extra": ["<home>/proj"]}
+    roots = grc.active_roots(st)
+    assert len(roots) == 1, roots
+    assert grc._path_forms(roots[0]) == grc._path_forms(r"<home>\proj")
