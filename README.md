@@ -11,6 +11,14 @@
 
 本仓是公开发布通道。文档索引见 [`references/README.md`](references/README.md)，所有导出的文档都由它链接。
 
+### 存档与引用
+
+- **Concept DOI**：[`10.5281/zenodo.23934594`](https://doi.org/10.5281/zenodo.23934594)
+  —— 永久指向最新归档版本；每次发版由 `scripts/gk_zenodo_sync.py` 自动新建版本并上传同一组附件。
+- **Version DOI**：每个版本单独一个，只写在对应的 release notes 里（不进包内静态文件）。
+- 引用格式：Pu Junhan. (2026). *ZTHL Aegis* [Computer software]. Zenodo.
+  <https://doi.org/10.5281/zenodo.23934594>
+
 ### 许可
 
 木兰宽松许可证第 2 版（Mulan PSL v2）。双语全文见 [`LICENSE`](LICENSE)，中文正本见
@@ -38,27 +46,32 @@
 
 ### 元数据路由（DAG）
 
-主 state 的元数据路由是**单向 DAG**：写者只经网关落主 state；卫星写者先落片/侧车，再以
-manifest/热叶汇入；读面只读，压缩器只换代。这里没有「读面回写 state」的环。
+主 state 的元数据路由是**单向 DAG**：写者经网关落主 state；卫星写者只落片与冷索引侧车，
+读面做并集；GC 是唯一的索引删除者。这里没有「读面回写 state」的环。
 
 ```mermaid
 flowchart LR
   W["写者<br/>CLI · satellite · finding"] --> G["update_state<br/>锁 + checksum + 原子替换"]
-  G --> S["主 state<br/>权威元数据 + 热索引（每 kind ≤6 叶）"]
-  W --> P["卫星片<br/>payload JSONL"]
-  W --> C["冷索引侧车<br/>satellite-index.jsonl（append-only）"]
-  C --> H["热叶 / manifest"]
-  H --> S
-  P --> R["读面 / 压缩"]
+  G --> S["主 state<br/>权威元数据（含历史内联叶）"]
+  W --> P["卫星片<br/>payload JSONL（fsync）"]
+  W --> C["冷索引侧车<br/>satellite-index.jsonl（append-only：put/del）"]
+  W -. "租约锚（best-effort）" .-> A["claim 台账"]
+  S --> R["读面<br/>index_entries = 内联 ∪ 侧车"]
+  P --> R
   C --> R
   R -. "只读" .-> P
   R -. "只读" .-> C
-  K["压缩器"] -->|"新代"| C
-  K -->|"manifest 交换"| S
+  K["GC / 压缩<br/>gc_index · reclaim"] -->|"删叶 / 溢出：append del·put"| C
+  K -->|"整键重写（唯一删除者）"| S
+  S --> K
+  P --> K
+  A --> K
 ```
 
-**无环保证**：`写 → 网关 → state` 与 `片/侧车 → 压缩 → manifest` 两条支路只在 state 汇合；
-读面没有回写边。**崩溃安全**：先片/侧车、后 manifest；交换前的旧状态始终完整。
+**无环保证**：写侧只有两条持久面 —— `片 + 侧车`（先 fsync）与经网关的 `update_state`；
+S3 起**写侧停更内联热索引**（`INLINE_INDEX_WRITES=False`），内联只留历史叶、由 GC 溢出到侧车，
+读面取 `内联 ∪ 侧车` 的并集，**没有回写边**。**崩溃安全**：片/侧车先落盘，GC 只做追加删除
+（`{"op":"del"}`）与整键重写，交换前的旧状态始终完整。
 
 ### 性能与常驻基准
 
