@@ -96,6 +96,9 @@ S3 起**写侧停更内联热索引**（`INLINE_INDEX_WRITES=False`），内联�
 - 自动存档：`scripts/gk_zenodo_sync.py` 在 Release 发布后创建 Zenodo 新版本并上传同一组附件
   （zip / SHA256SUMS / PROVENANCE / SBOM / manifest），Concept DOI 因此始终指向最新版；
   未配置 `ZENODO_TOKEN` 时该步自行跳过，不影响发版。
+- 发布纪律：**tag 必须是 `main` 的祖先**。`main` 领先 tag 属正常（存在未发版提交），
+  由 release 的 `sync-main` 作业记录到 job summary，**不强制补发版本**；
+  只有 `main` 落后于 tag（tag 打在侧支上）才快进，分叉则判失败。
 - 公开包是 **clean export**（`scripts/oss_scrub.py` 白名单导出），不是开发仓；
   核验顺序与两种 DOI 的口径见 [`PROVENANCE.md`](PROVENANCE.md)。
 

@@ -147,9 +147,11 @@ jobs:
 
   sync-main:
     name: sync main to latest tag
-    # 发布成功后让 main 与最新 tag 对齐（2026-11-04，用户裁定「main 需自动同步最新 tag」）：
-    #   - tag 比 main 新（tag 打在侧支/游离提交上）⟹ **快进** main 到 tag；
-    #   - main 比 tag 新（发布后又提交）⟹ 只告警写 job summary，不改写历史；
+    # 发布纪律（2026-11-04 修订，用户裁定「按方案改规则」）：
+    #   **tag 必须是 main 的祖先**。main 领先 tag 是**正常状态**（存在未发版提交），
+    #   不再因此强制补发版本——旧规则「main 必须等于最新 tag」会逼出连环发版。
+    #   - tag 比 main 新（tag 打在侧支/游离提交上，main 落后）⟹ **快进** main 到 tag（真正的异常）；
+    #   - main 比 tag 新 ⟹ 只在 job summary 记录「未发版 N 个提交」，不改写历史、不判失败；
     #   - 已分叉 ⟹ 失败，交人工处理。
     # 注意：GITHUB_TOKEN 推 main 不会触发其他 workflow —— 这里快进到的提交正是 tag 提交，
     #   其 CI 已在 tag 上跑过，无需再触发。
@@ -182,9 +184,10 @@ jobs:
 
           if git merge-base --is-ancestor "$TAG_SHA" "$MAIN_SHA"; then
             AHEAD=$(git rev-list --count "$TAG_SHA..$MAIN_SHA")
-            echo "::warning::main 领先 $TAG $AHEAD 个提交（尚未发版）"
+            # 新规则：main 领先 = 正常（有未发版提交），只记录，不告警、不判失败
+            echo "main 领先 $TAG $AHEAD 个提交（未发版，属正常状态）"
             {
-              echo "### main 领先 \`$TAG\` $AHEAD 个提交（尚未发版）"
+              echo "### main 领先 \`$TAG\` $AHEAD 个提交（未发版，属正常状态）"
               echo '```'
               git log --oneline "$TAG_SHA..$MAIN_SHA"
               echo '```'
