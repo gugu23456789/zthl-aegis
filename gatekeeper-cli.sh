@@ -70,7 +70,7 @@ _SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 declare -a LOOKUP_DIRS=(
   "$_SCRIPT_DIR"                                          # 相对于脚本本身
   "$(pwd)/.trae/skills/spz-gatekeeper-r-sequence"         # 当前项目 .trae/skills/
-  # 2026-09-20（ECC-PLAN ①·宿主形态）：原为宿主机绝对路径字面量（/mnt/c/Users/HP/.trae/...）
+  # 2026-09-20（ECC-PLAN ①·宿主形态）：原为宿主机绝对路径字面量（<home>/.trae/...）
   # ⟹ 非本机宿主上第 3 项恒不命中（前两项通常已够，但一旦全不中即 `exit 1` SKILL_DIR not found）。
   # 改由 $HOME 派生（跨宿主同形；`${HOME:-}` 兼容 `set -u`）。
   "${HOME:-}/.trae/skills/spz-gatekeeper-r-sequence"      # 用户主目录兜底
@@ -341,8 +341,8 @@ esac
 unset _gk_py_boot
 # ─── 路径形态归一：单一事实源（2026-11-02，真因 C）────────────────────────────
 # 病象：仓内 32 处 `python3 -c "... open('$STATE_FILE') ..."` 是**内联拼接**。值若含 Windows
-#   反斜杠，python 源码里就出现 `'C:\Users\...'` ⟹ `\U` 触发 `unicodeescape` SyntaxError。
-#   实测现场：`_lk=state_lock('C:\Users\HP\...')` 整行语法错 ⟹ 锁没取到、state 没写，
+#   反斜杠，python 源码里就出现 `'<home>'` ⟹ `\U` 触发 `unicodeescape` SyntaxError。
+#   实测现场：`_lk=state_lock('<home>\...')` 整行语法错 ⟹ 锁没取到、state 没写，
 #   而症状被上层报成「域判定失败」（又一次真因被伪装）。
 #   逐个改成 env 传参的收益远小于风险（32 处，多数在无测试覆盖的审计/收口路径）。
 #   正解 = **一个变量只允许一种形态**：凡是**外部来源**（路由中枢 / 跨进程注入 / git 输出）
@@ -442,7 +442,7 @@ if [ -z "${STATE_FILE:-}" ]; then
         _gs_mcwd_n="${_gs_mcwd//\\//}"
         _gs_pwd_n="${PWD//\\//}"
         # ECC-8CEA5388F1DC（2026-10-07）：**形态归一** —— marker 第 4 列记**宿主**形态
-        #   （`c:/Users/HP`），本调用 `${PWD}` 为 **WSL** 形态（`/mnt/c/Users/HP`）⟹ 原**逐字**
+        #   （`c:/Users/HP`），本调用 `${PWD}` 为 **WSL** 形态（`<home>`）⟹ 原**逐字**
         #   比较对**非 worktree 调用者恒假** ⟹ `GK_SESSION_ID` 恒空 ⟹ `discover --plan` 退写
         #   **全局** `.gatekeeper.plan` = 跨会话路由污染（实测：全局指针 mtime/内容 = 本会话
         #   discover；分片指针 `.gatekeeper.plan.<sid>` 未被写）。两端归一到
@@ -1342,7 +1342,7 @@ except Exception:
       # 2026-10-18（跨平台 ①A 修复）：**禁止手工拼 JSON**。原写法
       #   `echo "{\"state_file\":\"$STATE_FILE\",\"plan\":\"...\"}"`
       # 把 `$STATE_FILE` 的**原样字节**嵌进 JSON 字符串。Windows 侧解析出的 state 是
-      #   `C:\Users\HP\.trae\skills\...\.gatekeeper.state.skill.xxx`
+      #   `<home>\.trae\skills\...\.gatekeeper.state.skill.xxx`
       # ⟹ `\U` / `\H` / `\.`
       #   均为**非法 JSON 转义**（JSON 只认 `\" \\ \/ \b \f \n \r \t \uXXXX`）。
       # 后果链（**伪装成 stale**）：
@@ -1595,7 +1595,7 @@ carry_over(_old,d)
   #   {"r_phase":"$r_phase",...,"main_repo":"$MAIN_REPO_WIN",...}
   #   EOFSTATE
   # 把四个**外部来源**的字符串直接嵌进 JSON 字符串体：
-  #   · Windows 反斜杠路径（`C:\Users\...`）⟹ `\U` 非法转义（真因 A 同族）；
+  #   · Windows 反斜杠路径（`<home>`）⟹ `\U` 非法转义（真因 A 同族）；
   #   · **CRLF 泄漏** —— 实测 `MAIN_REPO_WIN` 值为**裸 `\r`**（字节 152）⟹
   #     `json.loads` 抛 **`Invalid control character`** ⟹ **整份 state 不可读**
   #     ⟹ 所有读点 `{"error":"json_decode_error"}` ⟹ 质询链在入队后 57s 处全线中断。
@@ -2387,7 +2387,7 @@ _gx_subagent_gx_env() {
   #   `/[a-zA-Z]/*`（该模式要求单字母盘符后紧跟 `/`）。
   # ⚠ 配对不变量（F-REV-73）不变：本机 gitnexus 包是 Windows 构建 ⟹ 只收 win node。
   # ⚠ 2026-11-01 续修（真因 F）：再补 **Windows 直接形态 `[A-Za-z]:*`** ——
-  #   `_gx_node_probe win` 的 `command -v` 兜底会给出 `C:/Users/.../node`（**无 `.exe`**），
+  #   `_gx_node_probe win` 的 `command -v` 兜底会给出 `<home>/node`（**无 `.exe`**），
   #   该形态既非 `*.exe` 也非 `/mnt/*` ⟹ 仍被判 wsl 侧 ⟹ 存储根走 POSIX 分支 ⟹
   #   Windows node 按相对路径解析出 `<cwd>/mnt/c/...` 假路径 ⟹ `status` 回
   #   `error:"not-indexed"` ⟹ 基线 `unavailable`（实测已复现到缓存文件里的 storagePath）。
@@ -2730,7 +2730,7 @@ _gx_repo_root_of() {
 #      技能仓库内 ⟹ `_gx_repo_name_for_dir` 的 registry 前缀**必命中技能仓库** ⟹ **静默错答**
 #      （F-REV-73 的 fail-loud 在「名字解析」层，拦不住「目录归属判错」这一层）。
 #   ② `skill` 语义用 `'.trae' in worktree` **字符串**判定 ⟹ 门卫仓库的 feature worktree
-#      （`/mnt/c/Users/HP/.trae/worktrees/spz_gatekeeper_project/feature/...`）**同样含 `.trae`**
+#      （`<home>/.trae/worktrees/spz_gatekeeper_project/feature/...`）**同样含 `.trae`**
 #      ⟹ 被判成 skill ⟹ 恒查技能仓库的图（**⑰ 交叉审查实测**：现存 **9** 个 state（技能仓库 7 + dryrun worktree 2）**全部 rc=0 可归属**；其中 **2** 个属此形态 —— 修前均**错答为技能仓库**、修后**正确归属门卫仓库**）。
 #   现语义：候选**必须通过归属验证**（registry 路径 / git 主仓库根）才被采用；猜名与静默回退**全删**。
 # ─── 链接 worktree 归一（2026-10-05 · ECC-774A4BD638FB）──────────────────────
@@ -4615,7 +4615,7 @@ d.setdefault('gate_data', {})['gitnexus'] = _json.loads(_os.environ.get('GN_JSON
   # --- SUBAGENT MODE: constrained review agent (openai-agents SDK) ---
   # T43+++: shared infra (_resolve_provider_config + _resolve_api_key + fallback)
   # Python: configurable via SUAGENT_PYTHON env var (defaults to python3)
-  #         e.g. export SUAGENT_PYTHON=/mnt/c/Users/HP/.codex/venv/Scripts/python.exe
+  #         e.g. export SUAGENT_PYTHON=<home>/.codex/venv/Scripts/python.exe
   # Activated: "研究/分析任务, 需要跨仓库搜索但不需要完整评分"
   # Output: {"conclusion":"...","evidence":[...],"confidence":"high|medium|low","tools_used":[...],"guardrail":"passed"}
   if [ "$mode" = "--subagent" ]; then
@@ -5428,7 +5428,7 @@ if _rg:
 _obs=arm_observables(out, delta=_Dn, stride=_Sn, gold=_gold, provider=os.environ.get('GK_ARM_PROVIDER','') or 'deepseek')
 entry={
   # F-REV-18 (2026-09-10): 原为 out.get('task','''\$task''')——任务文本被当 python 源码
-  # 字面量内插。任务含 Windows 反斜杠路径（如 C:\\Users\\HP）时 python 编译期即
+  # 字面量内插。任务含 Windows 反斜杠路径（如 <home>）时 python 编译期即
   # SyntaxError（truncated \\UXXXXXXXX escape）→ 整块写回 heredoc 失败 → 被
   # '2>/dev/null || true' 静默吞掉 → subagent_history 不写 → ECO-EDIT→ECO-AUDIT
   # 门禁链断裂（与 L2865 注释自述的 tampered 断裂同路径、第二触发源）。

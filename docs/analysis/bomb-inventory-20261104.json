@@ -2,7 +2,7 @@
   "schema": "gk-bomb-inventory/1",
   "frozen_at": "2026-11-04T06:26:22Z",
   "note": "N-1 基线再冻结（2026-11-04）：11-02 基线之后未设门禁，CLI 期间新增 27 个载荷（payload 96 / total 102）。棘轮起点 = 该值，此后只许下降。",
-  "file": "C:\\Users\\HP\\.trae\\skills\\spz-gatekeeper-r-sequence\\gatekeeper-cli.sh",
+  "file": "gatekeeper-cli.sh",
   "total": 102,
   "by_cat": {
     "payload": 96,
