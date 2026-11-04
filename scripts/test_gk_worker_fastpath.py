@@ -172,12 +172,15 @@ def _run_cli(pf: str, dbg: Path, extra_env: dict | None = None):
                                      "gate_data": {}}), encoding="utf-8")
     # GK_DBG_LOG 在 CLI L110 是**硬赋值**（不读 env）⟹ 只能读仓内 `scripts/gk_dbg.log`；
     # 故留给「快路命中」行一个**唯一 pidfile 路径**做隔离（并发会话共写该日志）。
-    env = {**os.environ, "STATE_FILE": str(state), "GK_WORKER_PIDFILE": pf,
+    # 2026-11-04（分类学 #13）：本机 `bash` = WSL，`C:\...` 会被吞成 `C:Users...`（rc=127）
+    # ⟹ 交给 bash 的参数与它读取的 env 路径统一换算 `/mnt/<drive>/...`（同一路径空间）；
+    # Linux 侧 `_wsl` 恒等。
+    env = {**os.environ, "STATE_FILE": _wsl(state), "GK_WORKER_PIDFILE": _wsl(pf),
            "GK_BUDGET_OVERRIDE": "1"}
     env.pop("GK_WORKER_DISABLE", None)
     if extra_env:
         env.update(extra_env)
-    return subprocess.run(["bash", str(CLI), "state"], capture_output=True, text=True,
+    return subprocess.run(["bash", _wsl(CLI), "state"], capture_output=True, text=True,
                           timeout=180, env=env)
 
 
@@ -192,7 +195,7 @@ def _dbg_text() -> str:
 def test_cli_works_with_and_without_worker(live, tmp_path):
     r_on = _run_cli(live, tmp_path / "on.log")
     assert r_on.returncode == 0, (r_on.stdout + r_on.stderr)[-600:]
-    assert ("worker fast path hit pidfile=" + live) in _dbg_text(), (
+    assert ("worker fast path hit pidfile=" + _wsl(live)) in _dbg_text(), (
         "快路未命中 —— 接线未生效或 epoch 判据恒不符")
 
     # 换一个**新** pidfile 路径跑关闭态：日志里不得出现该路径（隔离并发会话的旧行）
@@ -200,7 +203,7 @@ def test_cli_works_with_and_without_worker(live, tmp_path):
     dead.write_text("999999\n1\ntok\nbogus\n", encoding="utf-8")
     r_off = _run_cli(str(dead), tmp_path / "off.log", {"GK_WORKER_DISABLE": "1"})
     assert r_off.returncode == 0, (r_off.stdout + r_off.stderr)[-600:]
-    assert ("worker fast path hit pidfile=" + str(dead)) not in _dbg_text()
+    assert ("worker fast path hit pidfile=" + _wsl(dead)) not in _dbg_text()
 
 
 def test_cli_survives_dead_pidfile(tmp_path):

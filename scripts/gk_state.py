@@ -25,7 +25,7 @@ from pathlib import Path
 
 # R2（2026-09-22）：state 序列化单一事实源 —— 勿再内联 json.dump 直写 state。
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from gk_json_utils import dump_state, read_state_file  # noqa: E402
+from gk_json_utils import dump_state  # noqa: E402
 # B5（2026-10-27，RED-MIGRATE-INLINE）：`get` 子命令复用 `field` 的同一取值语义
 # （区分「缺键」与「值恰为 null」）⟹ 不复制第二套 lookup（单源）。
 from gk_json_utils import _MISSING, _cli_lookup  # noqa: E402
@@ -70,10 +70,11 @@ def _read_state(state_path: str) -> dict:
     if not p.exists():
         return {"error": "state_file_not_found", "path": str(p)}
     
-    # 2026-11-03（M1）：state 读 = checkpoint + WAL replay（与 update_state 写路径对称）。
-    data = read_state_file(state_path)
-    if "error" in data:
-        return {"error": "json_decode_error", "detail": str(data["error"]), "path": str(p)}
+    try:
+        with open(p, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except json.JSONDecodeError as e:
+        return {"error": "json_decode_error", "detail": str(e), "path": str(p)}
     
     # Checksum verification
     stored_hash = data.get("_checksum", "")
@@ -127,10 +128,11 @@ def _verify_checksum(state_path: str) -> dict:
     if not p.exists():
         return {"error": "state_file_not_found", "path": str(p)}
     
-    # 2026-11-03（M1）：校验**权威态**（checkpoint + WAL replay），不是旧 checkpoint。
-    data = read_state_file(state_path)
-    if "error" in data:
-        return {"error": "json_decode_error", "detail": str(data["error"])}
+    try:
+        with open(p, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except json.JSONDecodeError as e:
+        return {"error": "json_decode_error", "detail": str(e)}
     
     stored_hash = data.get("_checksum", "")
     gate_dump = json.dumps(data.get("gate_data", {}), sort_keys=True, ensure_ascii=True)
@@ -154,10 +156,11 @@ def _compute_checksum(state_path: str) -> dict:
     if not p.exists():
         return {"error": "state_file_not_found", "path": str(p)}
     
-    # 2026-11-03（M1）：基于**权威态**重算（checkpoint + WAL replay）。
-    data = read_state_file(state_path)
-    if "error" in data:
-        return {"error": "json_decode_error", "detail": str(data["error"])}
+    try:
+        with open(p, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except json.JSONDecodeError as e:
+        return {"error": "json_decode_error", "detail": str(e)}
     
     gate_dump = json.dumps(data.get("gate_data", {}), sort_keys=True, ensure_ascii=True)
     data["_checksum"] = hashlib.sha256(gate_dump.encode()).hexdigest()[:16]

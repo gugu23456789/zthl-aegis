@@ -92,6 +92,13 @@ def _alive(pid: int) -> bool:
         os.kill(pid, 0)
     except OSError:
         return False
+    except SystemError:
+        # 2026-11-04（Windows 实测）：pid 已退出时 CPython 3.11 的 `os.kill(pid, 0)`
+        # 会把内部 WinError 87 泄漏成 `SystemError: <class 'OSError'> returned a result
+        # with an exception set`（不是 OSError 子类，原 `except OSError` 抓不到）。
+        # 探活语义 = "失败即不活" ⟹ 这里必须兜住，否则 stop()/ensure_daemon() 抛穿测试
+        # 与 CLI 调用面。
+        return False
     return True
 
 

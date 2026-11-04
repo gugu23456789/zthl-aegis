@@ -81,6 +81,72 @@ def normalize_usage(provider, usage):
     return out
 
 
+def extract_calls(payload) -> list:
+    """runner / probe 载荷 → 逐调用 usage 列表（单源，2026-11-04）。
+
+    接受三种既有形态（`subagent_runner` 的 `token_usage.calls` 是**扁平** usage，
+    字段是 provider 原生名，**没有** `usage` 包一层）：
+      ① `{"usage_calls": [...]}` / `{"calls": [...]}`（phase_probe 车道）
+      ② `{"token_usage": {"calls": [...]}}`（subagent_runner 出口）
+      ③ `{"usage": {...}}`（单响应）
+    纯列表原样返回；不可解析 ⟹ `[]`（缺样本由调用方具名 UNKNOWN，禁当"0 失效"）。
+    """
+    if isinstance(payload, list):
+        return [u for u in payload if isinstance(u, dict)]
+    if not isinstance(payload, dict):
+        return []
+    for key in ("usage_calls", "calls"):
+        v = payload.get(key)
+        if isinstance(v, list):
+            return [u for u in v if isinstance(u, dict)]
+    tu = payload.get("token_usage")
+    if isinstance(tu, dict) and isinstance(tu.get("calls"), list):
+        return [u for u in tu["calls"] if isinstance(u, dict)]
+    u = payload.get("usage")
+    return [u] if isinstance(u, dict) else []
+
+
+def infer_provider(usage) -> str:
+    """从 usage 字段名反推 provider（`token_usage.calls` 的扁平记录**不带** provider）。
+
+    只认**特征键**，不猜品牌：命中不了 ⟹ `""`（调用方按 UNKNOWN 处理，禁硬塞 deepseek）。
+    """
+    if not isinstance(usage, dict):
+        return ""
+    keys = {str(k) for k in usage}
+    if keys & {"prompt_cache_hit_tokens", "prompt_cache_miss_tokens"}:
+        return "deepseek"
+    if keys & {"cache_read_input_tokens", "cache_creation_input_tokens"}:
+        return "anthropic"
+    if "prompt_tokens_details" in keys:
+        return "openai"
+    if "prompt_tokens" in keys or "completion_tokens" in keys:
+        return "deepseek"     # DeepSeek/OpenAI 同形时的**保守**归属（cache 字段缺失不影响分母）
+    return ""
+
+
+def flatten_calls(records) -> list:
+    """`records`（`{provider, length, outcome, usage_calls:[扁平 usage]}`）→ observe 的 calls。
+
+    与 `gk_phase_probe.cache_observation` 同源（该函数已改为调用本函数，禁第二份展开）。
+    provider 缺失时用 `infer_provider` 兜底；仍推不出 ⟹ 该条**丢弃**（不编造）。
+    """
+    out = []
+    for rec in records or []:
+        if not isinstance(rec, dict):
+            continue
+        uc = rec.get("usage_calls")
+        uc = uc if isinstance(uc, list) else []
+        prov = rec.get("provider") or ""
+        for j, u in enumerate([x for x in uc if isinstance(x, dict)]):
+            p = prov or infer_provider(u)
+            if not p:
+                continue
+            out.append({"turn": j, "provider": p, "l": rec.get("length", 0),
+                        "usage": u, **({"outcome": rec["outcome"]} if "outcome" in rec else {})})
+    return out
+
+
 def block_alignment(l, block):
     """Align the injected length `l` (tokens, F2) to the provider's `block` granularity.
 

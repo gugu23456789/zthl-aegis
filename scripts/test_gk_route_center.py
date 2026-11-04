@@ -18,6 +18,8 @@ test_gk_route_center.py — 元数据路由中枢五层链测试（2026-09-02）
 """
 import json
 import os
+import re
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -25,6 +27,21 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import gk_route_center as grc
+
+
+def _bash_path(p):
+    """Windows 绝对路径 → WSL 可解析的 `/mnt/<drive>/...`；非 Windows 原样。
+
+    分类学 #13：WSL 的 bash 不接受 `C:\\...`（反斜杠被吞成 `C:Users...` ⟹ exit 127），
+    所以真端到端用例把**传给 bash 的参数**换算成 POSIX 形态（`cwd` 仍用 Windows 形态，
+    由 CreateProcess 解释）。
+    """
+    if os.name != "nt":
+        return str(p)
+    q = str(p).replace("\\", "/")
+    m = re.match(r"^([A-Za-z]):/(.*)$", q)
+    return "/mnt/%s/%s" % (m.group(1).lower(), m.group(2)) if m else q
+
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 _GRC_SRC_PATH = SCRIPT_DIR / "gk_route_center.py"
@@ -1122,15 +1139,26 @@ class TestL4DomainRoute:
         即为技能根，CLI 全链路（含 discover --plan 的域绑定）都在沙箱内完成，不触碰真仓。
         REV-4（N7）：`project_type` 取 **standard**（standing 会触发 discover 的
         release-check 分支 —— 越界扫描仓外受管项目 + 网络，破坏测试密闭性）。
+        Windows（WSL）宿主（分类学 #13）：Windows 侧 `os.symlink` 的重解析点在 WSL 内
+        不可解析（`scripts/gk_state.py 不可解析`）⟹ 改由 WSL `ln -s` 建 POSIX 软链。
         """
         import shutil
         sb = tmp_path / "sb"
         sb.mkdir()
-        os.symlink(str(SCRIPT_DIR), str(sb / "scripts"))
+        if os.name == "nt":
+            subprocess.run(
+                ["bash", "-c", "ln -sfn %s %s" % (
+                    shlex.quote(_bash_path(SCRIPT_DIR)),
+                    shlex.quote(_bash_path(sb / "scripts")))],
+                check=True, capture_output=True, text=True)
+        else:
+            os.symlink(str(SCRIPT_DIR), str(sb / "scripts"))
         shutil.copy(str(SCRIPT_DIR.parent / "gatekeeper-cli.sh"), str(sb / "gatekeeper-cli.sh"))
 
         def _st(p: Path):
-            _write_state(p, str(sb))
+            # worktree 由 WSL 侧 CLI 消费 ⟹ 写 POSIX 形态（Windows 路径会被判「不属于技能仓库」
+            # 而触发 worktree 纠正，掩盖被测的域指针语义）
+            _write_state(p, _bash_path(sb))
             d = json.loads(p.read_text(encoding="utf-8"))
             d["r_phase"] = plan_phase
             p.write_text(json.dumps(d), encoding="utf-8")
@@ -1150,10 +1178,17 @@ class TestL4DomainRoute:
     @staticmethod
     def _run(sb, *args, **env_extra):
         import subprocess
-        return subprocess.run(["bash", str(sb / "gatekeeper-cli.sh"), *args],
+        argv = [_bash_path(a) for a in args]
+        extra = {k: (_bash_path(v) if isinstance(v, str) else v) for k, v in env_extra.items()}
+        env = {**os.environ, "GK_DBG_LOG": _bash_path(str(sb / "dbg.log")), **extra}
+        if os.name == "nt":
+            # WSL 互操作只把 WSLENV 列出的变量转发进 Linux 侧；不登记 ⟹
+            # GK_STATE_DOMAIN_ROUTE / STATE_FILE 静默丢失，端到端用例测不到开关语义。
+            names = [k for k in ("GK_DBG_LOG", *extra) if k]
+            env["WSLENV"] = ":".join([p for p in (env.get("WSLENV", ""), *names) if p])
+        return subprocess.run(["bash", _bash_path(sb / "gatekeeper-cli.sh"), *argv],
                               capture_output=True, text=True, timeout=180,
-                              cwd=str(sb),
-                              env={**os.environ, "GK_DBG_LOG": str(sb / "dbg.log"), **env_extra})
+                              cwd=str(sb), env=env)
 
     def test_j5_discover_plan_binds_domain_state_end2end(self, tmp_path):
         """J5（真端到端，质询「执行侧零效果」）：`discover --plan` 声明 `META.state_domain`
@@ -1167,7 +1202,7 @@ class TestL4DomainRoute:
         red-first：修前 `discover --plan` 只按 plan-basename 拼名（不读 META）⟹ 指针指向
         `.gatekeeper.state.plan` ⟹ 本断言必红。"""
         sb, plan = self._sandbox(tmp_path)
-        dom_path = str(sb / ".gatekeeper.state.gp.r1")
+        dom_path = _bash_path(sb / ".gatekeeper.state.gp.r1")
         r = self._run(sb, "discover", "--plan", str(plan))
         assert r.returncode == 0, f"discover failed: {r.stdout}\n{r.stderr}"
         pointer = json.loads((sb / ".gatekeeper.plan").read_text(encoding="utf-8"))
@@ -1186,8 +1221,8 @@ class TestL4DomainRoute:
         """
         sb, plan = self._sandbox(tmp_path, with_domain_state=False)
         stale = sb / ".gatekeeper.state.gp.old"
-        _write_state(stale, str(sb))
-        _write_pointer(sb / ".gatekeeper.plan", str(stale), domain="gp.old")
+        _write_state(stale, _bash_path(sb))
+        _write_pointer(sb / ".gatekeeper.plan", _bash_path(stale), domain="gp.old")
         r = self._run(sb, "discover", "--plan", str(plan))
         assert r.returncode != 0
         assert "STATE_DOMAIN_MISSING" in r.stdout
@@ -1222,12 +1257,12 @@ class TestL4DomainRoute:
         plan2 = sub / "plan.md"
         plan2.write_text(plan.read_text(encoding="utf-8"), encoding="utf-8")
         decoy = sub / ".gatekeeper.state.gp.r1"          # 诱饵：同 token、不同基址
-        _write_state(decoy, str(sb))
+        _write_state(decoy, _bash_path(sb))
         r = self._run(sb, "discover", "--plan", str(plan2))
         assert r.returncode == 0, f"discover failed: {r.stdout}\n{r.stderr}"
         pointer = json.loads((sb / ".gatekeeper.plan").read_text(encoding="utf-8"))
-        assert pointer["state_file"] == str(sb / ".gatekeeper.state.gp.r1"), pointer
-        assert pointer["state_file"] != str(decoy), "基址取自计划目录（自拼实现）"
+        assert pointer["state_file"] == _bash_path(sb / ".gatekeeper.state.gp.r1"), pointer
+        assert pointer["state_file"] != _bash_path(decoy), "基址取自计划目录（自拼实现）"
 
     def test_j16_domain_binding_visible_in_pointer_and_stdout(self, tmp_path):
         """J16（REV-5 / 五轮质询 H3 + H7 拆分）：域绑定结果**两处可见**。
@@ -1238,7 +1273,7 @@ class TestL4DomainRoute:
         （与缺口 b 所修的"静默面"同类，属不对称修补）。
         """
         sb, plan = self._sandbox(tmp_path)
-        dom_path = str(sb / ".gatekeeper.state.gp.r1")
+        dom_path = _bash_path(sb / ".gatekeeper.state.gp.r1")
         r = self._run(sb, "discover", "--plan", str(plan))
         assert r.returncode == 0, f"discover failed: {r.stdout}\n{r.stderr}"
         out = json.loads(r.stdout)
@@ -1278,7 +1313,7 @@ class TestL4DomainRoute:
         sb, plan = self._sandbox(tmp_path)
         r = self._run(sb, "discover", "--plan", str(plan))
         assert r.returncode == 0, f"discover failed: {r.stdout}\n{r.stderr}"
-        dom_path = str(sb / ".gatekeeper.state.gp.r1")
+        dom_path = _bash_path(sb / ".gatekeeper.state.gp.r1")
         assert json.loads((sb / ".gatekeeper.plan").read_text(encoding="utf-8"))["state_file"] == dom_path
         r2 = self._run(sb, "state", "--clean-isolated", GK_STATE_DOMAIN_ROUTE="0")
         flat = r2.stdout.replace("\\", "/")
@@ -1306,10 +1341,10 @@ class TestL4DomainRoute:
         """
         sb, plan = self._sandbox(tmp_path)
         explicit = sb / ".gatekeeper.state.explicit"
-        _write_state(explicit, str(sb))
+        _write_state(explicit, _bash_path(sb))
         prior = sb / ".gatekeeper.state.gp.other"
-        _write_state(prior, str(sb))
-        _write_pointer(sb / ".gatekeeper.plan", str(prior), domain="gp.other")
+        _write_state(prior, _bash_path(sb))
+        _write_pointer(sb / ".gatekeeper.plan", _bash_path(prior), domain="gp.other")
         before = (sb / ".gatekeeper.plan").read_text(encoding="utf-8")
         r = self._run(sb, "discover", "--plan", str(plan), STATE_FILE=str(explicit))
         assert r.returncode != 0, r.stdout
@@ -1353,8 +1388,8 @@ class TestL4DomainRoute:
         命名本 state。"""
         sb, _ = self._sandbox(tmp_path)
         stale = sb / ".gatekeeper.state.gp.old"
-        _write_state(stale, str(sb))
-        _write_pointer(sb / ".gatekeeper.plan", str(stale), domain="gp.old")
+        _write_state(stale, _bash_path(sb))
+        _write_pointer(sb / ".gatekeeper.plan", _bash_path(stale), domain="gp.old")
         r = self._run(sb, "discover", "--plan", "no-such-plan-token-xyz")
         assert r.returncode != 0, r.stdout
         assert "PLAN_NOT_FOUND" in r.stdout, r.stdout

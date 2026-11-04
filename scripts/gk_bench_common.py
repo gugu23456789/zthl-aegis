@@ -116,9 +116,9 @@ def init_state(path, target_bytes=128 * 1024, label="bench"):
 
 
 def state_status(path):
-    """校验 state JSON + `_checksum`，返回 seq/字节数/临时残留（WAL-aware）。"""
+    """校验 state JSON + `_checksum`，返回 seq/字节数/临时残留。"""
     import gk_json_utils as JU
-    d = JU.read_state_file(path)                  # checkpoint + `<path>.wal` replay
+    d = JU.read_json_file(path)
     if "error" in d:
         return {"ok": False, "error": d["error"], "bytes": safe_size(path)}
     got = d.pop("_checksum", None)

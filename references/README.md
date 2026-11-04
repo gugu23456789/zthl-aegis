@@ -9,7 +9,7 @@ Citation discipline:
 - Historical line numbers are not kept in the public tree.
 
 <!-- GK-REFS:START（由 scripts/gk_docgen_facts.py 生成，勿手改） -->
-> 公开面共 **26** 份文档（本索引自动生成；出包范围 = `oss-export-whitelist.json`）。
+> 公开面共 **24** 份文档（本索引自动生成；出包范围 = `oss-export-whitelist.json`）。
 
 ### 1. Architecture and routing
 
@@ -63,8 +63,6 @@ Citation discipline:
 
 | Document | Purpose |
 |:--|:--|
-| [oss-hooks.md](oss-hooks.md) | 技能的 Hook：契约、门禁与安装安全网 |
-| [oss-moa-phase-provenance.md](oss-moa-phase-provenance.md) | MoA 相位/污染 provenance（公开口径） |
 | [research-408.md](research-408.md) | Research 408 — 计算机 408 四轴优化分析 |
 
 <!-- GK-REFS:END -->

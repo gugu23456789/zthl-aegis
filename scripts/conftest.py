@@ -5,44 +5,8 @@ Shared fixtures and utilities for gk_*.py tests.
 """
 
 import json
-import os
-import signal
 
 import pytest
-
-
-# ── 单测看门狗（2026-11-03，全量取证引出）─────────────────────────────────────
-# 背景：全量在 99% 处被 WSL 9p 的 D 态 RPC 挂起 >16min（`wchan=p9_client_rpc`），
-#   xdist 其余 worker 空等。无 pytest-timeout 插件（按规则不装包）⟹ 用 SIGALRM 兜住
-#   **Python 层**挂起/长睡；D 态内核等待无法被信号打断，仍需外部 stall 看门狗或迁 ext4。
-# 默认 **0 = 关闭**（opt-in）：SIGALRM 若在子进程等待/teardown 中触发，可能让 xdist worker
-# 非正常退出并把 controller 挂住（2026-11-03 ext4 A/B 实测过一次「无 worker、controller
-# 卡在 futex」）。排障时显式开：`GK_TEST_TIMEOUT=180 pytest ...`；常驻兜底用**外部** stall
-# 看门狗（日志 N 秒无增长就抓 wchan 并 kill），它不依赖测试内部状态。
-_TEST_TIMEOUT_S = float(os.environ.get("GK_TEST_TIMEOUT", "0") or "0")
-
-
-@pytest.hookimpl(hookwrapper=True)
-def pytest_runtest_protocol(item, nextitem):
-    if _TEST_TIMEOUT_S <= 0 or not hasattr(signal, "SIGALRM"):
-        yield
-        return
-
-    def _alarm(signum, frame):
-        raise TimeoutError("GK_TEST_TIMEOUT: %s 超过 %.0fs（可调 GK_TEST_TIMEOUT）"
-                           % (item.nodeid, _TEST_TIMEOUT_S))
-
-    try:
-        _old = signal.signal(signal.SIGALRM, _alarm)
-        signal.setitimer(signal.ITIMER_REAL, _TEST_TIMEOUT_S)
-    except (ValueError, OSError):          # 非主线程 / 不支持 ⟹ 不阻断
-        yield
-        return
-    try:
-        yield
-    finally:
-        signal.setitimer(signal.ITIMER_REAL, 0)
-        signal.signal(signal.SIGALRM, _old)
 
 
 def pytest_configure(config):

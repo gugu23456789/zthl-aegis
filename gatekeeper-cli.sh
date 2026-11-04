@@ -4096,8 +4096,11 @@ cmd_model_probe() {
 
 # ---------- phase-probe（相位扫描探针：密集 sweep × 每 stride 置换检验 + Bonferroni） ----------
 # Refs: W2A P2 §6（一次密集 sweep）；ECC-42B4A6E15927
+# 2026-11-04（导出面修复）：本命令属**排除面**（phase_probe 族不随公开包）。公开树里
+#   原实现会裸派发到缺失脚本 ⟹ `rc=2` 且 **stdout 空**（stderr 被吞进 dbg log）——
+#   用户无法区分"没装/坏了"。现补加载安全网同款具名出口（对齐 bashpy / paper-review）。
 cmd_phase_probe() {
-  # 相位探针（迁自论文仓 repro/phase_probe.py；ECC-42B4A6E15927）：
+  # 相位探针（迁自论文仓实验脚本；ECC-42B4A6E15927；副本已冻结，以本仓为唯一事实源）：
   #   密集 sweep 填充长度 L=0..N-1，对**每个**候选 stride S 做置换检验 + Bonferroni 校正；
   #   `N_LENGTHS < 2S` 的 stride 标 UNDER-POWERED（不得读成真 null）；ONE sweep 服务所有 stride。
   #   默认 0 API：--dry-run 用合成臂自检统计量；--real 才委派 scripts/subagent_runner.py（联网）。
@@ -4106,6 +4109,10 @@ cmd_phase_probe() {
     echo '  Dense phase sweep: phase-invariance p for every candidate stride (Bonferroni; under-powered flagged).'
     echo '  --dry-run = synthetic arm (no API). --real = delegate to scripts/subagent_runner.py (network).'
     return 0
+  fi
+  if [ ! -f "$SKILL_DIR/scripts/gk_phase_probe.py" ]; then
+    echo '{"ok":false,"error":"PLUGIN_NOT_SHIPPED","feature":"phase-probe","source":"missing","detail":"phase 族（探针/格式/敏感度/混杂模拟/统计）均不随公开包（臂设计与稿件实验面属私仓）","hint":"需要该能力请在私仓运行；公开面无等价替代命令"}'
+    return 2
   fi
   local out rc
   out=$(python3 "$SKILL_DIR/scripts/gk_phase_probe.py" "$@" 2>>"$GK_DBG_LOG")
@@ -7101,8 +7108,60 @@ print(json.dumps({"ok": True, "provider": sys.argv[1], "env_var": sys.argv[2],
     "$provider" "$env_var" "$_kf" "$( [ "$_file_ok" = true ] && echo 1 || echo 0 )" "$_note"
 }
 
+# 2026-11-04（方案 C：**不锁单一平台**）：主仓命中判定收成**单源**。
+#   病象（实测）：`_main_repo_resolve` 解析失败时 `_MAIN_REPO_*_RE` 为空，而
+#   `rg -qi ""` **命中一切** ⟹ 任何路径都被判成主仓 ⟹ `MAIN_WORKTREE` 假拦
+#   （跨平台调用/换机后 python 解析不到主仓即全量误拦）。
+#   判据：RG 缺位 ⟹ fail-closed(0)；两形态正则**各自非空才判**，任一命中 ⟹ 0。
+_main_repo_hit() {
+  local _p="${1:-}"
+  [ -z "$RG" ] && return 0
+  if [ -n "$_MAIN_REPO_WIN_RE" ] && printf '%s' "$_p" | "$RG" -qi "$_MAIN_REPO_WIN_RE"; then
+    return 0
+  fi
+  if [ -n "$_MAIN_REPO_WSL_RE" ] && printf '%s' "$_p" | "$RG" -qi "$_MAIN_REPO_WSL_RE"; then
+    return 0
+  fi
+  return 1
+}
+
+# 2026-11-04（方案 C：**不锁单一平台**）：主仓命中判定收成**单源**。
+#   病象（实测）：`_main_repo_resolve` 解析失败时 `_MAIN_REPO_*_RE` 为空，而
+#   `rg -qi ""` **命中一切** ⟹ 任何路径都被判成主仓 ⟹ `MAIN_WORKTREE` 假拦
+#   （跨平台调用/换机后 python 解析不到主仓即全量误拦）。
+#   判据：RG 缺位 ⟹ fail-closed(0)；两形态正则**各自非空才判**，任一命中 ⟹ 0。
+_main_repo_hit() {
+  local _p="${1:-}"
+  [ -z "$RG" ] && return 0
+  if [ -n "$_MAIN_REPO_WIN_RE" ] && printf '%s' "$_p" | "$RG" -qi "$_MAIN_REPO_WIN_RE"; then
+    return 0
+  fi
+  if [ -n "$_MAIN_REPO_WSL_RE" ] && printf '%s' "$_p" | "$RG" -qi "$_MAIN_REPO_WSL_RE"; then
+    return 0
+  fi
+  return 1
+}
+
 # ---------- balance (DeepSeek API balance query, MiMo 无此 endpoint) ----------
+# 2026-11-04（用户：「余额检查命令需要改造一下，需要用于随机或者定期。检查是否存在 token
+#   异常消耗 / 缓存命中突然崩溃？subagent 那边应该已经有类似的东西了？」）：
+#   `--audit` 与上一快照比（余额速率/归零），`--usage FILE` 复用 `gk_cache_observe`（subagent
+#   逐调用归因）判缓存崩溃/失效点，`--record` 落本机台账，`--jitter N` 把采样时刻随机化。
+#   默认（不带新 flag）输出**逐字不变** —— 加性变更，不影响既有消费者。
 cmd_balance() {
+  local _json=0 _record=0 _audit=0 _usage="" _jitter="0" _strict=0 _hist=""
+  while [ $# -gt 0 ]; do
+    case "${1:-}" in
+      --json) _json=1 ;;
+      --record) _record=1 ;;
+      --audit) _audit=1 ;;
+      --usage) _usage="${2:-}"; shift ;;
+      --jitter) _jitter="${2:-0}"; shift ;;
+      --strict) _strict=1 ;;
+      --history) _hist="${2:-}"; shift ;;
+    esac
+    shift
+  done
   local api_key="${API_KEY}"
   [ -z "$api_key" ] && { _resolve_api_key; api_key="$API_KEY"; }
   [ -z "$api_key" ] && { echo '{"error":"API key not set"}'; return 1; }
@@ -7115,11 +7174,30 @@ cmd_balance() {
     balance_url="https://api.deepseek.com/user/balance"
   fi
 
+  # 随机抖动：打散采样时刻（避免每次都在同一缓存窗口/限流点取数）
+  case "$_jitter" in
+    ''|0|0.0) : ;;
+    *) python3 -c "import random,time,sys;time.sleep(random.uniform(0,float(sys.argv[1])))" "$_jitter" 2>/dev/null || true ;;
+  esac
+
   local resp; resp=$(curl -s --max-time 30 -X GET "$balance_url" \
     -H "Accept: application/json" \
     -H "Authorization: Bearer ${api_key}" 2>/dev/null)
 
   [ -z "$resp" ] && { echo '{"error":"balance API call failed"}'; return 1; }
+
+  if [ "$_json" = "1" ] || [ "$_record" = "1" ] || [ "$_audit" = "1" ] \
+     || [ -n "$_usage" ] || [ "$_strict" = "1" ] || [ -n "$_hist" ]; then
+    local _args=(--stdin)
+    [ "$_record" = "1" ] && _args+=(--record)
+    [ "$_audit" = "1" ] && _args+=(--audit)
+    [ "$_strict" = "1" ] && _args+=(--strict)
+    [ -n "$_usage" ] && _args+=(--usage "$_usage")
+    [ -n "$_hist" ] && _args+=(--history "$_hist")
+    [ "$_json" = "1" ] && _args+=(--json)
+    printf '%s' "$resp" | python3 "${SKILL_DIR}/scripts/gk_balance_audit.py" "${_args[@]}"
+    return $?
+  fi
 
   echo "$resp" | python3 "${SKILL_DIR}/scripts/balance_format.py" 2>/dev/null
 }
@@ -7378,7 +7456,7 @@ cmd_doc_align() {
   fi
 }
 
-# ---------- paper-review (稿件模拟同行评审插件 — 2026-08-28，域 7 专项) ----------
+# ---------- paper-review (论文写作投稿前置模拟评审插件 — 2026-08-28，域 7 专项；投稿前自检，非同行审稿) ----------
 # Refs: 多会议评审准则档案（按 venue 归档，档案随私仓保留）—— 轨道政策
 # 单一事实源内置于 gk_paper_review.py。产出"添加/补充什么才能提高接收概率"的缺口清单 + 接收概率。
 # --local 0 API 确定性缺口扫描；--subagent 深度评审（自动解析 GATEKEEPER_API_KEY/DEEPSEEK_API_KEY）。

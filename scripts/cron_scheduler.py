@@ -79,7 +79,7 @@ def _acquire_lock():
             try:
                 msvcrt.locking(fd.fileno(), msvcrt.LK_NBLCK, 1)
                 return fd
-            except:
+            except Exception:
                 fd.close()
                 return None
         else:
@@ -88,10 +88,10 @@ def _acquire_lock():
             try:
                 fcntl.flock(fd.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
                 return fd
-            except:
+            except Exception:
                 fd.close()
                 return None
-    except:
+    except Exception:
         return None
 
 def _release_lock(fd):
@@ -104,7 +104,7 @@ def _release_lock(fd):
                 import fcntl
                 fcntl.flock(fd.fileno(), fcntl.LOCK_UN)
             fd.close()
-        except:
+        except Exception:
             pass
 
 def _sanitize_subprocess_env(env):
@@ -272,7 +272,7 @@ def _log(msg):
         os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True)
         with open(LOG_FILE, "a") as f:
             f.write(line + "\n")
-    except:
+    except Exception:
         pass
 
 def tick(verbose=False):

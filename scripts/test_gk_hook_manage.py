@@ -207,6 +207,140 @@ class TestShapeAndLegacy:
         assert st["ours"] == 0 and st["foreign"] == 1, "目录前缀相同不等于本仓条目"
 
 
+class TestSyncAndCoverage:
+    """2026-11-04（用户：「插件的安装钩子需要自动化更新扩展」）。
+
+    两条口径：
+      ① 默认 profile 必须覆盖**全部**写面（原生 CreateFile/DeleteFile + MCP 两形态），
+         否则内核里已实现的 MCP 写归一收不到事件 = 静默绕过；
+      ② `sync` 幂等：有漂移才写（备份 + 原子写 + 回读校验），无漂移零写入。
+    """
+
+    def test_safe_profile_covers_every_write_surface(self):
+        assert ghm._coverage_missing(ghm.PROFILES["safe"]) == []
+        for tool in ("CreateFile", "DeleteFile", "run_mcp", "mcp__fs__write_file"):
+            assert tool in ghm.COVERAGE_TOOLS
+
+    @staticmethod
+    def _legacy_entry(sd):
+        """旧版 safe 覆盖面（缺 CreateFile/DeleteFile/MCP）+ 现行命令。"""
+        return {"matcher": "Edit|Write|SearchReplace|RunCommand",
+                "hooks": [{"type": "command", "command": ghm.hook_command(sd),
+                           "timeout": ghm.HOOK_TIMEOUT}]}
+
+    def test_status_reports_coverage_gap(self, tmp_path):
+        sd = _skill(tmp_path)
+        hp = tmp_path / "hooks.json"
+        _write_hooks(hp, {"version": 1, "hooks": {"PreToolUse": [self._legacy_entry(sd)]}})
+        st = ghm.load_status(hp, sd)
+        mm = [d for d in st["drift"] if d["kind"] == "matcher_mismatch"]
+        assert mm, st["drift"]
+        assert set(mm[0]["coverage_missing"]) == {
+            "CreateFile", "DeleteFile", "run_mcp", "mcp__fs__write_file"}
+
+    def test_status_wider_matcher_is_not_drift(self, tmp_path):
+        """装得比期望宽（`*`）算健康 —— 不能制造假红。"""
+        sd = _skill(tmp_path)
+        hp = tmp_path / "hooks.json"
+        assert ghm.install(hp, sd, "full")["ok"]
+        assert ghm.load_status(hp, sd, "safe")["drift"] == []
+
+    def test_status_reports_timeout_drift(self, tmp_path):
+        sd = _skill(tmp_path)
+        hp = tmp_path / "hooks.json"
+        stale = ghm._entry_for(sd, "safe")
+        stale["hooks"][0]["timeout"] = 30
+        _write_hooks(hp, {"version": 1, "hooks": {"PreToolUse": [stale]}})
+        kinds = [d["kind"] for d in ghm.load_status(hp, sd)["drift"]]
+        assert "timeout_mismatch" in kinds
+
+    def test_status_reports_command_drift_in_multi_hook_entry(self, tmp_path):
+        """同条目挂第二条命令（不是本仓 wrapper）也属漂移 —— 命令面必须逐条对齐。"""
+        sd = _skill(tmp_path)
+        hp = tmp_path / "hooks.json"
+        ent = ghm._entry_for(sd, "safe")
+        ent["hooks"].append({"type": "command", "command": "bash /opt/other/guard.sh",
+                             "timeout": ghm.HOOK_TIMEOUT})
+        _write_hooks(hp, {"version": 1, "hooks": {"PreToolUse": [ent]}})
+        st = ghm.load_status(hp, sd)
+        assert st["ours"] == 1
+        assert "command_mismatch" in [d["kind"] for d in st["drift"]]
+
+    def test_sync_none_when_healthy_and_zero_write(self, tmp_path):
+        sd = _skill(tmp_path)
+        hp = tmp_path / "hooks.json"
+        assert ghm.install(hp, sd, "safe")["ok"]
+        before = hp.read_bytes()
+        r = ghm.sync(hp, sd, "safe")
+        assert r["ok"] is True and r["action"] == "none"
+        assert hp.read_bytes() == before, "无漂移必须零写入"
+
+    def test_sync_installs_from_absent(self, tmp_path):
+        sd = _skill(tmp_path)
+        hp = tmp_path / "hooks.json"
+        r = ghm.sync(hp, sd, "safe")
+        assert r["ok"] is True and r["action"] == "updated"
+        assert ghm.load_status(hp, sd)["ours"] == 1
+
+    def test_sync_updates_stale_matcher(self, tmp_path):
+        sd = _skill(tmp_path)
+        hp = tmp_path / "hooks.json"
+        _write_hooks(hp, {"version": 1,
+                          "hooks": {"PreToolUse": [self._legacy_entry(sd), FOREIGN]}})
+        r = ghm.sync(hp, sd, "safe")
+        assert r["ok"] is True and r["action"] == "updated"
+        assert r["backup"] and Path(r["backup"]).exists()
+        assert r["drift_after"] == []
+        entries = json.loads(hp.read_text(encoding="utf-8"))["hooks"]["PreToolUse"]
+        assert len(entries) == 2 and FOREIGN in entries
+        ours = [e for e in entries if e["matcher"] == ghm.PROFILES["safe"]]
+        assert len(ours) == 1
+
+    def test_sync_collapses_duplicates(self, tmp_path):
+        sd = _skill(tmp_path)
+        hp = tmp_path / "hooks.json"
+        ent = ghm._entry_for(sd, "safe")
+        _write_hooks(hp, {"version": 1, "hooks": {"PreToolUse": [ent, dict(ent)]}})
+        r = ghm.sync(hp, sd, "safe")
+        assert r["ok"] is True and r["action"] == "updated"
+        assert ghm.load_status(hp, sd)["ours"] == 1
+
+    def test_sync_dry_run_writes_nothing(self, tmp_path):
+        sd = _skill(tmp_path)
+        hp = tmp_path / "hooks.json"
+        _write_hooks(hp, {"version": 1, "hooks": {"PreToolUse": [self._legacy_entry(sd)]}})
+        before = hp.read_bytes()
+        r = ghm.sync(hp, sd, "safe", dry_run=True)
+        assert r["ok"] is True and r["action"] == "dry_run"
+        assert hp.read_bytes() == before
+
+    def test_sync_off_removes_ours_keeps_foreign(self, tmp_path):
+        sd = _skill(tmp_path)
+        hp = tmp_path / "hooks.json"
+        _write_hooks(hp, _base())
+        assert ghm.install(hp, sd, "safe")["ok"]
+        r = ghm.sync(hp, sd, "off")
+        assert r["ok"] is True and r["action"] == "updated"
+        st = ghm.load_status(hp, sd, "off")
+        assert st["ours"] == 0 and st["foreign"] == 1
+
+    def test_sync_refuses_unparseable_zero_write(self, tmp_path):
+        hp = tmp_path / "hooks.json"
+        hp.write_text("{not json", encoding="utf-8")
+        before = hp.read_bytes()
+        r = ghm.sync(hp, _skill(tmp_path), "safe")
+        assert r["ok"] is False and r["error"] == "HOOKS_UNPARSEABLE"
+        assert hp.read_bytes() == before
+
+    def test_cli_sync_json(self, tmp_path):
+        hp = tmp_path / "hooks.json"
+        r = subprocess.run([sys.executable, str(Path(__file__).parent / "gk_hook_manage.py"),
+                            "sync", "--hooks", str(hp), "--skill-dir", _skill(tmp_path), "--json"],
+                           capture_output=True, text=True, timeout=30)
+        assert r.returncode == 0, r.stdout + r.stderr
+        assert json.loads(r.stdout)["action"] == "updated"
+
+
 class TestCli:
     def test_status_json_exit_zero(self, tmp_path):
         hp = tmp_path / "hooks.json"

@@ -24,7 +24,7 @@ if not DEEPSEEK_KEY:
             capture_output=True, text=True
         )
         DEEPSEEK_KEY = result.stdout.strip()
-    except: pass
+    except Exception: pass
 if not DEEPSEEK_KEY:
     print('{"error":"DEEPSEEK_API_KEY not set"}'); sys.exit(1)
 

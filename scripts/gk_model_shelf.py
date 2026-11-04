@@ -172,6 +172,12 @@ def pin_checks():
     try:
         import gk_phase_formats as F
         import gk_phase_probe as P
+    except ImportError as e:
+        # 2026-11-04（导出面修复）：phase 族属导出**排除面** ⟹ 公开包本就没有这些模块。
+        # 记 `NOT_SHIPPED`（信息态）而非 FAIL —— FAIL 只应表示"模块在场但与 PINNED 对不上"
+        # （真漂移）。否则公开包每次 model-shelf 都恒定一行假红。
+        return [_row("probe_import", "NOT_SHIPPED",
+                     "phase 族不随公开包（%s）" % e.__class__.__name__)]
     except Exception as e:                       # noqa: BLE001
         return [_row("probe_import", "FAIL", str(e))]
     rows.append(_row("niah_long_pairs",

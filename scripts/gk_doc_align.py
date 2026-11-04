@@ -61,7 +61,6 @@ import time
 from pathlib import Path
 
 from gk_json_utils import extract_last_json, extract_markdown_int, extract_markdown_table
-from gk_json_utils import read_state_file
 import gk_host_paths as _host_paths  # noqa: E402  跨宿主路径形态/用户目录单源
 
 # ── 论文框架事实清单（**私有面**，2026-10-28 G7b 裁剪）────────────────────────
@@ -314,8 +313,6 @@ _CROSSREF_DOCS = [
     "references/sequence-node-safety-net-template.md",
     "references/meta-routing-protocol.md",
     "references/architecture-overview.md",
-    "references/oss-hooks.md",                                 # 开源 hook 契约（2026-11-03）
-    "references/oss-moa-phase-provenance.md",                  # MoA 污染 provenance 口径（2026-11-03）
 ]
 
 
@@ -2708,10 +2705,7 @@ def _read_state_safe(state_file: str):
         p = Path(state_file)
         if not p.exists():
             return None, f"state 文件不存在: {state_file}"
-        # 2026-11-03（M1）：WAL-aware（checkpoint + `<state>.wal` replay）。
-        data = read_state_file(state_file)
-        if "error" in data:
-            return None, f"state 读取失败: {_clip(str(data['error']), 100)}"
+        data = json.loads(p.read_text(encoding="utf-8"))
         if not isinstance(data, dict):
             return None, f"state 顶层非 JSON 对象: {state_file}"
         return data, ""

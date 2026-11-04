@@ -16,21 +16,27 @@ import datetime
 import hashlib
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 import gk_state  # noqa: E402
-from gk_json_utils import state_lock, update_state, _state_checksum  # noqa: E402
+from gk_json_utils import state_lock, update_state  # noqa: E402
 
 _BEST_DEFAULTS = {"score": 0.0, "stage": "", "r_phase": "", "timestamp": ""}
+# 对齐原内联 `rg -oP 'r_phase.:.(\S+)\s'`：取 r_phase 键后的第一个非空白 token
+_R_PHASE_RE = re.compile(r'r_phase["\s]*:\s*["\']?([^\s"\'",}]+)')
 
 
 def _extract_r_phase(state_path: str) -> str:
-    """从 state **权威态**（checkpoint + WAL replay）取 r_phase；缺失/不可读 → ""。"""
-    d = gk_state._read_state(state_path)
-    v = d.get("r_phase") if isinstance(d, dict) else ""
-    return str(v).strip() if v is not None else ""
+    """从 state 文件原文提取 r_phase（对齐 rg -oP 语义，去掉外部 rg 依赖）。"""
+    try:
+        text = Path(state_path).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+    m = _R_PHASE_RE.search(text)
+    return m.group(1).strip().strip(",").strip('"') if m else ""
 
 
 def cmd_update_best(state_path: str, score: str, stage: str,
@@ -223,7 +229,7 @@ def cmd_update_gate_data(state_path: str, fragment: str, *,
         w = update_state(state_path, lambda d: d.setdefault("gate_data", {}).update(obj) or d)
     if "error" in w:
         return {"ok": False, "error": w["error"]}
-    return {"ok": True, "checksum": _state_checksum(w["data"])}
+    return {"ok": True, "checksum": w["data"].get("_checksum")}
 
 
 # 顶层键黑名单（`set-top` 不得触碰）：`gate_data` 走 update-gate-data（带 fragment 校验）；
@@ -327,7 +333,7 @@ def cmd_set_top(state_path: str, key: str, value_json: str) -> dict:
                                     source="state-patch")
         except Exception:  # noqa: BLE001
             pass
-    return {"ok": True, "key": k, "value": val, "checksum": _state_checksum(w["data"])}
+    return {"ok": True, "key": k, "value": val, "checksum": w["data"].get("_checksum")}
 
 
 def cmd_del_top(state_path: str, key: str) -> dict:
@@ -736,92 +742,44 @@ def _walk_to_parent(data: dict, segs: list):
     return cur, ""
 
 
-class _PatchReject(Exception):
-    """批内叶级拒绝（目标已是容器 / 中间段不是对象）⟹ 整批 rollback（update_state 不追加 WAL）。"""
-
-
-def _prepare_leaf(path: str, value_json: str) -> tuple:
-    """叶写前置校验：路径拒绝 / JSON 解析 / 额度夹取。→ `((segs, val), None)` 或 `(None, err)`。"""
-    segs = _split_path(path)
-    deny = _path_denied(segs)
-    if deny:
-        return None, {"ok": False, "error": deny, "path": path,
-                      "hint": "usage: set-nested <state> <a.b.c> <json-value>"}
-    segs = _normalize_gate_path(segs)          # 2026-10-04：漏 `gate_data.` 前缀自愈
-    value_json = _resolve_at_file(value_json)  # 2026-10-04：`@<file>` 文件通道
-    try:
-        val = json.loads(value_json)
-    except Exception as e:  # noqa: BLE001 — CLI 边界
-        return None, {"ok": False, "error": f"value 非合法 JSON（{type(e).__name__}: {e}）",
-                      "hint": "usage: set-nested <state> <a.b.c> <json-value|@file>"}
-    return (segs, _ceiling_clamp(segs, val)), None
-
-
-def _apply_leaf(data: dict, segs: list, val) -> None:
-    """在 `data` 上写一个定点叶；容器目标 ⟹ `_PatchReject`（保 G4 语义）。"""
-    parent, err = _walk_to_parent(data, segs)
-    if parent is None:
-        raise _PatchReject(err)
-    leaf = segs[-1]
-    if isinstance(parent.get(leaf), (dict, list)):
-        raise _PatchReject(
-            f"目标 `{'.'.join(segs)}` 已是容器（dict/list）⟹ 整键替换被禁（G4），"
-            "请写到更深的叶子")
-    parent[leaf] = val
-
-
-def cmd_set_nested_batch(state_path: str, items: list) -> dict:
-    """一轮多叶写**合并为一次** state 事务（WAL 单条记录）；任一叶非法 ⟹ 整批零写。
-
-    `items = [{"path": "gate_data.a.b", "value": "<json>"}, ...]`；同批同路径重复写按顺序
-    生效（最后写胜），与逐条调用语义一致。返回值含 `count` / `paths` / `values`。
-    """
-    prepared, paths, values = [], [], []
-    for i, it in enumerate(items or []):
-        it = it if isinstance(it, dict) else {}
-        path = str(it.get("path") or "")
-        raw = it.get("value")
-        pair, err = _prepare_leaf(path, "null" if raw is None else str(raw))
-        if err:
-            err = dict(err)
-            err["index"] = i
-            return err
-        prepared.append(pair)
-        paths.append(".".join(pair[0]))
-        values.append(pair[1])
-    if not prepared:
-        return {"ok": False, "error": "空批次：items 为空"}
-
-    def _mut(d):
-        for segs, val in prepared:              # 顺序生效（同批重复路径 = 最后写胜）
-            _apply_leaf(d, segs, val)
-        return d
-
-    try:
-        w = update_state(state_path, _mut)
-    except _PatchReject as e:
-        return {"ok": False, "error": str(e), "hint": "整批拒绝：不产生半批写"}
-    if not w.get("ok", False):
-        return {"ok": False, "error": w.get("error", "state 写入失败"),
-                "detail": w.get("detail", "")}
-    return {"ok": True, "count": len(prepared), "paths": paths, "values": values}
-
-
 def cmd_set_nested(state_path: str, path: str, value_json: str) -> dict:
     """锁内只改**定点叶子**（缺失中间段自动建 dict）；**禁**把已存在的 dict/list 整体替换。
 
     只写面：不触碰兄弟键、不触碰同层的其它会话 ⟹ 从根上消除「锁外读整份 → 回写整份」的丢更新。
     负臂（`test_arm1d`）：空路径 / `_` 前缀 / `worktrees_extra` / 目标已是容器
     （如 `gate_data`、`gate_data.edit_budget.sessions`）⟹ fail-loud。
-
-    S4（M3，2026-11-03）：写路径改走 WAL（`update_state`）⟹ 1 KB 级叶写不再整份重写；
-    批内语义与 `cmd_set_nested_batch` **同一实现**（单条 = 单元素批）。
     """
-    r = cmd_set_nested_batch(state_path, [{"path": path, "value": value_json}])
-    if not r.get("ok"):
-        r.setdefault("path", path)
-        return r
-    return {"ok": True, "path": r["paths"][0], "value": r["values"][0]}
+    segs = _split_path(path)
+    deny = _path_denied(segs)
+    if deny:
+        return {"ok": False, "error": deny, "path": path,
+                "hint": "usage: set-nested <state> <a.b.c> <json-value>"}
+    segs = _normalize_gate_path(segs)          # 2026-10-04：漏 `gate_data.` 前缀自愈（消顶层残留）
+    value_json = _resolve_at_file(value_json)  # 2026-10-04：`@<file>` 文件通道（消大/中文内联 argv）
+    try:
+        val = json.loads(value_json)
+    except Exception as e:  # noqa: BLE001 — CLI 边界
+        return {"ok": False, "error": f"value 非合法 JSON（{type(e).__name__}: {e}）",
+                "hint": "usage: set-nested <state> <a.b.c> <json-value|@file>"}
+    val = _ceiling_clamp(segs, val)            # §17.2 路③：节点额度字段夹取
+    with state_lock(state_path):
+        data = gk_state._read_state(state_path)
+        if "error" in data:
+            return {"ok": False, "error": data["error"]}
+        parent, err = _walk_to_parent(data, segs)
+        if parent is None:
+            return {"ok": False, "error": err, "path": ".".join(segs)}
+        leaf = segs[-1]
+        if isinstance(parent.get(leaf), (dict, list)):
+            return {"ok": False, "path": ".".join(segs),
+                    "error": f"目标 `{'.'.join(segs)}` 已是容器（dict/list）⟹ 整键替换被禁（G4），"
+                             "请写到更深的叶子"}
+        parent[leaf] = val
+        w = gk_state._write_state(data, state_path)
+    if not w.get("ok", False):
+        return {"ok": False, "error": w.get("error", "state 写入失败"),
+                "detail": w.get("detail", "")}
+    return {"ok": True, "path": ".".join(segs), "value": val, "checksum": w.get("checksum")}
 
 
 def cmd_append_list(state_path: str, path: str, item_json: str) -> dict:

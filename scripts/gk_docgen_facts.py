@@ -74,9 +74,6 @@ def collect(skill_dir: str = "") -> dict:
     except (OSError, subprocess.SubprocessError):
         pass
     try:
-        # 运行时导入（**不**做静态解析）：角色表是 `subagent_runner.ROLE_TOOLS` 的活对象，
-        #   静态正则无法证明与运行时一致 ⟹ 覆盖不可验证。CI 需装 openai / openai-agents /
-        #   pydantic，保证导入成功（安装清单见 ci.yml / release.yml / bench-nightly.yml）。
         sys.path.insert(0, str(sd / "scripts"))
         import subagent_runner as SR
         facts["roles"] = sorted(SR.ROLE_TOOLS)

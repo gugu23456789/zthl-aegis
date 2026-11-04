@@ -50,7 +50,7 @@ def _run_generator(tmp_path: Path, cli_body: str) -> str:
 # 夹具 1：注册键含连字符（`paper-review`），函数名是下划线形态（`cmd_paper_review`）。
 # 注记序 = banner / Refs / Usage —— 正是被 ② 覆盖成 Purpose 的形态。
 _ALIAS_FIXTURE = """#!/bin/bash
-# ---------- paper-review (论文模拟同行评审) ----------
+# ---------- paper-review (论文写作投稿前置模拟评审) ----------
 # Refs: references/paper-review.md
 # Usage: paper-review --venue aamas|fse
 cmd_paper_review() {
@@ -85,7 +85,7 @@ class TestPurposeNotPollutedByUsageNote:
 
     def test_purpose_is_banner_description(self, tmp_path):
         out = _run_generator(tmp_path, _ALIAS_FIXTURE)
-        assert "**Purpose**: paper-review (论文模拟同行评审)" in out, out
+        assert "**Purpose**: paper-review (论文写作投稿前置模拟评审)" in out, out
 
 
 # 夹具 2：cmd_alpha 之上全是注释（含 shebang）⟹ 触发 j 到 -1；

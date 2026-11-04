@@ -70,7 +70,7 @@ source is not included — see below):
 
 | Plugin id | Name / source | Form in this package | Capability allow-list |
 |---|---|---|---|
-| `paper-review` | `gk_paper_review` (builtin) | **Private-only**; not shipped publicly (source is in the export exclusion face) ⟹ the command entry returns the loading-safety-net `source=missing` | `paper-review` |
+| `paper-review` | `gk_paper_review` (builtin; pre-submission simulated review — a self-check before submission, **not peer review**) | **Private-only**; not shipped publicly (source is in the export exclusion face) ⟹ the command entry returns the loading-safety-net `source=missing` | `paper-review` |
 | `bashpy-migrate` | `zthl-bashpy-migrate` (pip / npm wrapper) | Loader `scripts/gk_bashpy_loader.py`; the plugin itself is a separate package | `analyze` `verify` `audit` `status` `check` `upgrade` `rollback` |
 | `git-workflow` | Standalone skill (MulanPSL-2.0) | Loader lives in the skill: `../git-workflow/scripts/gk_gitworkflow_loader.py` | `push` `branch` `worktree` `release` `security` `cleanup` `history` `selfcheck` `version` |
 

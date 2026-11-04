@@ -88,8 +88,12 @@ def test_token_length_official_tokenizer_file(tmp_path, monkeypatch):
 
 
 def test_filler_single_source():
-    """装饰 filler **单源**：探针与运行时注入逐字一致（禁第二实现）。"""
-    import gk_phase_probe as P
+    """装饰 filler **单源**：探针与运行时注入逐字一致（禁第二实现）。
+
+    2026-11-04：`gk_phase_probe` 属导出排除面（公开包不随附）⟹ 模块不在场时**具名 skip**
+    （`ModuleNotFoundError` 不再是公开树的全量红灯）；私仓照常跑真断言。
+    """
+    P = pytest.importorskip("gk_phase_probe", reason="phase 族不随公开包")
     for n in (0, 1, 5, 16):
         assert P.filler(n) == T.filler(n)
 

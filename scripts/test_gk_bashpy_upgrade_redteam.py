@@ -29,7 +29,7 @@ import gk_bashpy_upgrade as gbu
 import gk_bashpy_loader as gbl
 
 
-def _make_wheel(tmp_path, name="zthl_bashpy_migrate-0.2.4-py3-none-any.whl",
+def _make_wheel(tmp_path, name="zthl_bashpy_migrate-0.9.9-py3-none-any.whl",
                 audit_content="CLEAN") -> Path:
     whl = tmp_path / name
     with zipfile.ZipFile(whl, "w") as z:
@@ -37,7 +37,7 @@ def _make_wheel(tmp_path, name="zthl_bashpy_migrate-0.2.4-py3-none-any.whl",
     return whl
 
 
-def _make_tgz(tmp_path, name="pkg-0.2.4.tgz", content=b"tarball-bytes") -> Path:
+def _make_tgz(tmp_path, name="pkg-0.9.9.tgz", content=b"tarball-bytes") -> Path:
     p = tmp_path / name
     p.write_bytes(content)
     return p
@@ -87,7 +87,7 @@ class TestAttackA_WheelSelfCertification:
         man_orig = Path(gbu.SCRIPTS_DIR / "gk_plugin_manifest.py").read_text(encoding="utf-8")
         man_cp.write_text(man_orig, encoding="utf-8")
 
-        rel = {"tag_name": "v0.2.4", "assets": [
+        rel = {"tag_name": "v0.9.9", "assets": [
             {"name": "x.whl", "browser_download_url": "u/whl"},
             {"name": "x.tgz", "browser_download_url": "u/tgz"},
             {"name": "npm-integrity.json", "browser_download_url": "u/int"},
@@ -121,7 +121,7 @@ class TestAttackA_WheelSelfCertification:
         man_cp = tmp_path / "gk_plugin_manifest.py"
         man_cp.write_text(Path(gbu.SCRIPTS_DIR / "gk_plugin_manifest.py").read_text(encoding="utf-8"))
 
-        rel = {"tag_name": "v0.2.4", "assets": [
+        rel = {"tag_name": "v0.9.9", "assets": [
             {"name": "x.whl", "browser_download_url": "u/whl"},
             {"name": "x.tgz", "browser_download_url": "u/tgz"},
             {"name": "npm-integrity.json", "browser_download_url": "u/int"},
@@ -137,8 +137,8 @@ class TestAttackA_WheelSelfCertification:
              patch("gk_bashpy_upgrade.MANIFEST_FILE", man_cp):
             out = gbu.cmd_upgrade()
         assert out["ok"] is True, out
-        assert out["version"] == "0.2.4"
-        assert '"0.2.4"' in loader_cp.read_text(encoding="utf-8")
+        assert out["version"] == "0.9.9"
+        assert '"0.9.9"' in loader_cp.read_text(encoding="utf-8")
 
 
 # ── 攻击面 B（High）：备份无完整性校验 ──────────────────────────────────
@@ -178,7 +178,7 @@ class TestAttackB_TamperedBackup:
 class TestAttackC_Injection:
     def test_malicious_version_rejected(self):
         """恶意版本号（非 semver，含引号/换行注入）→ upgrade 拒绝，不进入配置替换。"""
-        for evil in ('0.2.4", "0.0.0": "evil', "0.2.4\nx", "0.2; rm -rf /", "..", ""):
+        for evil in ('0.9.9", "0.0.0": "evil', "0.9.9\nx", "0.2; rm -rf /", "..", ""):
             out = gbu._validate_version(evil)
             assert out is False, f"恶意版本 {evil!r} 必须被拒绝"
 
@@ -236,7 +236,7 @@ class TestAttackE_FailedDownloadResidue:
         man_cp = tmp_path / "gk_plugin_manifest.py"
         man_cp.write_text(Path(gbu.SCRIPTS_DIR / "gk_plugin_manifest.py").read_text(encoding="utf-8"))
 
-        rel = {"tag_name": "v0.2.4", "assets": [
+        rel = {"tag_name": "v0.9.9", "assets": [
             {"name": "x.whl", "browser_download_url": "u/whl"},
             {"name": "x.tgz", "browser_download_url": "u/tgz"},
             {"name": "npm-integrity.json", "browser_download_url": "u/int"},

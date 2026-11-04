@@ -17,13 +17,13 @@ updated: 2026-11-02
 <!-- GK-FACTS:START（由 scripts/gk_docgen_facts.py 生成，勿手改） -->
 | 事实 | 值 | 来源（可复算） |
 |:--|:--|:--|
-| CLI 行数 | 12676 | `wc -l gatekeeper-cli.sh` |
+| CLI 行数 | 12616 | `wc -l gatekeeper-cli.sh` |
 | CLI 命令数 | 52 | `^_CMD_REG[` 计数 |
 | 红队站点 | 16 | `gk_chain.py` 的 `Step("RED-*")` |
 | 自检检查函数 | 37 | `gk_self_check.py` 的 `def check_*` |
-| references 入库 md | 27 | `git ls-files references/*.md`（顶层） |
+| references 入库 md | 47 | `git ls-files references/*.md`（顶层） |
 | 子代理角色 | 8 | `subagent_runner.ROLE_TOOLS` |
-| hook R0 门禁 | Gate R0.1–R0.18（18 个） | `pre_tool_hook.py` 的 `Gate R0.N` |
+| hook R0 门禁 | Gate R0.1–R0.17（17 个） | `pre_tool_hook.py` 的 `Gate R0.N` |
 | 红队向量 | 156 | `references/red-vectors.json` |
 | 情报源 | 24 | `references/red-intel-sources.json` |
 | 解释器解析 | `scripts/py_resolve.sh`（发现式，无绝对路径） | `scripts/py_resolve.sh` |
@@ -105,8 +105,6 @@ spz-gatekeeper-r-sequence/
 │   ├── ecc-impact-20260826-plugin-dual-loop.md
 │   ├── ecc-impact-flywheel.md
 │   ├── ecc-impact-v7.md
-│   ├── oss-hooks.md
-│   ├── oss-moa-phase-provenance.md
 │   └── flows-a-b-c.md
 │
 ├── monitor-schemas/                  # STAGE_0..5 门禁 schema（JSON）
@@ -140,16 +138,6 @@ TTL/GC、回收判据全在 `references/state-storage.md`，本文不复制。
 **写入语义边界**：`_checksum` 与 `state_lock` 只覆盖**主 state 写路径**；派生/归档写面
 （`gk_state_ops.py` / `gk_views.py` / `gk_discover_archive.py`）是裸 `json.dump` ⟹ 对外安全声明
 **不得**概括为「所有 state 写入都原子/带校验」。
-
-**WAL 写路径（M1–M4）**：`gk_state_wal.py` 逐条 WAL（`{seq,pid,ts,ops,crc}`）→ 每 200 条 / 1 MB
-checkpoint；读序 **WAL → state**，进程退出 flush、尾部坏行修复。写放大 128–512x → < 1.3。
-基准套件 `gk_bench_*.py` 与 `references/bench-baseline.json` 由 `bench-quick`（CI）与
-`bench-nightly`（每日 full）守护；跨 OS 只守硬失败（失败写 / 崩溃校验 / 场景 ok），
-写放大与 p99 只作 WARN。
-
-**MCP 工具面**：`gk_mcp_loader.py` 按 `sealed / egress / gated / ui / read / write / command`
-分类校验；hook R0.18 对 `install_browser`、`browser_record_*` 默认 BLOCK（显式 env 才放行）；
-出网仍单口（R0.14）。
 
 ---
 

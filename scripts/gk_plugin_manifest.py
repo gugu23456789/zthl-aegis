@@ -14,6 +14,7 @@
 与 gk_bashpy_loader.py 的关系: loader 管"能否加载 + 加载哪个源"（SHA256 pin 安全网），
 本模块管"该插件是否被允许加载 + 生命周期 + 卸载回滚"（manifest 治理层）。
 """
+import copy
 import json
 import os
 import sys
@@ -127,8 +128,58 @@ def _dbg(msg: str) -> None:
 
 
 def get_manifest(pid: str) -> dict | None:
-    """按 id 取 manifest；未知 id 返回 None。"""
-    return MANIFESTS.get(pid)
+    """按 id 取 manifest **副本**；未知或非法 id 返回 None。
+
+    - 非字符串 pid（list/dict/None…）→ None（fail-closed，不让 `dict.get` 抛 TypeError 逃逸）
+    - 返回 deepcopy：调用方改写返回值（含嵌套 config）不得回写注册表提权
+    """
+    if not isinstance(pid, str):
+        return None
+    m = MANIFESTS.get(pid)
+    return copy.deepcopy(m) if m is not None else None
+
+
+def _manifest_errors(pid: str) -> list:
+    """manifest 自洽校验的纯函数（validate / cap 共用，零副作用）。
+
+    覆盖声明面绕过（红队攻击面 G2/G5/G6/G7/G8，见
+    `test_gk_plugin_manifest_redteam.py`）：
+    - 未登记 / id 与注册键不一致（借壳取能力）
+    - disabled 非 bool 或已停用
+    - write 非 bool（`0` 恒假可绕过 undo 强制）；write=True 必须有实质 undo
+    - intercept 必须是名单序列（字符串会被子串命中）
+    - npm 段必须有非空白 integrity
+    """
+    m = get_manifest(pid)
+    if m is None:
+        return ["unknown plugin (未登记入口无法获得能力)"]
+    errors = []
+    if m.get("id") != pid:
+        errors.append("manifest id mismatch registry key (身份混淆借壳)")
+    if "disabled" in m and not isinstance(m["disabled"], bool):
+        errors.append("disabled must be bool")
+    elif m.get("disabled"):
+        errors.append("plugin administratively disabled")
+    if "write" in m and not isinstance(m["write"], bool):
+        errors.append("write must be bool (类型混淆可绕过 undo 强制)")
+    elif m.get("write"):
+        undo = m.get("undo")
+        if not (callable(undo) or (isinstance(undo, str) and undo.strip())):
+            errors.append("write plugin requires undo (Theorem 7 recover 不变性: "
+                          "无逆写效应 = DSH 400G 事故模式)")
+    if "intercept" in m and (isinstance(m["intercept"], str)
+                             or not isinstance(m["intercept"], (tuple, list))):
+        errors.append("intercept must be a sequence of capability names, not str")
+    # 供应链 pin（npm 段）: url 任一 | 段以 npm: 开头 → 必须登记非空白 config.integrity
+    # （本地 tarball sha512 / pnpm lockfile integrity 哈希，对齐 Python 侧 _RELEASE_PINS
+    # 的 SHA256 pin 语义 + §4.4 DSH 生态 npm pin 预留）。不登记 = 供应链不可信 → 拒绝加载。
+    for seg in str(m.get("url", "")).split("|"):
+        if seg.strip().startswith(_NPM_URL_PREFIX):
+            integ = (m.get("config") or {}).get("integrity")
+            if not (isinstance(integ, str) and integ.strip()):
+                errors.append("npm plugin requires config.integrity (tarball sha512, 供应链 pin)")
+            break
+    return errors
 
 
 def validate_manifest(pid: str) -> dict:
@@ -138,27 +189,13 @@ def validate_manifest(pid: str) -> dict:
     - 未知 id → 拒绝（未登记插件无法获得能力，对齐 Cordis §6.3 能力最小化）
     - disabled → 拒绝（管理性关闭优先于一切）
     - write:true 且 undo 缺失 → 拒绝（无逆写效应 = DSH 400G 事故模式）
+    - 声明类型/身份/供应链 pin 不合法 → 拒绝（红队面 G2/G5/G6/G7/G8）
     """
-    m = get_manifest(pid)
-    if m is None:
-        _dbg(f"validate[{pid}]: unknown plugin")
-        return {"ok": False, "pid": pid, "errors": ["unknown plugin (未登记入口无法获得能力)"]}
-    errors = []
-    if m.get("disabled"):
-        errors.append("plugin administratively disabled")
-    if m.get("write") and not m.get("undo"):
-        errors.append("write plugin requires undo (Theorem 7 recover 不变性: 无逆写效应 = DSH 400G 事故模式)")
-    # 供应链 pin（npm 段）: url 任一 | 段以 npm: 开头 → 必须登记 config.integrity
-    # （本地 tarball sha512 / pnpm lockfile integrity 哈希，对齐 Python 侧 _RELEASE_PINS
-    # 的 SHA256 pin 语义 + §4.4 DSH 生态 npm pin 预留）。不登记 = 供应链不可信 → 拒绝加载。
-    for seg in str(m.get("url", "")).split("|"):
-        if seg.strip().startswith(_NPM_URL_PREFIX) and not (m.get("config") or {}).get("integrity"):
-            errors.append("npm plugin requires config.integrity (tarball sha512, 供应链 pin)")
-            break
+    errors = _manifest_errors(pid)
     if errors:
         _dbg(f"validate[{pid}]: BLOCKED {errors}")
         return {"ok": False, "pid": pid, "errors": errors}
-    _dbg(f"validate[{pid}]: PASS (write={m.get('write', False)})")
+    _dbg(f"validate[{pid}]: PASS (write={get_manifest(pid).get('write', False)})")
     return {"ok": True, "pid": pid, "errors": []}
 
 
@@ -167,12 +204,17 @@ def check_capability(pid: str, capability: str) -> dict:
 
     调用点在把请求分发到插件前必须调用 —— 拒绝 manifest 白名单外的能力
     （对齐 Cordis §6.3 sandbox 能力最小化：插件无法经未登记入口获得能力）。
+    纵深防御：manifest 自身不合法（停用/类型混淆等）时**不授任何能力**。
     """
     m = get_manifest(pid)
     if m is None:
         return {"ok": False, "pid": pid, "capability": capability,
                 "error": "unknown plugin"}
-    if capability not in m.get("intercept", ()):
+    errors = _manifest_errors(pid)
+    if errors:
+        return {"ok": False, "pid": pid, "capability": capability,
+                "error": "manifest BLOCKED: " + "; ".join(errors)}
+    if not isinstance(capability, str) or capability not in m.get("intercept", ()):
         return {"ok": False, "pid": pid, "capability": capability,
                 "error": f"capability '{capability}' not in whitelist {list(m['intercept'])}"}
     return {"ok": True, "pid": pid, "capability": capability}
@@ -220,13 +262,18 @@ def unload_plugin(pid: str) -> dict:
     - 可写插件（write=true）：本函数只回滚 sys.path 快照；业务 undo 钩子由
       调用点在写操作完成后显式执行（manifest.undo 声明其位置）。
     """
+    if not isinstance(pid, str):
+        return {"ok": False, "pid": pid, "reverted": False,
+                "error": "invalid plugin id (must be str)"}
     rec = _ACTIVE.get(pid)
     if rec is None:
         return {"ok": True, "pid": pid, "reverted": False,
                 "note": "not active (idempotent unload)"}
     snapshot = rec["snapshot"]
+    before = list(snapshot.get("sys_path", ()))
     for d in snapshot.get("injected", []):
-        if d in sys.path:
+        # recover 不变性：恢复该目录在载入前的出现次数（插件运行期重复注入也被清掉）
+        while sys.path.count(d) > before.count(d):
             sys.path.remove(d)
     _ACTIVE.pop(pid, None)
     _dbg(f"unload[{pid}]: recover done, removed injected={snapshot.get('injected')}")

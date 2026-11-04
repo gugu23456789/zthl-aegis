@@ -50,8 +50,7 @@ from pathlib import Path
 # R2（2026-09-22）：state 序列化单一事实源 —— 勿再内联 json.dump 直写 state。
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from gk_json_utils import (dump_state, state_lock, ser_bytes,  # noqa: E402
-                           state_size_report, read_state_file,
-                           STATE_SIZE_WALL, STATE_SIZE_RESERVE,
+                           state_size_report, STATE_SIZE_WALL, STATE_SIZE_RESERVE,
                            WALL_TRIM_PCT)
 
 DEFAULT_SKILL = Path(__file__).resolve().parent.parent
@@ -493,9 +492,10 @@ def _now() -> str:
 
 
 def _read_state(state_file: str) -> dict:
-    # 2026-11-03（M1）：走 WAL-aware 读（checkpoint + `<state>.wal` replay）。
-    d = read_state_file(state_file)
-    return {} if "error" in d else d
+    try:
+        return json.loads(Path(state_file).read_text(encoding="utf-8"))
+    except Exception:
+        return {}
 
 
 def load_findings(state_file: str) -> list:

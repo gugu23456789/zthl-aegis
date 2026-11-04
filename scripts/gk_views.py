@@ -137,10 +137,47 @@ def cmd_push_check_summary(_args) -> int:
     return 0
 
 
+def parse_balance(resp) -> dict:
+    """`/user/balance` 响应的**唯一解析器**（2026-11-04 单源收敛）。
+
+    收敛动机（用户质询「我怀疑你搞出来双源漂移了」）：此前有三个地方各自解析
+    `balance_infos` —— 本 view、`balance_format.py`、以及新增的审计模块。三份解析规则
+    迟早漂移（取 [0] 还是求和？`is_available=false` 怎么算？）。
+
+    返回：
+      `infos`    原样条目列表（缺失字段补空串，便于展示层逐字打印）；
+      `total`    所有 `total_balance` 之和（不可用 ⟹ 0）；
+      `currency` 首个非空币种；
+      `available` 原响应的 `is_available`（缺失 ⟹ None，**不猜**）。
+    容错：非 dict / 条目非 dict / 数值不可解析 ⟹ 该项按 0 计（不抛）。
+    """
+    infos_in = resp.get("balance_infos") if isinstance(resp, dict) else None
+    infos, total, currency = [], 0.0, ""
+    for bi in (infos_in if isinstance(infos_in, list) else []):
+        if not isinstance(bi, dict):
+            continue
+        row = {"currency": str(bi.get("currency") or ""),
+               "total_balance": str(bi.get("total_balance", "") or ""),
+               "granted_balance": str(bi.get("granted_balance", "") or ""),
+               "topped_up_balance": str(bi.get("topped_up_balance", "") or "")}
+        infos.append(row)
+        currency = currency or row["currency"]
+        try:
+            total += float(row["total_balance"] or 0)
+        except (TypeError, ValueError):
+            continue
+    available = resp.get("is_available") if isinstance(resp, dict) else None
+    if available is False:
+        total = 0.0
+    return {"infos": infos, "total": round(total, 4), "currency": currency,
+            "available": available}
+
+
 def cmd_balance(_args) -> int:
     try:
         d = json.loads(os.environ.get("BAL_RESP", "") or "{}")
-        print((d.get("balance_infos") or [{}])[0].get("total_balance", "") or "")
+        infos = parse_balance(d)["infos"]
+        print((infos[0].get("total_balance", "") if infos else "") or "")
     except Exception:  # noqa: BLE001 — 旧式 `except Exception: print('')`
         print("")
     return 0

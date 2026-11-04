@@ -11,14 +11,6 @@
 
 本仓是公开发布通道。文档索引见 [`references/README.md`](references/README.md)，所有导出的文档都由它链接。
 
-### 存档与引用
-
-- **Concept DOI**：[`10.5281/zenodo.23934594`](https://doi.org/10.5281/zenodo.23934594)
-  —— 永久指向最新归档版本；每次发版由 `scripts/gk_zenodo_sync.py` 自动新建版本并上传同一组附件。
-- **Version DOI**：每个版本单独一个，只写在对应的 release notes 里（不进包内静态文件）。
-- 引用格式：Pu Junhan. (2026). *ZTHL Aegis* [Computer software]. Zenodo.
-  <https://doi.org/10.5281/zenodo.23934594>
-
 ### 许可
 
 木兰宽松许可证第 2 版（Mulan PSL v2）。双语全文见 [`LICENSE`](LICENSE)，中文正本见
@@ -46,69 +38,27 @@
 
 ### 元数据路由（DAG）
 
-主 state 的元数据路由是**单向 DAG**：写者经网关落主 state；卫星写者只落片与冷索引侧车，
-读面做并集；GC 是唯一的索引删除者。这里没有「读面回写 state」的环。
+主 state 的元数据路由是**单向 DAG**：写者只经网关落主 state；卫星写者先落片/侧车，再以
+manifest/热叶汇入；读面只读，压缩器只换代。这里没有「读面回写 state」的环。
 
 ```mermaid
 flowchart LR
   W["写者<br/>CLI · satellite · finding"] --> G["update_state<br/>锁 + checksum + 原子替换"]
-  G --> S["主 state<br/>权威元数据（含历史内联叶）"]
-  W --> P["卫星片<br/>payload JSONL（fsync）"]
-  W --> C["冷索引侧车<br/>satellite-index.jsonl（append-only：put/del）"]
-  W -. "租约锚（best-effort）" .-> A["claim 台账"]
-  S --> R["读面<br/>index_entries = 内联 ∪ 侧车"]
-  P --> R
+  G --> S["主 state<br/>权威元数据 + 热索引（每 kind ≤6 叶）"]
+  W --> P["卫星片<br/>payload JSONL"]
+  W --> C["冷索引侧车<br/>satellite-index.jsonl（append-only）"]
+  C --> H["热叶 / manifest"]
+  H --> S
+  P --> R["读面 / 压缩"]
   C --> R
   R -. "只读" .-> P
   R -. "只读" .-> C
-  K["GC / 压缩<br/>gc_index · reclaim"] -->|"删叶 / 溢出：append del·put"| C
-  K -->|"整键重写（唯一删除者）"| S
-  S --> K
-  P --> K
-  A --> K
+  K["压缩器"] -->|"新代"| C
+  K -->|"manifest 交换"| S
 ```
 
-**无环保证**：写侧只有两条持久面 —— `片 + 侧车`（先 fsync）与经网关的 `update_state`；
-S3 起**写侧停更内联热索引**（`INLINE_INDEX_WRITES=False`），内联只留历史叶、由 GC 溢出到侧车，
-读面取 `内联 ∪ 侧车` 的并集，**没有回写边**。**崩溃安全**：片/侧车先落盘，GC 只做追加删除
-（`{"op":"del"}`）与整键重写，交换前的旧状态始终完整。
-
-### 性能与常驻基准
-
-- **state 写路径 = WAL + checkpoint**：`scripts/gk_state_wal.py` 逐条记录 `{seq,pid,ts,ops,crc}`，
-  每 200 条或 1 MB 折回主 state；读序 **WAL → state**，进程退出 flush，尾部坏行可修复。
-  写放大由 128–512x 降到 < 1.3。
-- **基准套件**：`scripts/gk_bench_state.py`、`gk_bench_satellite.py`、`gk_bench_gate.py`、
-  `gk_bench_release.py`；`--full` 覆盖 32 并发写、崩溃恢复与 `.tmp` 残留回收。
-- **门禁**：`ci.yml` 的 `bench-quick`（正确性 + 阈值）；`bench-nightly.yml` 每日跑 full →
-  与 `references/bench-baseline.json` 对比 → 产物留档。跨 OS 只守硬失败（失败写 / 崩溃校验 /
-  场景 ok），ratio（写放大、p99）降级为 WARN。
-- 基线只随版本或人工 `--init-baseline` 滚动，CI **不自动改写**（否则门禁变成自证）。
-
-### 发布与可核验性
-
-- 包内 `PROVENANCE.json` 记录 source repo / commit / tag、导出策略与工具 sha256、排除面；
-  它被 `SHA256SUMS` 覆盖，`release-manifest.json` 另存同一组字段。
-- `SBOM.cdx.json`（CycloneDX 1.5）随包发布；构建带 Sigstore SLSA attestation，
-  可用 `gh attestation verify` 核验。
-- 存档标识：Zenodo **Concept DOI**（元 DOI，指向最新版）写进 `references/archive.json`；
-  每个版本的 **Version DOI** 只写 release notes，不进包内静态文件。
-- 自动存档：`scripts/gk_zenodo_sync.py` 在 Release 发布后创建 Zenodo 新版本并上传同一组附件
-  （zip / SHA256SUMS / PROVENANCE / SBOM / manifest），Concept DOI 因此始终指向最新版；
-  未配置 `ZENODO_TOKEN` 时该步自行跳过，不影响发版。
-- 发布纪律：**tag 必须是 `main` 的祖先**。`main` 领先 tag 属正常（存在未发版提交），
-  由 release 的 `sync-main` 作业记录到 job summary，**不强制补发版本**；
-  只有 `main` 落后于 tag（tag 打在侧支上）才快进，分叉则判失败。
-- 公开包是 **clean export**（`scripts/oss_scrub.py` 白名单导出），不是开发仓；
-  核验顺序与两种 DOI 的口径见 [`PROVENANCE.md`](PROVENANCE.md)。
-
-### MCP 工具面安全
-
-- 工具清单由 `scripts/gk_mcp_loader.py` 校验，按 `sealed / egress / gated / ui / read / write /
-  command` 分类；未登记工具不进入加载计划。
-- hook `R0.18` 对浏览器工具面加闸：`install_browser` 与 `browser_record_*` 默认 **BLOCK**，
-  需显式 `GK_MCP_ALLOW_BROWSER_INSTALL=1` / `GK_MCP_ALLOW_BROWSER_RECORD=1`。
-- 出网仍走单一出口（`R0.14`），新增工具面不新开网口。
+**无环保证**：`写 → 网关 → state` 与 `片/侧车 → 压缩 → manifest` 两条支路只在 state 汇合；
+读面没有回写边。**崩溃安全**：先片/侧车、后 manifest；交换前的旧状态始终完整。
 
 ### 目录结构
 
@@ -126,12 +76,15 @@ S3 起**写侧停更内联热索引**（`INLINE_INDEX_WRITES=False`），内联�
 插件加载安全网 = `scripts/gk_plugin_manifest.py`：**未登记 id 不可加载**；`disabled` 拒绝；
 `write=True` 必须声明 `undo`（无逆写效应直接拒）；`npm:` 源必须带 tarball `integrity`
 （供应链 pin）；每次能力调用过 `check_capability` 白名单；加载/卸载带快照与回滚。
+声明面同时做类型校验：`id` 必须等于注册键、`write`/`disabled` 必须是 bool、`undo`/`integrity`
+不得为空白、`intercept` 必须是名单序列（字符串会被子串命中）；`get_manifest()` 返回副本，
+能力查询对非法 manifest **零授权**。红队判据见 `scripts/test_gk_plugin_manifest_redteam.py`（G1–G12）。
 
 本仓登记 **3 个**插件；**公开包随附 2 个**（`paper-review` 源码不随包，见下）：
 
 | 插件 id | 名称 / 来源 | 本包内的形态 | 能力白名单 |
 |---|---|---|---|
-| `paper-review` | `gk_paper_review`（builtin） | **私仓内置**；公开包不随附（源码在导出排除面）⟹ 命令入口返回加载安全网 `source=missing` | `paper-review` |
+| `paper-review` | `gk_paper_review`（builtin；论文写作投稿前置模拟评审——投稿前自检，非同行审稿） | **私仓内置**；公开包不随附（源码在导出排除面）⟹ 命令入口返回加载安全网 `source=missing` | `paper-review` |
 | `bashpy-migrate` | `zthl-bashpy-migrate`（pip / npm 包装） | 加载器 `scripts/gk_bashpy_loader.py`；本体为独立包 | `analyze` `verify` `audit` `status` `check` `upgrade` `rollback` |
 | `git-workflow` | 独立技能（MulanPSL-2.0） | 加载器在技能侧 `../git-workflow/scripts/gk_gitworkflow_loader.py` | `push` `branch` `worktree` `release` `security` `cleanup` `history` `selfcheck` `version` |
 
@@ -213,9 +166,6 @@ bash uninstall.sh    # 只删 install.sh 记在 .spz-manifest 里的内容
 钩子注册由安装器完成，并走与插件同源的加载安全网（`scripts/gk_hook_manage.py`）：
 非破坏合并进用户级 `hooks.json`、写前备份、原子替换、回读校验、目标 JSON 不可解析时
 fail-closed。只增删指向本技能 wrapper 的条目，你自己的钩子条目原样保留。
-
-完整契约（输入/退出码/门禁清单/「蓝色大肥鱼」跨平台门禁族/安装回滚/业界对照）见
-[`references/oss-hooks.md`](references/oss-hooks.md)。
 
 ```bash
 bash install.sh --no-hooks                       # 只复制，不动 hooks.json
@@ -365,8 +315,8 @@ python scripts/gk_doc_release.py --strict
 - 仓内不存凭据；`.keys/` 与环境文件被忽略。
 - CLI 从环境读 API key（`GATEKEEPER_API_KEY` / `DEEPSEEK_API_KEY`），无 key 时降级为本地零 API 的 monitor 模式。
 - state、计划备份、生成报告、评审缓存均被 git ignore；只跟踪代码、参考与测试。
-- 漏洞报告：见 [`SECURITY.md`](SECURITY.md)（请走私报，不要开公开 issue）；事故响应见
-  [`references/security-incident-response.md`](references/security-incident-response.md)。
+- 漏洞报告：见 [`SECURITY.md`](SECURITY.md)（请走私报，不要开公开 issue）。部署注意事项与密钥轮换见
+  [`references/security-measures.md`](references/security-measures.md)。
 
 ### 贡献
 

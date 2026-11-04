@@ -97,6 +97,10 @@ def scan_skill(skill_dir: Path) -> dict:
     ]
     for name, p in targets:
         fs = scan_file(p)
+        try:
+            rel = str(p.relative_to(skill_dir)).replace("\\", "/")
+        except ValueError:
+            rel = name
         for pat, line, desc, sev in fs:
             issues += 1
             checks.append({
@@ -104,6 +108,11 @@ def scan_skill(skill_dir: Path) -> dict:
                 "status": "FAIL" if sev == "high" else "WARN",
                 "detail": f"{name}:L{line} — {desc}",
                 "count": 1,
+                # 2026-11-04：结构化定位（SARIF 消费）—— detail 保持人类可读串，
+                # 下游不再反向解析散文。
+                "file": rel,
+                "line": line,
+                "severity": sev,
             })
     # 无命中也登记 PASS 项（self-check 可视化）
     for pat in ("P2", "P3", "P4", "P5", "P7", "P8"):

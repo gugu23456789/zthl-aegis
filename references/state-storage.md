@@ -61,13 +61,12 @@ updated: 2026-11-02
 ```
 
 - 片名单源 = `gk_satellite.KIND_SUFFIX`（禁第二份字面量）。
-- 写入唯一入口 = `gk_satellite.append()`（片 + 冷索引侧车 + 判活锚同批）。
-- 索引 = **内联 ∪ 冷**：S3 起写侧**停更**内联热索引（`INLINE_INDEX_WRITES=False`），
-  新叶只落 `<state>.satellite-index.jsonl`（append-only：`put`/`del`）；内联
-  `gate_data.satellite_index.<batch_id>.<arm>` 只留历史叶，由 GC 按 cap（6）溢出到侧车。
+- 写入唯一入口 = `gk_satellite.append()`（片 + 冷索引侧车 + 热索引叶 + 判活锚同批）。
+- 索引 = **热 ∪ 冷**：热叶在 `gate_data.satellite_index.<batch_id>.<arm>`，每 kind 只留最近
+  `INLINE_LEAVES_MAX_PER_KIND`（6）叶；更旧的冷叶落 `<state>.satellite-index.jsonl`（append-only）。
   读面统一走 `gk_satellite.index_entries()`（侧车同键优先），禁直读 `gate_data.satellite_index`。
-- 拓扑与崩溃安全见 README「元数据路由（DAG）」：`写 → 网关 → state` 与 `片/侧车 → 读面`
-  两条支路，GC（`gc_index` / `reclaim`）是唯一索引删除者（追加 `del` + 整键重写），读面无回写边。
+- 拓扑与崩溃安全见 README「元数据路由（DAG）」：`写 → 网关 → state` 与 `片/侧车 → 压缩 → manifest`
+  两条支路只在 state 汇合，读面无回写边。
 - `rejected_edits` 出窗条目落 `<state>.rejected-edits-journal.jsonl`（append-only、**永不回收**，
   `gk_advance._append_rejected` → `REJECTED_CAP`）；live 只留窗口内条目，审计读 journal。
   2026-11-01 改名（原 `-archive` 会落进卫星 `*-archive` 认知域）；旧名不自动迁移，读面两代都认。

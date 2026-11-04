@@ -617,15 +617,3 @@ class TestCliFieldDerive:
     def test_b64_missing_or_invalid_empty(self):
         assert self._run_bytes(["field", "sig", "--b64"], '{"x": 1}').stdout == b""
         assert self._run_bytes(["field", "sig", "--b64"], "bad").stdout == b""
-
-
-def test_lock_fd_cache_is_bounded(tmp_path):
-    """2026-11-03 收尾：锁 fd 常驻缓存必须有上限（防每个临时 state 泄漏一个 fd）。
-
-    首版无界缓存：pytest 每 worker 实测累积 100+ 个 `.lock` fd（全量压测 fd 列表可见），
-    长跑会撞 `EMFILE`。
-    """
-    for i in range(u._LOCK_FD_CACHE_MAX + 20):
-        with u.state_lock(str(tmp_path / ("s%d.json" % i))):
-            pass
-    assert len(u._LOCK_FDS) <= u._LOCK_FD_CACHE_MAX

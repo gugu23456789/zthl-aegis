@@ -167,7 +167,7 @@ review, state_domain, source_docs, edit_budget_declared`
 | 插件 | 源 | 能力 | 备注 |
 |:--|:--|:--|:--|
 | bashpy-migrate | `pip:zthl-bashpy-migrate` / dev `${ZTHL_BASHPY_DIR}` | analyze / verify / audit | 外部包；SHA256 pin + `load_status()` |
-| paper-review | `builtin:scripts/gk_paper_review.py` | 稿件模拟评审 | 仅私仓随附（公开包条件登记自动摘除） |
+| paper-review | `builtin:scripts/gk_paper_review.py` | 论文写作投稿前置模拟评审（投稿前自检） | 仅私仓随附（公开包条件登记自动摘除） |
 | git-workflow | `../git-workflow/scripts/git-workflow.sh` | 推送/分支/worktree/安全审查 | 独立技能；外部源 |
 
 **manifest 契约**（`scripts/gk_plugin_manifest.py`）：`id == key`、`intercept` 非空、

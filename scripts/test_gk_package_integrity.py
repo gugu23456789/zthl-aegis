@@ -6,6 +6,7 @@
   ③ **真仓**当前无 error（防止本轮就已经缺件）。
 """
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -13,6 +14,15 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import gk_package_integrity as G  # noqa: E402
+
+
+def _bash_path(p):
+    """Windows 绝对路径 → WSL 可解析的 `/mnt/<drive>/...`；非 Windows 原样（分类学 #13）。"""
+    if os.name != "nt":
+        return str(p)
+    q = str(p).replace("\\", "/")
+    m = re.match(r"^([A-Za-z]):/(.*)$", q)
+    return "/mnt/%s/%s" % (m.group(1).lower(), m.group(2)) if m else q
 
 
 def test_cmd_registry_detects_missing_function():
@@ -44,16 +54,18 @@ def test_reinstall_keeps_uninstall_coverage(tmp_path):
     """重复安装不得把 manifest 覆盖成空 ⟹ 卸载仍能按清单清干净（2026-11-02 修）。"""
     root = Path(__file__).resolve().parent.parent
     dest = tmp_path / "inst"
-    env = dict(os.environ, HOME=str(tmp_path), TRAE_ENV="cn")
+    env = dict(os.environ, HOME=_bash_path(tmp_path), TRAE_ENV="cn")
     for _ in range(2):
-        cp = subprocess.run(["bash", str(root / "install.sh"), "--dest", str(dest), "--no-hooks"],
+        cp = subprocess.run(["bash", _bash_path(root / "install.sh"),
+                             "--dest", _bash_path(dest), "--no-hooks"],
                             cwd=str(root), env=env, capture_output=True, text=True)
         assert cp.returncode == 0, cp.stderr[-500:]
     man = (dest / ".spz-manifest").read_text(encoding="utf-8")
     entries = [ln for ln in man.splitlines() if ln and not ln.startswith("#")]
     assert "gatekeeper-cli.sh" in entries, man[:300]
     assert len(entries) > 100, len(entries)
-    cp = subprocess.run(["bash", str(root / "uninstall.sh"), "--dest", str(dest), "--yes"],
+    cp = subprocess.run(["bash", _bash_path(root / "uninstall.sh"),
+                         "--dest", _bash_path(dest), "--yes"],
                         cwd=str(root), env=env, capture_output=True, text=True)
     assert cp.returncode == 0, cp.stderr[-500:]
     assert not (dest / "gatekeeper-cli.sh").exists(), "卸载后仍残留安装面文件"

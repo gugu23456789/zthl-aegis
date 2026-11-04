@@ -133,7 +133,7 @@ updated: 2026-11-02
 | node-guard | 序列节点出站守卫（G/B/C/T/D 五元组谓词 + 总运行线路） | gatekeeper-cli.sh | 2026-08-27 | active |
 | calibrate | 运行时五层校准（只读诊断：路由/相位三角链/声明绑定） | gatekeeper-cli.sh | 2026-09-04 | active |
 | help | 命令帮助（cli-protocol.md 单一事实源，`help [cmd]`） | gatekeeper-cli.sh | R5.9++ | active |
-| paper-review | 论文审查（--local/--subagent/--camera-ready + 加载安全网） | gatekeeper-cli.sh | 2026-08-29 | active |
+| paper-review | 论文写作投稿前置模拟评审（--local/--subagent/--camera-ready + 加载安全网；投稿前自检，非同行审稿） | gatekeeper-cli.sh | 2026-08-29 | active |
 | moa-aggregate | MoA 多源聚合（归属指纹 + verdicts 词表联动） | gatekeeper-cli.sh | R6 | active |
 | state-patch | state 原子补丁（flock 单写者，编辑预算扣减） | gatekeeper-cli.sh | 2026-09-07 | active |
 | pr-score | 双盲评分锚定（seal/verify + 快照 + A3 seal） | gatekeeper-cli.sh + scripts/gk_pr_score.py | 2026-09-06 | active |

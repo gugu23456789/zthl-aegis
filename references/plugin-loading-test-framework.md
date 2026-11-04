@@ -151,7 +151,8 @@ def test_clean_cli_loader_missing(self, tmp_path):  # 不可用 → 仅 LOAD
 |:--|:--|:--|:--|
 | `test_gk_bashpy_loader.py` | 加载安全网（六源分流 / SHA256 pin / 回退 / 拦截语义 / **upgrade_pending 启动检测**） | 13 | R1 ✓ 只 patch 模块边界（`_IMPORT_MODULE` 注入点）；R3 ✓ 加载可用/不可用分用例 |
 | `test_gk_paper_review_loader.py` | paper-review 加载安全网（2026-08-29，bashpy 协议统一应用：builtin/dev/tampered/missing/error 五源分流 / SHA256 pin / manifest 对账 / 双函数契约 load_status+load_reviewer 二元组） | 8 | R1 ✓ 只 patch 模块边界（`_entry_path`/`_PAPER_REVIEW_PINS`）；R2 ✓ 夹具副作用注释；R3 ✓ 可用/不可用分用例 |
-| `test_gk_plugin_manifest.py` | 生命周期（manifest 门禁 / 能力白名单 / load-unload 回滚 / 幂等 / **DSH 生态对接** / **npm 供应链 pin** / **生命周期子命令 cap**） | 25 | R1 ✓ 只 patch 模块级常量（`_DEV_SOURCE_DIRS` / `MANIFESTS`）；R2 ✓ `_clean_active` 夹具副作用显式声明；R3 ✓ define 门禁通过/拦截分用例 |
+| `test_gk_plugin_manifest.py` | 生命周期（manifest 门禁 / 能力白名单 / load-unload 回滚 / 幂等 / **DSH 生态对接** / **npm 供应链 pin** / **生命周期子命令 cap**） | 28 | R1 ✓ 只 patch 模块级常量（`_DEV_SOURCE_DIRS` / `MANIFESTS`）；R2 ✓ `_clean_active` 夹具副作用显式声明；R3 ✓ define 门禁通过/拦截分用例 |
+| `test_gk_plugin_manifest_redteam.py` | 治理层红队（攻击面 G1–G12：幽灵登记 / 身份混淆 / 白名单回写 / 类型混淆 / 空壳 undo / 子串白名单 / 空壳 integrity / 崩溃诱导 / 残留注入 / 停用旁路 / 假插件包） | 35 | R1 ✓ 只 patch `MANIFESTS`/`_DEV_SOURCE_DIRS`/`_ACTIVE`；R2 ✓ `_isolate_state` 快照并恢复 `sys.path`；R3 ✓ 恶意载荷与合法对照分用例 |
 | `test_gk_bashpy_upgrade.py` | 升级命令（status/check/upgrade/rollback 正向 + 边界） | 11 | R1 ✓ 只 patch 模块边界（`_fetch_json`/`_download_to`/`_cache_dir`）；R3 ✓ 成功/失败分用例 |
 | `test_gk_bashpy_upgrade_redteam.py` | 升级模块红队（投毒篡改攻击面 A-E / 防护门禁验证） | 8 | R1 ✓ 只 patch 模块边界；R2 ✓ fixture 副作用声明；R3 ✓ 正向对照/攻击用例分列 |
 | `test_red_attacks.py`（TestRedHook R0.4 + TestPluginBareCall 向量） | 调用门禁红队（RED-HOOK-10..15 存在性审计：完整/缺失/不完整三态 + 裸调用攻击向量 17 用例） | 3+17 | R1 ✓ 只 patch `SKILL_DIR`；R2 ✓ 夹具副作用声明；R3 ✓ 完整/缺失/不完整分用例（对齐 §2.3） |
@@ -320,6 +321,7 @@ loader 侧实际哈希校验（npm 包安装后的 integrity 对账）仍按 `ur
 | **D 缓存投毒** | Medium | last-check.json 非字符串 `latest_version` → `_semver_key` 崩溃 / upgrade_pending 误报 | `_semver_key` isinstance 防御 + latest 非 str 归一化 None（静默） |
 | **E 失败残留** | Low | 对账失败后 `downloads/` 残留投毒文件污染下次升级 | 失败路径清理 downloads（`shutil.rmtree(ignore_errors=True)`） |
 | **F 调用门禁旁路** | Critical | 裸调用 bashpy-migrate / `python3 -m` / `python3 -c` / `eval` 内嵌 / 升级脚本绕过统一入口——manifest cap 白名单 + 加载安全网哈希对账全部跳过 | Gate R0.4（pre_tool_hook）：按命令段（`;`/`&&`/`|`）逐段判定 + 引号上下文（`_in_quotes` 防 commit message 误拦）+ 统一入口豁免（`gatekeeper-cli.sh migrate`）；`_red_attacks.red_hook` RED-HOOK-10..15 存在性审计 |
+| **G 声明面绕过** | High | 恶意插件在 manifest 声明层做手脚：别名 key 冒用已登记 id / `write:0` 恒假躲 undo / `undo:"   "` 空壳 / `intercept:"audit"` 子串命中 / `integrity:"   "` 空壳 / 回写 `get_manifest()` 返回值提权 / 插件运行期重复注入 sys.path / 非字符串 pid 崩溃逃逸 | `gk_plugin_manifest`：`_manifest_errors` 单一校验源（`id==key`、bool 类型门禁、非空白 undo、intercept 必须名单序列、非空白 integrity）+ `get_manifest` 返回 deepcopy + `check_capability` 对非法 manifest 零授权 + `unload` 计数式恢复；红队判据 `test_gk_plugin_manifest_redteam.py` G1–G12 |
 
 ### 统一调用命令契约（2026-08-27）
 

@@ -112,7 +112,7 @@
     },
     {
       "finding": "ECC-4805712A0A98",
-      "note": "探针迁移后指针/措辞未同步（跨仓双源）：`scripts/gk_model_probe.py` 仍以论文仓 `repro/phase_probe.py::CANDIDATE_STRIDES` 为「同集」源（迁移后那份只是记录副本）⟹ 指针须改指技能仓正本 `gk_phase_probe.py::CANDIDATE_STRIDES`；D 计划 §1.1/§2/§4 措辞与状态同步。臂 ×1（model_probe_pointer 源码形态）",
+      "note": "探针迁移后指针/措辞未同步（跨仓双源）：`scripts/gk_model_probe.py` 仍以论文仓记录副本（已冻结）的 `CANDIDATE_STRIDES` 为「同集」源（迁移后那份只是记录副本）⟹ 指针须改指技能仓正本 `gk_phase_probe.py::CANDIDATE_STRIDES`；D 计划 §1.1/§2/§4 措辞与状态同步。臂 ×1（model_probe_pointer 源码形态）",
       "test_file": "scripts/test_gk_model_probe.py",
       "shape_k": "model_probe_pointer",
       "full_k": "model_probe_pointer",

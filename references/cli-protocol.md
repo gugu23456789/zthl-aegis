@@ -39,7 +39,7 @@
 | 27 | `cmd_model_probe` | model-probe（W2A 模型版本探针：钉 stride/相位周期，alias 不可作版本判据） | `out rc` | W2A §6.1 / §6.3(3) F1b（ECC-75F6A2BB7F2B） |
 | 28 | `cmd_monitor` | PRM MONITOR: structural (--local) + semantic (--api → v4-fla | `mode="--local" stage="" api_key="${API_K` | --align = 委托 doc-align 插件（gk_doc_align.py 单一实现；F-REV-42 完成 2026-09-01 收敛）。0 API  |
 | 29 | `cmd_node_guard` | guard-edit (bridge upgrade: CRITICAL_MODULE / CRITICAL_CONFI | `node="" pid="" ctx_json="" check_only=fa` | - |
-| 30 | `cmd_paper_review` | paper-review (稿件模拟同行评审插件 — 2026-08-28，域 7 专项) | `venue="" track="" papers_dir="" mode="" ` | 多会议评审准则档案（按 venue 归档，档案随私仓保留）—— 轨道政策 |
+| 30 | `cmd_paper_review` | paper-review (论文写作投稿前置模拟评审插件 — 2026-08-28，域 7 专项；投稿前自检，非同行审稿) | `venue="" track="" papers_dir="" mode="" ` | 多会议评审准则档案（按 venue 归档，档案随私仓保留）—— 轨道政策 |
 | 31 | `cmd_phase_probe` | phase-probe（相位扫描探针：密集 sweep × 每 stride 置换检验 + Bonferroni） | `out rc` | W2A P2 §6（一次密集 sweep）；ECC-42B4A6E15927 |
 | 32 | `cmd_plan_lint` | plan-lint（计划写入安全网 PW-SN 确定性机检） | `out rc` | references/plan-writing-safety-net.md（七轨对位表机检列） |
 | 33 | `cmd_plan_refinement` | plan refinement | `target="" task="" source_docs="" check_o` | - |
@@ -195,7 +195,7 @@
 
 ### cmd_paper_review
 **Usage**: `gatekeeper-cli.sh paper-review <args>`
-**Purpose**: paper-review (稿件模拟同行评审插件 — 2026-08-28，域 7 专项)
+**Purpose**: paper-review (论文写作投稿前置模拟评审插件 — 2026-08-28，域 7 专项；投稿前自检，非同行审稿)
 **Refs**:
 - 多会议评审准则档案（按 venue 归档，档案随私仓保留）—— 轨道政策
 

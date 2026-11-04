@@ -15,13 +15,13 @@ import gk_bashpy_upgrade as gbu
 
 
 def _make_wheel(tmp_path, audit_content="x") -> Path:
-    whl = tmp_path / "zthl_bashpy_migrate-0.2.4-py3-none-any.whl"
+    whl = tmp_path / "zthl_bashpy_migrate-0.9.9-py3-none-any.whl"
     with zipfile.ZipFile(whl, "w") as z:
         z.writestr("zthl_bashpy_migrate/audit.py", audit_content)
     return whl
 
 
-def _make_tgz(tmp_path, name="pkg-0.2.4.tgz", content=b"tarball-bytes") -> Path:
+def _make_tgz(tmp_path, name="pkg-0.9.9.tgz", content=b"tarball-bytes") -> Path:
     p = tmp_path / name
     p.write_bytes(content)
     return p
@@ -43,11 +43,11 @@ class TestStatus:
     def test_status_reads_cache(self, tmp_path):
         """last-check 缓存存在 → latest_known/checked_at 填充。"""
         (tmp_path / "last-check.json").write_text(
-            json.dumps({"latest_version": "0.2.4", "checked_at": "2026-08-26T00:00:00Z"}),
+            json.dumps({"latest_version": "0.9.9", "checked_at": "2026-08-26T00:00:00Z"}),
             encoding="utf-8")
         with patch("gk_bashpy_upgrade._cache_dir", return_value=tmp_path):
             out = gbu.cmd_status()
-        assert out["latest_known"] == "0.2.4"
+        assert out["latest_known"] == "0.9.9"
         assert out["checked_at"] == "2026-08-26T00:00:00Z"
 
     def test_main_cli_branches(self, capsys, tmp_path):
@@ -59,7 +59,7 @@ class TestStatus:
 
 
 class TestCheck:
-    _RELEASE = {"tag_name": "v0.2.4", "assets": [{"name": "x.whl", "browser_download_url": "https://d/x.whl"}]}
+    _RELEASE = {"tag_name": "v0.9.9", "assets": [{"name": "x.whl", "browser_download_url": "https://d/x.whl"}]}
 
     def test_check_finds_newer_writes_cache(self, tmp_path):
         """发现更高版本 → last-check 缓存写入 latest_version。"""
@@ -67,10 +67,10 @@ class TestCheck:
              patch("gk_bashpy_upgrade._fetch_json", return_value=self._RELEASE):
             out = gbu.cmd_check()
         assert out["ok"] is True
-        assert out["latest_version"] == "0.2.4"
+        assert out["latest_version"] == "0.9.9"
         assert out["upgrade_available"] is True
         cache = json.loads((tmp_path / "last-check.json").read_text(encoding="utf-8"))
-        assert cache["latest_version"] == "0.2.4"
+        assert cache["latest_version"] == "0.9.9"
 
     def test_check_up_to_date(self, tmp_path):
         """已是最新（最新 tag 不高于登记版本）→ upgrade_available=False。"""
@@ -108,7 +108,7 @@ class TestUpgrade:
         man_cp = tmp_path / "gk_plugin_manifest.py"
         man_cp.write_text(Path(gbu.SCRIPTS_DIR / "gk_plugin_manifest.py").read_text(encoding="utf-8"))
 
-        rel = {"tag_name": "v0.2.4", "assets": [
+        rel = {"tag_name": "v0.9.9", "assets": [
             {"name": "x.whl", "browser_download_url": "u/whl"},
             {"name": "x.tgz", "browser_download_url": "u/tgz"},
             {"name": "npm-integrity.json", "browser_download_url": "u/int"},
@@ -134,13 +134,13 @@ class TestUpgrade:
              patch("gk_bashpy_upgrade.MANIFEST_FILE", man_cp):
             out = gbu.cmd_upgrade()
         assert out["ok"] is True
-        assert out["version"] == "0.2.4"
+        assert out["version"] == "0.9.9"
         backups = list((tmp_path / "backups").glob("*/"))
         assert len(backups) == 1
         new_text = loader_cp.read_text(encoding="utf-8")
-        assert '"0.2.4"' in new_text
+        assert '"0.9.9"' in new_text
         man_text = man_cp.read_text(encoding="utf-8")
-        assert "npm:@zthl-harness/dsh-bashpy-migrate@0.2.4" in man_text
+        assert "npm:@zthl-harness/dsh-bashpy-migrate@0.9.9" in man_text
         assert integrity in man_text
 
     def test_upgrade_integrity_mismatch_rejected(self, tmp_path):
@@ -154,7 +154,7 @@ class TestUpgrade:
         man_orig = Path(gbu.SCRIPTS_DIR / "gk_plugin_manifest.py").read_text(encoding="utf-8")
         man_cp.write_text(man_orig, encoding="utf-8")
 
-        rel = {"tag_name": "v0.2.4", "assets": [
+        rel = {"tag_name": "v0.9.9", "assets": [
             {"name": "x.whl", "browser_download_url": "u/whl"},
             {"name": "x.tgz", "browser_download_url": "u/tgz"},
             {"name": "npm-integrity.json", "browser_download_url": "u/int"},

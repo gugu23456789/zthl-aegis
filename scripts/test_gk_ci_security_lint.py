@@ -48,6 +48,26 @@ def test_unpinned_uses_fails():
     assert any("未钉" in i["error"] for i in L.lint_doc("ci.yml", d)["issues"])
 
 
+def test_subpath_action_sha_pin_accepted():
+    """2026-11-04：`github/codeql-action/upload-sarif@<sha>` 这类带子路径的 action
+    必须被认作合法 pin（原正则只允许一个 `/`，会把它误判成未钉）。"""
+    import gk_ci_security_lint as L
+    d = _good()
+    d["jobs"]["smoke"]["steps"].append(
+        {"uses": "github/codeql-action/upload-sarif@" + SHA,
+         "with": {"sarif_file": "results.sarif"}})
+    r = L.lint_doc("ci.yml", d)
+    assert r["ok"] and not r["issues"], r
+
+
+def test_subpath_action_floating_tag_still_fails():
+    import gk_ci_security_lint as L
+    d = _good()
+    d["jobs"]["smoke"]["steps"].append(
+        {"uses": "github/codeql-action/upload-sarif@v3", "with": {}})
+    assert any("未钉" in i["error"] for i in L.lint_doc("ci.yml", d)["issues"])
+
+
 def test_checkout_persist_credentials_fails():
     import gk_ci_security_lint as L
     d = _good(); d["jobs"]["smoke"]["steps"][0]["with"] = {"persist-credentials": True}

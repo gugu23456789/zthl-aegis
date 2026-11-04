@@ -29,7 +29,10 @@ except ImportError:  # pragma: no cover
 
 ROOT = Path(__file__).resolve().parent.parent
 WF_DIR = ROOT / ".github" / "workflows"
-PIN_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+@[0-9a-f]{40}$")
+# 2026-11-04 修：原式只认 `owner/repo@sha`（恰好一个 `/`），把带子路径的 action
+#   全部误判为「未钉」（`github/codeql-action/upload-sarif@<sha>`、
+#   `actions/aws/configure-aws-credentials@<sha>` 等），与 §9 的 SHA pin 纪律自相矛盾。
+PIN_RE = re.compile(r"^[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)+@[0-9a-f]{40}$")
 INJECT_RE = re.compile(
     r"\$\{\{\s*(?:inputs\.|github\.event\.(?:pull_request|issue|comment|review|head_commit|commits)"
     r"|github\.head_ref)")

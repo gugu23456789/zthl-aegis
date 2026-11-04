@@ -169,6 +169,11 @@ def main(argv=None) -> int:
     ap.add_argument("--summary", action="store_true", help="只输出计数摘要")
     ap.add_argument("--assert-baseline", default=None,
                     help="基线 JSON 路径；只报 NEW（基线中不存在的 func+cat+sha）")
+    ap.add_argument("--max-payload", type=int, default=None,
+                    help="payload 计数硬上限（棘轮：只许调低）；超出 ⟹ exit 1")
+    ap.add_argument("--freeze", default=None,
+                    help="把当前扫描冻结为基线文件（含 frozen_at/note，供 --assert-baseline 使用）")
+    ap.add_argument("--note", default="", help="与 --freeze 同用：写入基线的说明")
     args = ap.parse_args(argv)
 
     cli = args.cli or str(Path(__file__).resolve().parent.parent / "gatekeeper-cli.sh")
@@ -177,6 +182,29 @@ def main(argv=None) -> int:
         return 2
 
     r = scan(cli)
+
+    if args.freeze:
+        import datetime
+        fp = Path(args.freeze)
+        fp.parent.mkdir(parents=True, exist_ok=True)
+        snap = {"schema": "gk-bomb-inventory/1",
+                "frozen_at": datetime.datetime.now(datetime.timezone.utc)
+                             .strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "note": args.note}
+        snap.update(r)
+        fp.write_text(json.dumps(snap, ensure_ascii=False, indent=2), encoding="utf-8")
+        print(json.dumps({"ok": True, "frozen": str(fp), "total": r["total"],
+                          "payload": r["by_cat"].get("payload", 0)}, ensure_ascii=False))
+        return 0
+
+    payload = r["by_cat"].get("payload", 0)
+    if args.max_payload is not None and payload > args.max_payload:
+        print(json.dumps({"ok": False, "check": "max-payload", "payload": payload,
+                          "limit": args.max_payload,
+                          "overflow": payload - args.max_payload,
+                          "hint": "新增内联载荷不得入库；拆掉旧块后可调低该上限"},
+                         ensure_ascii=False))
+        return 1
 
     if args.assert_baseline:
         bp = Path(args.assert_baseline)

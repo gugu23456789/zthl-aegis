@@ -9,6 +9,8 @@ import json
 import os
 import sys
 
+import pytest
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import gk_model_shelf as S  # noqa: E402
 
@@ -67,9 +69,15 @@ def test_tokenizer_checks_missing_is_fail(tmp_path):
 
 
 def test_pin_checks_match_current_code():
-    """探针常量与 PINNED 一致；S 新鲜度按真实指纹状态断言（1017 已换代）。"""
+    """探针常量与 PINNED 一致；S 新鲜度按真实指纹状态断言（1017 已换代）。
+
+    2026-11-04：phase 族在**公开包**属导出排除面 ⟹ `pin_checks()` 返回 `NOT_SHIPPED`
+    单行。此处**具名 skip**（不是静默放行）：私仓仍跑全部真断言。
+    """
     rows = S.pin_checks()
     by = {r["check"]: r["status"] for r in rows}
+    if by.get("probe_import") == "NOT_SHIPPED":
+        pytest.skip("phase 族不随公开包（NOT_SHIPPED）—— 私仓跑真断言")
     assert by["niah_long_pairs"] == "PASS"
     assert by["niah_top_logprobs"] == "PASS"
     assert by["stride_S_candidate"] == "PASS"

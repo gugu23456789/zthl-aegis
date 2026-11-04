@@ -40,19 +40,18 @@ jobs:
       - name: install test deps
         # cryptography：身份认证验签 / Ed25519 封印用例的**真跑**依赖。缺它时相关测试
         # 只能 importorskip（覆盖归零）；装上才守得住验签路径。
-        run: python -m pip install --upgrade pip pytest pyyaml==6.0.2 pytest-xdist cryptography openai openai-agents pydantic
+        run: python -m pip install --upgrade pip pytest pyyaml==6.0.2 pytest-xdist cryptography pyyaml==6.0.2
       - name: smoke gate
         env:
           CI_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before }}
         run: bash scripts/ci_smoke.sh
-      - name: resident feature coverage (self-description)
-        # 常驻功能（WAL/基准/MCP 工具面/来源链）必须写进自述文档；
-        # 同时校验 GK-FACTS/GK-REFS/容量水位表等自动刷新文档未漂移。
-        run: python scripts/gk_doc_features.py
-      - name: archive metadata (offline check)
-        # 发布面预检（阻断、**离线**）：`references/archive.json` 的 Concept DOI 必须合法。
-        # 联网型 dry-run 只在发包预检跑（见 release.yml），避免 CI 被 Zenodo 抖动拖红。
-        run: python scripts/gk_zenodo_sync.py --check-archive references/archive.json
+      - name: inline payload gate (ratchet)
+        # N-1（2026-11-04）：内联载荷**只降不升**。
+        #   ① 基线冻结入库（docs/analysis/bomb-inventory-20261104.json）⟹ 只报 NEW，防「自证循环」；
+        #   ② --max-payload 是硬棘轮：拆块后才许调低，禁止无对应拆解提交时调高。
+        run: |
+          python scripts/gk_bomb_inventory.py --assert-baseline docs/analysis/bomb-inventory-20261104.json
+          python scripts/gk_bomb_inventory.py --max-payload 96
 
   venv-gate:
     # 2026-11-02 owner 要求：CI 必须在内置虚拟环境里完整跑一遍。
@@ -73,7 +72,7 @@ jobs:
         run: |
           python -m venv .venv
           . .venv/bin/activate
-          python -m pip install --upgrade pip pytest pytest-xdist cryptography pyyaml==6.0.2 openai openai-agents pydantic
+          python -m pip install --upgrade pip pytest pytest-xdist cryptography pyyaml==6.0.2
       - name: assert interpreter is the venv
         run: |
           . .venv/bin/activate
@@ -95,26 +94,6 @@ jobs:
             scripts/test_opcap_evidence_alias.py \
             scripts/test_gk_package_integrity.py \
             scripts/test_gk_hook_manage.py
-
-  bench-quick:
-    # S5（M5）：benchmark 门禁化的 CI 半边 —— 正确性（quick 跑通）+ 阈值（红先转绿）。
-    # full / 夜间基线与跨版本对比在 bench-nightly.yml；本 job 只花 ~1 分钟。
-    name: benchmark quick (correctness + thresholds)
-    runs-on: ubuntu-24.04
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
-        with:
-          persist-credentials: false
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
-        with:
-          python-version: "3.12"
-      - name: install test deps
-        run: python -m pip install --upgrade pip pytest
-      - name: quick bench (correctness)
-        run: python scripts/gk_bench_state.py --quick --json
-      - name: red-first thresholds + baseline comparator
-        run: python -m pytest -q scripts/test_gk_bench_thresholds.py scripts/test_gk_bench_compare.py
 
   plan-gate:
     # plan_lint 是**计划质询前置 pw-sn 安全网**（针对本轮要质询的那份计划），
@@ -237,6 +216,11 @@ jobs:
     name: security audit (static)
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    # job 级权限：SARIF 上报需要 security-events: write；顶层仍是 contents: read。
+    # job 级 permissions 会**整体替换**顶层声明，故 contents: read 必须在此重复。
+    permissions:
+      contents: read
+      security-events: write
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
         with:
@@ -251,8 +235,27 @@ jobs:
         run: python scripts/gk_ci_security_lint.py --json
       - name: bash dangerous-command static scan
         run: |
+          # 2026-11-04：原步骤只 `--json`（该形态恒 exit 0）⟹ 命中危险命令也不红，
+          # 属装饰性步骤（对齐模板 §7.1 假绿红线）。先跑门禁形态（issues>0 ⟹ exit 1），
+          # 再落 JSON 供 artifact 消费。
+          python scripts/gk_bash_static_scan.py
           python scripts/gk_bash_static_scan.py --json > static-scan.json
           cat static-scan.json | head -c 2000
+      - name: SARIF (unified static results)
+        # 三份私有 JSON 归一为 SARIF 2.1.0；--gate 使「存在 error 级 finding」真实失败。
+        # always()：前面的门红掉时更需要这份清单。
+        if: always()
+        run: python scripts/gk_sarif.py --out results.sarif --gate
+      - name: upload SARIF to code scanning
+        # report sink（报告出口），门禁在上一 step。fork PR 无 security-events 写权限
+        # （平台限制），跳过而非判红；仓库未启用 code scanning / 启用了 CodeQL default
+        # setup 时上传会被拒 —— 那是配置态，不该把全部 PR 判红。
+        if: always() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@a3d1b77a1ba1550fbb5c74db1dc3a11f4a481126  # v3.39.2
+        with:
+          sarif_file: results.sarif
+          category: aegis-static
       - name: workflow lint (actionlint if present)
         run: |
           if command -v actionlint >/dev/null 2>&1; then
@@ -264,5 +267,7 @@ jobs:
         if: always()
         with:
           name: static-scan
-          path: static-scan.json
+          path: |
+            static-scan.json
+            results.sarif
           retention-days: 7

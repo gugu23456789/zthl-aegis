@@ -47,7 +47,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: install test deps
-        run: python -m pip install --upgrade pip pytest pytest-xdist cryptography pyyaml==6.0.2 openai openai-agents pydantic
+        run: python -m pip install --upgrade pip pytest pytest-xdist cryptography pyyaml==6.0.2
       - name: workflow security gate
         run: python scripts/gk_ci_security_lint.py --json
       - name: package/hook integrity
@@ -55,38 +55,12 @@ jobs:
         run: python scripts/gk_package_integrity.py --json
       - name: smoke gate
         run: bash scripts/ci_smoke.sh
-      - name: resident feature coverage (self-description)
-        # 发布面门禁：常驻功能必须在自述文档得到反映，自动刷新文档不得漂移。
-        run: python scripts/gk_doc_features.py
-      - name: archive preflight (offline + Zenodo dry-run)
-        # 发包预检（**阻断**）：先离线校验 archive.json，再解析 Concept DOI 到 Zenodo 最新记录。
-        # 解析不到就不发包 —— 避免「发布后才发现归档失败、再补一版」。
-        # 只读：dry-run 不发写请求；pack 之前附件尚未产出，故允许 missing。
-        env:
-          VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
-          ZENODO_TOKEN: ${{ secrets.ZTHL }}
-        run: |
-          python scripts/gk_zenodo_sync.py --check-archive references/archive.json
-          CONCEPT=$(python -c "import json;print(json.load(open('references/archive.json'))['concept_doi'].rsplit('.',1)[-1])")
-          python scripts/gk_zenodo_sync.py --concept "$CONCEPT" --version "$VERSION" --dist dist --dry-run
-      - name: pack (deterministic zip + SHA256SUMS + PROVENANCE + manifest)
+      - name: pack (deterministic zip + SHA256SUMS + manifest)
         env:
           VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
         run: |
-          python scripts/pack_release.py --tree . --out dist --version "$VERSION" \
-            --source-repo "${{ github.repository }}" \
-            --source-commit "${{ github.sha }}" \
-            --source-tag "$VERSION" \
-            --json > pack-report.json
+          python scripts/pack_release.py --tree . --out dist --version "$VERSION" --json > pack-report.json
           cat pack-report.json
-      - name: sbom (CycloneDX 1.5)
-        env:
-          VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
-        run: |
-          ZIP_SHA=$(sha256sum "dist/zthl-aegis-$VERSION.zip" | cut -d' ' -f1)
-          python scripts/gk_sbom.py --tree . --version "$VERSION" \
-            --zip-sha256 "$ZIP_SHA" --out dist/SBOM.cdx.json
-          cat dist/SBOM.cdx.json
       - name: verify checksums (extract + sha256sum -c)
         env:
           VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
@@ -95,112 +69,20 @@ jobs:
           unzip -q "dist/zthl-aegis-$VERSION.zip" -d dist/unpacked
           cd dist/unpacked
           sha256sum -c SHA256SUMS
-      - name: release-gate benchmark (SLA record)
-        # S5：发布门耗时纳入 SLA —— 只记录与 WARN（CI 抖动大），不阻断发版；
-        #   基线滚动由维护者按 nightly 产物人工 `--init-baseline`。
-        # 2026-11-04：公开树只导出 references 子集，doc-release --strict 必然报「文件缺失」
-        #   （私有面文档未随包）⟹ 该步只记录 rc/耗时，不阻断发布。
-        continue-on-error: true
-        run: |
-          set -o pipefail
-          mkdir -p dist/bench
-          python scripts/gk_bench_release.py --json --out-dir dist/bench > dist/bench/release.json || true
-          python scripts/gk_bench_compare.py --baseline references/bench-baseline.json \
-            --release dist/bench/release.json --only release --json \
-            | tee dist/bench/release-compare.json
       - name: attest build provenance
         # SLSA provenance：把 zip 与本次 workflow/commit 绑定，消费方可离线核验。
         uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be  # v2
         with:
-          subject-path: |
-            dist/zthl-aegis-*.zip
-            dist/SBOM.cdx.json
+          subject-path: dist/zthl-aegis-*.zip
       - name: publish release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
         run: |
-          NOTES=(--generate-notes)
-          [ -f "RELEASE-NOTES-$VERSION.md" ] && NOTES=(--notes-file "RELEASE-NOTES-$VERSION.md")
           gh release create "$VERSION" \
             --verify-tag \
             "dist/zthl-aegis-$VERSION.zip" \
             "dist/SHA256SUMS" \
-            "dist/PROVENANCE.json" \
-            "dist/SBOM.cdx.json" \
             "dist/release-manifest.json" \
             --title "ZTHL Aegis $VERSION" \
-            "${NOTES[@]}"
-      - name: archive to Zenodo (new version)
-        # 每个 Release 自动归档为 Zenodo 新版本（Concept DOI 自动指向最新）：
-        #   未配置 token 时脚本自行跳过（exit 0，属**配置态**而非失败）。
-        #   ⚠ 不得 `continue-on-error`：`ci-pipeline-template.md` §7.1/§8 明确「吞失败 = 假绿 = 无防御」，
-        #     2026-11-04 v0.9.6.5 就因它把 `403 Bucket is locked` 藏成了绿色作业。
-        # Concept recid 取自包内 `references/archive.json` 的 Concept DOI（单一事实源）。
-        # 仓库 secret 名为 `ZTHL`（2026-11-04 建立），脚本仍读环境变量 ZENODO_TOKEN。
-        env:
-          ZENODO_TOKEN: ${{ secrets.ZTHL }}
-          VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
-        run: |
-          CONCEPT=$(python -c "import json;print(json.load(open('references/archive.json'))['concept_doi'].rsplit('.',1)[-1])")
-          python scripts/gk_zenodo_sync.py --concept "$CONCEPT" --version "$VERSION" --dist dist
-
-  sync-main:
-    name: sync main to latest tag
-    # 发布纪律（2026-11-04 修订，用户裁定「按方案改规则」）：
-    #   **tag 必须是 main 的祖先**。main 领先 tag 是**正常状态**（存在未发版提交），
-    #   不再因此强制补发版本——旧规则「main 必须等于最新 tag」会逼出连环发版。
-    #   - tag 比 main 新（tag 打在侧支/游离提交上，main 落后）⟹ **快进** main 到 tag（真正的异常）；
-    #   - main 比 tag 新 ⟹ 只在 job summary 记录「未发版 N 个提交」，不改写历史、不判失败；
-    #   - 已分叉 ⟹ 失败，交人工处理。
-    # 注意：GITHUB_TOKEN 推 main 不会触发其他 workflow —— 这里快进到的提交正是 tag 提交，
-    #   其 CI 已在 tag 上跑过，无需再触发。
-    needs: release
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-      - name: fast-forward main / report drift
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
-        run: |
-          set -euo pipefail
-          git fetch --tags --force origin
-          TAG_SHA=$(git rev-parse "refs/tags/$TAG^{commit}")
-          MAIN_SHA=$(git rev-parse origin/main)
-          echo "tag=$TAG ($TAG_SHA)  main=$MAIN_SHA"
-
-          if [ "$TAG_SHA" = "$MAIN_SHA" ]; then
-            echo "main 已与 $TAG 同步"
-            echo "main 已与 \`$TAG\` 同步（\`$TAG_SHA\`）" >> "$GITHUB_STEP_SUMMARY"
-            exit 0
-          fi
-
-          if git merge-base --is-ancestor "$TAG_SHA" "$MAIN_SHA"; then
-            AHEAD=$(git rev-list --count "$TAG_SHA..$MAIN_SHA")
-            # 新规则：main 领先 = 正常（有未发版提交），只记录，不告警、不判失败
-            echo "main 领先 $TAG $AHEAD 个提交（未发版，属正常状态）"
-            {
-              echo "### main 领先 \`$TAG\` $AHEAD 个提交（未发版，属正常状态）"
-              echo '```'
-              git log --oneline "$TAG_SHA..$MAIN_SHA"
-              echo '```'
-            } >> "$GITHUB_STEP_SUMMARY"
-            exit 0
-          fi
-
-          if git merge-base --is-ancestor "$MAIN_SHA" "$TAG_SHA"; then
-            git push "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
-              "$TAG_SHA:refs/heads/main"
-            echo "main 已快进到 $TAG（$TAG_SHA）"
-            echo "main 已快进到 \`$TAG\`（\`$TAG_SHA\`）" >> "$GITHUB_STEP_SUMMARY"
-            exit 0
-          fi
-
-          echo "::error::main 与 $TAG 已分叉，需人工处理"
+            --notes-file "RELEASE-NOTES-$VERSION.md"

@@ -46,6 +46,9 @@ from gk_review_nodes import REVIEW_NODE_STANDARD as _REVIEW_NODE_STANDARD  # noq
 from gk_review_nodes import REVIEW_NODE_STANDING as _REVIEW_NODE_STANDING  # noqa: E402
 # R2（2026-09-22）：state 序列化单一事实源 —— 勿再内联 json.dump 直写 state。
 from gk_json_utils import dump_state, state_lock  # noqa: E402
+# 2026-11-04：威胁模式**单一来源**（`scripts/gk_threat_patterns.py`）—— 编辑载荷闸
+# 与 cron prompt 扫描共用一处定义，禁止在各自文件里再写一份模式表。
+from gk_threat_patterns import PAYLOAD_MALWARE_PATTERNS as _MALWARE_PATTERNS  # noqa: E402
 
 # 2026-09-04 ② state 单一事实源收敛：CLI（gatekeeper-cli.sh）状态机写入 SKILL_DIR/.gatekeeper.state
 # （跨 R 机器单源）。此前 hook 默认/登记映射指 spz_gatekeeper_project 仓库级 .gatekeeper.state
@@ -1001,44 +1004,6 @@ def _egress_identity(tool_name, tool_input):
     return "McpEgress", url
 
 
-# ── Gate R0.18【蓝色大肥鱼与章鱼浏览器工具面：install / record 写面闸】（2026-11-03）──
-# 真机 25 工具实测：`install_browser` 会下载/安装 Chromium（网络 + 落盘）；
-#   `browser_record_start/stop/generate_steps/generate_skill` 会把录像/技能写盘；
-#   两者都不在 MCP_WRITE_VERBS / MCP_EXEC_TOOLS / R0.14 精确集里 ⟹ 原样可达。
-# 本闸只拦这两类；本地读/UI（dom_tree/screenshot/click/type/fill/press/wait/tab/session）放行。
-# 逃生舱：GK_MCP_ALLOW_BROWSER_INSTALL=1 / GK_MCP_ALLOW_BROWSER_RECORD=1（运维显式放行）。
-BROWSER_TOOLFACE_GATE_NAME = "蓝色大肥鱼与章鱼浏览器工具面【install/record 写面闸】"
-BROWSER_INSTALL_TOOL = "install_browser"
-BROWSER_RECORD_WRITE_TOOLS = frozenset((
-    "browser_record_start", "browser_record_stop",
-    "browser_record_generate_steps", "browser_record_generate_skill"))
-BROWSER_RECORD_READ_TOOLS = frozenset((
-    "browser_record_doctor", "browser_record_status",
-    "browser_record_list", "browser_record_show"))
-BROWSER_LOCAL_UI_TOOLS = frozenset((
-    "browser_dom_tree", "browser_screenshot", "browser_click", "browser_type",
-    "browser_fill", "browser_press", "browser_wait", "browser_switch_tab",
-    "browser_close_tab", "browser_list_tabs", "browser_close_session"))
-
-
-def _browser_toolface_gate(tool_name, tool_input):
-    """→ BLOCK 原因字符串；非 MCP / 非这两类 → 空串（恒等）。"""
-    inner, _args = _mcp_inner_tool(tool_name, tool_input)
-    if not inner:
-        return ""
-    n = inner.lower()
-    if n == BROWSER_INSTALL_TOOL and os.environ.get(
-            "GK_MCP_ALLOW_BROWSER_INSTALL", "0") != "1":
-        return (BROWSER_TOOLFACE_GATE_NAME + ": `install_browser` 会下载/安装 Chromium"
-                "（网络 + 落盘）。请手工执行 `octop-browser install-browser`；"
-                "确需 agent 直调时显式设 GK_MCP_ALLOW_BROWSER_INSTALL=1。")
-    if n in BROWSER_RECORD_WRITE_TOOLS and os.environ.get(
-            "GK_MCP_ALLOW_BROWSER_RECORD", "0") != "1":
-        return (BROWSER_TOOLFACE_GATE_NAME + f": `{inner}` 会把录像/技能写盘；"
-                "确需 agent 直调时显式设 GK_MCP_ALLOW_BROWSER_RECORD=1。")
-    return ""
-
-
 def _wsl_quoting_trap(command: str) -> str | None:
     """检测 WSL 引号陷阱（PS 宿主展开 + 5.1 native arg mangling 两种机制）。命中返回 block 原因，安全返回 None。
     纯语法检测、无状态依赖 → 普适安全 gate（治理范围外也执行，2026-08-09）。
@@ -1502,6 +1467,74 @@ def _secret_gate_edit(tool_name: str, tool_input: dict, file_path: str = "") -> 
     if tool_name not in EDIT_TOOLS:
         return
     hit = _plaintext_secret(_edit_payload_text(tool_input))
+    if hit:
+        reason, hint = hit
+        block(f"{reason} Target: {file_path or '(unnamed)'}", hint)
+
+
+# ── Gate R0.19：恶意代码模式拦截（EDIT 载荷，2026-11-04）──
+# 动因（用户裁定「恶意代码检查拦截同样需要扩展技能自身的 hook」）：R0.2 管**命令串**、
+#   R0.3 管**脚本文件内容**、R0.8 管**密钥字面量** —— 三者都不管「把反弹 shell /
+#   下载即执行 / 凭据外送写进一个新文件」。EDIT 载荷这条路径此前只有 R0.8，等于对恶意
+#   代码失明（写进去再执行 = 两道门都过）。
+# 判据形态：只认**高置信执行形**（设备文件回连 / 管道进解释器 / 解码后执行 / 凭据+外网同现），
+#   不认单关键词 —— 否则「讨论恶意代码的文档」会被自己拦掉。
+# 扫描面：只扫**新写入内容**（`new_str` / `content`），**不扫 `old_str`** —— 扫它会让
+#   「删除恶意代码」这个正确动作被拦（与 R0.8 的取舍不同，理由在此）。
+# 豁免（两类）：
+#   ① **惰性文档**（.md/.txt/.rst）：不执行，且文档天然要引用攻击串；
+#   ② **检测器 / 测试载体**（按**文件名**：`test_*` 或下方白名单）——其正则会必然包含
+#      这些字面量，绑目录会在公开导出树 / worktree 副本上误拦。
+# 逃生舱：段首声明 `GK_MALWARE_WRITE=1`（与 `GK_SECRET_WRITE=1` 同形、同「这一条有效」）。
+_MALWARE_DECL = "GK_MALWARE_WRITE=1"
+_SELF_EXEMPT_NAMES = frozenset((
+    "pre_tool_hook.py", "gk_bash_static_scan.py", "gk_sarif.py", "gk_threat_patterns.py",
+    "gk_edit_verify.py", "gk_foreign_scan.py", "gk_covert_warden.py",
+))
+_MALWARE_INERT_SUFFIX = frozenset((".md", ".txt", ".rst"))
+_MALWARE_HINT = ("写恶意代码 / 后门形态会被本闸拦下。若确属安全研究或检测器实现："
+                 "① 写进 .md/.txt/.rst（惰性文档不拦）；② 或在本段首声明 GK_MALWARE_WRITE=1；"
+                 "③ 检测器/测试载体按文件名豁免（test_* 或检测器白名单）")
+
+
+def _malware_self_exempt(file_path: str) -> bool:
+    """检测器 / 测试载体豁免（**文件名级**，不绑定目录）。
+
+    为什么按名字而不是按目录：同一条检测器既存在于技能树，也存在于公开导出树 / 各 worktree
+    副本，还会被复制到邻居仓库做测试 —— 绑目录必然在某个副本上误拦（实测：公开仓
+    `scripts/` 不在技能目录内）。代价与边界：这是**纵深防御的一层**，主动把后门命名为
+    `test_*.py` 可绕过，但「改写/新增检测器载体」本身受 Gate 8（技能自维护）与
+    R0.4（插件统一入口）覆盖，不靠本闸兜。
+    """
+    if not file_path:
+        return False
+    name = Path(_host_form(file_path)).name
+    return name in _SELF_EXEMPT_NAMES or name.startswith("test_")
+
+
+def _malware_payload(text: str) -> tuple[str, str] | None:
+    """恶意代码模式检测（Gate R0.19）。命中 → (reason, hint)。"""
+    import re
+    if not text:
+        return None
+    if re.search(r"(?:^|[;&|\n]|['\"])\s*" + re.escape(_MALWARE_DECL) + r"\b", text):
+        return None
+    for label, pat in _MALWARE_PATTERNS:
+        if re.search(pat, text, re.IGNORECASE):
+            return (f"BLOCK: 恶意代码模式（{label}）", _MALWARE_HINT)
+    return None
+
+
+def _malware_gate_edit(tool_name: str, tool_input: dict, file_path: str = "") -> None:
+    """EDIT_TOOLS 载荷闸（Gate R0.19）：范围内外**同判**。"""
+    if tool_name not in EDIT_TOOLS:
+        return
+    if Path(_host_form(file_path or "")).suffix.lower() in _MALWARE_INERT_SUFFIX:
+        return
+    if _malware_self_exempt(file_path):
+        return
+    payload = "\n".join(str(tool_input.get(k) or "") for k in ("new_str", "content"))
+    hit = _malware_payload(payload)
     if hit:
         reason, hint = hit
         block(f"{reason} Target: {file_path or '(unnamed)'}", hint)
@@ -3899,12 +3932,6 @@ def main():
               "浏览器 MCP 导航/取网/`evaluate` = 无台账的第二出网通道 ⟹ 拒。"
               "逃生舱（仅运维显式放行）：GK_MCP_EGRESS_GATE=0。")
 
-    # ── Gate R0.18【octop 浏览器工具面】：install / record 写面（普适面，先于 scope_out）──
-    _bt_block = _browser_toolface_gate(tool_name, tool_input)
-    if _bt_block:
-        _log_hook(f"MCP-BROWSER-TOOLFACE-BLOCK: {tool_name}")
-        block(_bt_block)
-
     # ── H-SLSN 激活检测（2026-08-27，ECC-8570E847C7C1）──
     # 双条件与：① hook 生效（PreToolUse 被触发 = 本函数在跑） ② 用户指令含 Use Skill: spz-gatekeeper-r-sequence
     #   —— ② 的代理检测 = Skill 工具调用本身（tool_name=="Skill" 且输入含技能名）。
@@ -4145,6 +4172,9 @@ def main():
         # Gate R0.8（EDIT 载荷）：范围内外同判 —— 写 key 到治理范围外（如 ~/.env）同为泄漏
         _secret_gate_edit(tool_name, tool_input,
                           tool_input.get("file_path") or tool_input.get("path") or "")
+        # Gate R0.19（EDIT 载荷）：恶意代码同判 —— 把后门写到治理范围外同样是后门
+        _malware_gate_edit(tool_name, tool_input,
+                           tool_input.get("file_path") or tool_input.get("path") or "")
         sys.exit(0)
 
     # 治理范围内 → 允许记录被禁意图（scope_out 的普适 BLOCK 不入技能 state）
@@ -4190,6 +4220,9 @@ def main():
 
     # ── Gate R0.8: 明文 API key / 私钥字面量（Edit/Write 载荷）──
     _secret_gate_edit(tool_name, tool_input, file_path)
+
+    # ── Gate R0.19: 恶意代码模式（Edit/Write 载荷）──
+    _malware_gate_edit(tool_name, tool_input, file_path)
 
     # ── Gate 0: Task 默认拒绝 + 单次票据（方案 B，2026-10-27）──
     # 2026-08-26：治理范围内禁止裸 Task 跑任何 gatekeeper 流程，引导回 CLI 正规流程

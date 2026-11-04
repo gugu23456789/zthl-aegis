@@ -321,7 +321,9 @@ def test_subagent_registry_and_role_wiring():
 
 
 def test_paper_review_requests_web_tools(monkeypatch, tmp_path):
-    import gk_paper_review as gpr
+    # 2026-11-04（导出面）：`gk_paper_review` 属排除面（公开包不随附）⟹ 具名 skip，
+    # 不再让公开树全量跑出 ModuleNotFoundError；私仓照常跑真断言。
+    gpr = pytest.importorskip("gk_paper_review", reason="paper-review 不随公开包")
 
     captured = {}
 

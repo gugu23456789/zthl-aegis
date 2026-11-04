@@ -21,45 +21,25 @@ def _refs():
             {"subagent_id": "b", "conclusion": "same text here", "arm_group": "G2"}]
 
 
-def _prov():
-    return {"fingerprint": "x", "S": 2, "N": 200,
-            "batch_id": "R5", "measured_at": "2026-11-03T00:00:00Z"}
-
-
 def test_none_means_zero_regression():
     c = M.cluster_references(_refs())["consensus"]
     assert c["pollution_tilt"] == 0.0
     assert c["agreement_eff"] == c["agreement"]
     assert c["abstain"] == (c["agreement"] < c["min_agreement"])
-    assert c["adjusted"] is False and c["adjustment_verified"] is False
 
 
 def test_multiplicative_discount():
     base = M.cluster_references(_refs())["consensus"]
-    d = M.cluster_references(_refs(), pollution_tilt=0.5,
-                             provenance=_prov())["consensus"]
+    d = M.cluster_references(_refs(), pollution_tilt=0.5)["consensus"]
     assert abs(d["agreement_eff"] - round(base["agreement"] * 0.5, 4)) < 1e-9
     assert d["abstain"] == (d["agreement_eff"] < d["min_agreement"])
-    assert d["adjusted"] is True and d["adjustment_verified"] is True
-    assert d["pollution_provenance"]["fingerprint"] == "x"
-
-
-def test_tilt_without_provenance_is_unverified():
-    base = M.cluster_references(_refs())["consensus"]
-    d = M.cluster_references(_refs(), pollution_tilt=0.5)["consensus"]
-    assert d["agreement_eff"] == round(base["agreement"] * 0.5, 4)  # 零回归
-    assert d["adjusted"] is True and d["adjustment_verified"] is False
-    assert d["pollution_provenance"] is None
 
 
 def test_tilt_clamped_to_unit_interval():
-    hi = M.cluster_references(_refs(), pollution_tilt=2.0,
-                              provenance=_prov())["consensus"]
+    hi = M.cluster_references(_refs(), pollution_tilt=2.0)["consensus"]
     assert hi["pollution_tilt"] == 1.0 and hi["agreement_eff"] == 0.0
-    lo = M.cluster_references(_refs(), pollution_tilt=-1.0,
-                              provenance=_prov())["consensus"]
+    lo = M.cluster_references(_refs(), pollution_tilt=-1.0)["consensus"]
     assert lo["pollution_tilt"] == 0.0 and lo["agreement_eff"] == lo["agreement"]
-    assert lo["adjusted"] is False
 
 
 def test_batch_tilt_lookup_is_batch_level():
@@ -90,8 +70,6 @@ def test_aggregate_connects_p_meta_divergence(tmp_path):
     out = M.aggregate(str(sf), None, "plan-refinement", plan=_PLAN, batch="R5")
     assert out["consensus"]["pollution_tilt"] == 0.4, out["consensus"]
     assert out["consensus"]["agreement_eff"] == round(out["consensus"]["agreement"] * 0.6, 4)
-    assert out["consensus"]["adjusted"] is True
-    assert out["consensus"]["adjustment_verified"] is False  # aggregate 未带 provenance
 
 
 def test_aggregate_no_divergence_keeps_ledger_only(tmp_path):

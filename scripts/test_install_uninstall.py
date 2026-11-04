@@ -10,6 +10,7 @@
 """
 import json
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -22,29 +23,51 @@ BASH = shutil.which("bash")
 pytestmark = pytest.mark.skipif(BASH is None, reason="需要 bash")
 
 
+def _bash_path(p):
+    """Windows 绝对路径 → WSL 可解析的 `/mnt/<drive>/...`；非 Windows 原样（分类学 #13）。
+
+    现场：本机 `bash` = `C:\\windows\\system32\\bash.EXE`（WSL），传入 `<home>`
+    会被吞成 `C:UsersHP...` ⟹ `/bin/bash: No such file or directory`（rc=127）。
+    因此**传给 bash 的参数**与 bash 读取的 env（HOME / GK_HOOKS_JSON）都换算成 POSIX 形态；
+    `cwd` 仍用 Windows 形态（由 CreateProcess 解释）。
+    """
+    if os.name != "nt":
+        return str(p)
+    q = str(p).replace("\\", "/")
+    m = re.match(r"^([A-Za-z]):/(.*)$", q)
+    return "/mnt/%s/%s" % (m.group(1).lower(), m.group(2)) if m else q
+
+
 def _fake_src(tmp_path: Path) -> Path:
-    """最小安装源：只含安装器需要的文件，避免复制整个仓。"""
+    """最小安装源：只含安装器需要的文件，避免复制整个仓。
+
+    `newline="\\n"` 是必需的（Windows 实测）：默认写文本会把 `\\n` 翻成 `\\r\\n`，
+    而 WSL bash 读到 CRLF 会报 `$'\\r': command not found` / `set: pipefail` 断行
+    ⟹ 安装器根本没执行（rc=2），与"安装逻辑错"完全同形。
+    """
     src = tmp_path / "src"
     (src / "scripts").mkdir(parents=True)
     for name in ("install.sh", "uninstall.sh", "gatekeeper-cli.sh", "SKILL.md"):
         txt = (ROOT / name).read_text(encoding="utf-8") if (ROOT / name).is_file() else "#!/usr/bin/env bash\nexit 0\n"
-        (src / name).write_text(txt, encoding="utf-8")
+        (src / name).write_text(txt, encoding="utf-8", newline="\n")
     for name in ("gk_hook_manage.py", "pre_tool_hook_wrapper.sh"):
-        (src / "scripts" / name).write_text((ROOT / "scripts" / name).read_text(encoding="utf-8"), encoding="utf-8")
+        (src / "scripts" / name).write_text(
+            (ROOT / "scripts" / name).read_text(encoding="utf-8"),
+            encoding="utf-8", newline="\n")
     return src
 
 
 def _env(tmp_path: Path) -> dict:
     env = dict(os.environ)
-    env["HOME"] = str(tmp_path / "home")
-    env["GK_HOOKS_JSON"] = str(tmp_path / "hooks.json")
+    env["HOME"] = _bash_path(tmp_path / "home")
+    env["GK_HOOKS_JSON"] = _bash_path(tmp_path / "hooks.json")
     (tmp_path / "home").mkdir(parents=True, exist_ok=True)
     return env
 
 
 def _run(args, tmp_path, cwd=None):
-    return subprocess.run([BASH] + [str(a) for a in args], capture_output=True, text=True,
-                          timeout=120, cwd=str(cwd or tmp_path), env=_env(tmp_path))
+    return subprocess.run([BASH] + [_bash_path(a) for a in args], capture_output=True,
+                          text=True, timeout=120, cwd=str(cwd or tmp_path), env=_env(tmp_path))
 
 
 def _install(tmp_path, src, dest, *extra):
@@ -101,7 +124,8 @@ def test_legacy_manifest_requires_force_legacy(tmp_path):
     # 伪造 v1（无版本行）：其中混入一条用户文件，模拟旧安装器把整目录写进 manifest
     user_file = dest / "notes.md"
     user_file.write_text("keep me", encoding="utf-8")
-    (dest / ".spz-manifest").write_text("gatekeeper-cli.sh\nnotes.md\n", encoding="utf-8")
+    (dest / ".spz-manifest").write_text("gatekeeper-cli.sh\nnotes.md\n",
+                                        encoding="utf-8", newline="\n")
 
     r = _uninstall(tmp_path, dest)
     assert r.returncode == 2, r.stdout + r.stderr

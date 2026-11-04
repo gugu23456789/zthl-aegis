@@ -60,11 +60,9 @@ def test_persist_writes_file_shard_and_index(tmp_path):
     assert rec["output_file"] == str(f)
     # findings 回填口径（与 CLI 落库段一致）：三键全空 → kept/challenges 回填
     assert rec["findings"] == {"worked": ["k1"], "failed": ["c1"], "not_tried": []}
-    # S3（2026-11-03）：写侧停更内联热索引；索引只经读面单源（内联 ∪ 侧车）取回。
-    leaf = SAT.index_entries(st, "audit-AUDIT-20261031-abc")["report"]
+    leaf = json.loads(Path(st).read_text(encoding="utf-8"))[
+        "gate_data"]["satellite_index"]["audit-AUDIT-20261031-abc"]["report"]
     assert leaf["kind"] == "history" and leaf["records"] == 1
-    assert "satellite_index" not in json.loads(
-        Path(st).read_text(encoding="utf-8"))["gate_data"]
 
 
 def test_invalid_json_fail_loud_keeps_raw(tmp_path):
@@ -110,13 +108,13 @@ def test_full_conclusion_in_file_but_bounded_in_shard(tmp_path):
 def test_two_arms_same_batch_do_not_clobber(tmp_path):
     """c5 同构：同批两臂 ⟹ 两份文件 + 两个 per-arm 索引叶子（互不覆盖）。"""
     import gk_ecc_sink as SINK
-    import gk_satellite as SAT
     st = _mkstate(tmp_path)
     for arm in ("crossr", "report"):
         r = SINK.persist(st, json.dumps(_ecc(subagent_id="sub-" + arm)),
                          domain="audit", batch_id="B9", arm=arm, root=str(tmp_path))
         assert r.get("ok"), r
-    idx = SAT.index_entries(st, "audit-B9")
+    idx = json.loads(Path(st).read_text(encoding="utf-8"))[
+        "gate_data"]["satellite_index"]["audit-B9"]
     assert set(idx) == {"crossr", "report"}, idx
     shard = Path(str(st) + ".history-archive.jsonl").read_text(encoding="utf-8")
     assert len([l for l in shard.splitlines() if l.strip()]) == 2

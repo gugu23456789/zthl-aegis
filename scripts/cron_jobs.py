@@ -11,6 +11,19 @@ OUTPUT_DIR = os.path.join(JOBS_DIR, "output")
 ONESHOT_GRACE_SECONDS = 120
 SKILL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
+# 2026-11-04：威胁模式**单一来源**（`scripts/gk_threat_patterns.py`）。
+# 宽口径（PROMPT_*）只服务 cron prompt 扫描；编辑载荷闸 Gate R0.19 在同一模块取高置信
+# 子集（PAYLOAD_*）。此处只保留旧名别名 ⟹ 外部引用（`cron_jobs._THREAT_PATTERNS`）不断链，
+# 且**禁止**在本文件再写一份正则文本（两份表必然漂移）。
+_SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
+if _SCRIPTS_DIR not in sys.path:
+    sys.path.insert(0, _SCRIPTS_DIR)
+from gk_threat_patterns import (  # noqa: E402
+    INVISIBLE_UNICODE as _INVISIBLE_UNICODE,
+    PROMPT_EXFIL_PATTERNS as _EXFIL_PATTERNS,
+    PROMPT_THREAT_PATTERNS as _THREAT_PATTERNS,
+)
+
 
 def _utcnow():
     """Naive UTC now — 规避 deprecated datetime.utcnow()（3.12 起弃用）。"""
@@ -67,7 +80,7 @@ class _FileLock:
                 import msvcrt; msvcrt.locking(self._fd.fileno(), msvcrt.LK_NBLCK, 1)
             else:
                 import fcntl; fcntl.flock(self._fd.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except:
+        except Exception:
             self._fd.close(); self._fd = None; raise
         return self
     def __exit__(self, *args):
@@ -78,7 +91,7 @@ class _FileLock:
                 else:
                     import fcntl; fcntl.flock(self._fd.fileno(), fcntl.LOCK_UN)
                 self._fd.close()
-            except: pass
+            except Exception: pass
 
 def _jobs_lock():
     """Nested context manager: in-process RLock + cross-process file lock."""
@@ -108,38 +121,23 @@ def _atomic_write(path, data):
             json.dump(data, f, indent=2, ensure_ascii=False, default=str)
             f.flush(); os.fsync(f.fileno())
         shutil.move(tmp, path)
-    except:
+    except Exception:
         try: os.unlink(tmp)
-        except: pass
+        except Exception: pass
         raise
 
 def _secure_file(path, mode=0o600):
     """Set restrictive permissions (Hermes pattern)."""
     try: os.chmod(path, mode)
-    except: pass
+    except Exception: pass
 
 def _secure_dir(path, mode=0o700):
     """Set restrictive directory permissions."""
     try: os.chmod(path, mode)
-    except: pass
+    except Exception: pass
 
 # --- Prompt Injection Scanning (Hermes 3-layer) ---
-_THREAT_PATTERNS = [
-    re.compile(r"(?i)(rm\s+-rf|shred|mkfs|dd\s+if=)"),
-    re.compile(r"(?i)(curl|wget)\s.*\|\s*(bash|sh|python)"),
-    re.compile(r"(?i)(eval|exec)\s*\("),
-    re.compile(r"(?i)import\s+(os|subprocess|sys)\s*;\s*(os|subprocess)\."),
-    re.compile(r"(?i)__import__\s*\("),
-    re.compile(r"(?i)(chmod|chown)\s+[0-7]{3,4}"),
-    re.compile(r"(?i)(sudo|su)\s+"),
-    re.compile(r"(?i)(base64|xxd)\s+-d"),
-]
-_EXFIL_PATTERNS = [
-    re.compile(r"(?i)(curl|wget|nc|ncat)\s+.*https?://"),
-    re.compile(r"(?i)>\s*/dev/tcp/"),
-]
-_INVISIBLE_UNICODE = re.compile(r"[\u200b\u200c\u200d\u2060\ufeff\u00ad]")
-
+# 模式表已迁至 gk_threat_patterns（单一来源，见文件头 import）。
 def scan_prompt(prompt, strict=True):
     """3-layer prompt injection scan. strict=True for create, strict=False for runtime."""
     for pat in _THREAT_PATTERNS:
@@ -350,7 +348,7 @@ def _compute_grace_seconds(job):
             try:
                 from croniter import croniter
                 nxt = croniter(schedule.get("expr", "0 * * * *"), now).get_next(datetime.datetime)
-            except: nxt = None
+            except Exception: nxt = None
         grace = (nxt - now).total_seconds() / 2 if nxt else 3600
     elif kind == "once": return ONESHOT_GRACE_SECONDS
     else: grace = 3600
@@ -670,7 +668,7 @@ def parse_wake_gate(output):
         parsed = json.loads(last)
         if isinstance(parsed, dict) and "wakeAgent" in parsed:
             return parsed["wakeAgent"], "\n".join(lines[:-1]).strip()
-    except: pass
+    except Exception: pass
     return True, output
 
 # --- context_from (cross-task data pipeline) ---

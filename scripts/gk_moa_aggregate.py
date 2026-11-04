@@ -1410,7 +1410,6 @@ _N_EFF_MIN = 2.0
 def cluster_references(refs: list[dict], tau: float = _CLUSTER_TAU,
                        min_agreement: float = _CLUSTER_MIN_AGREE,
                        pollution_tilt: float = None,
-                       provenance: dict | None = None,
                        strict_independence: bool = False) -> dict:
     """按**结构化字段签名**对 references 聚类；返回 `{clusters, consensus}`。
 
@@ -1431,11 +1430,6 @@ def cluster_references(refs: list[dict], tau: float = _CLUSTER_TAU,
     实时 `divergence`（`gate_data.human_calibration_log`）**派生**、`p_art` 待调用方供
     `defect_rate`（后验）。⟹ 有 divergence 时实效 = **P-in ⊕ P-meta**；无则退化为 P-in。
     仍**不冒充**：观测缺失的通道不落值（不按 0 计入，只跳过）。
-
-    2026-11-03：`provenance`（可选）标注折扣来源。`consensus.adjusted` = 是否应用了折扣；
-    `adjustment_verified` = 是否带完整 provenance（fingerprint/S/N/batch_id/measured_at）。
-    公开引用时，`adjustment_verified=false` 一律按 **unadjusted** 处理（见
-    `references/oss-moa-phase-provenance.md`）。
     """
     items = list(refs or [])
     n = len(items)
@@ -1515,13 +1509,6 @@ def cluster_references(refs: list[dict], tau: float = _CLUSTER_TAU,
     #   （见 aggregate 调用点），`p_art` 待调用方 `defect_rate` ⟹ 有 divergence 时实效 = P-in ⊕ P-meta。
     #   `pollution_tilt is None` ⟹ 无折扣（逐字零回归；κ_tilt=0 亦同）。
     _pt = 0.0 if pollution_tilt is None else max(0.0, min(1.0, float(pollution_tilt)))
-    # 2026-11-03：污染折扣的**来源验证**（公开面口径）。`adjusted` = 是否应用了折扣；
-    #   `adjustment_verified` = 折扣是否带完整 provenance（fingerprint/S/N/batch_id/measured_at）。
-    #   无 provenance 时仍保留既有折扣行为（零回归），但**公开引用必须按 unadjusted 处理**
-    #   （见 `references/oss-moa-phase-provenance.md`）。
-    _PROV_KEYS = ("fingerprint", "S", "N", "batch_id", "measured_at")
-    _prov = provenance if isinstance(provenance, dict) else None
-    _prov_ok = bool(_prov and all(_prov.get(k) not in (None, "") for k in _PROV_KEYS))
     agreement_eff = round(agreement * (1.0 - _pt), 4)
     # A8-①（P-2，`ECC-715E4C8DD7C2`）：臂数轴**有效样本量**（Kish）n_eff = n²/Σsize² —— 从**已算**的
     #   簇大小复算（§9.5 AP2「禁重复规划」：复用既有聚类，不另起估计器）。折叠越多 ⟹ n_eff 越小。
@@ -1556,9 +1543,6 @@ def cluster_references(refs: list[dict], tau: float = _CLUSTER_TAU,
         "agreement": agreement,
         "agreement_eff": agreement_eff,
         "pollution_tilt": _pt,
-        "adjusted": bool(_pt > 0.0),
-        "adjustment_verified": bool(_pt > 0.0 and _prov_ok),
-        "pollution_provenance": _prov if (_pt > 0.0 and _prov_ok) else None,
         "min_agreement": round(min_agreement, 4),
         # A8-①（P-2）：臂数轴 Kish 有效样本量 + 独立度门（**只暴露**，不并入 abstain；见 `_N_EFF_MIN` 注）。
         # 题面异构 ⟹ `n_eff`/`independence_ok` 记 None（未测量，禁冒充），原始值留 `n_eff_raw`。

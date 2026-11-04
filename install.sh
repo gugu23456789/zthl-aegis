@@ -174,12 +174,15 @@ rm -f "$MANIFEST.tmp"
 # ─── 钩子注册（加载安全网：非破坏合并 + 备份 + 原子写 + 回读校验）───
 HOOK_RC=0
 if [ "$WITH_HOOKS" = "1" ]; then
-  HOOK_ARGS=(install --skill-dir "$DEST" --profile "$HOOK_PROFILE")
+  # 2026-11-04（用户：「插件的安装钩子需要自动化更新扩展」）：install → sync。
+  # sync = 判漂移（覆盖面不足/命令漂移/超时漂移/重复/未登记）→ 有则改、无则零写入，
+  # 使「升级 / 换机 / 改 profile 后重跑 install.sh」自动收敛，不再停在旧注册形态。
+  HOOK_ARGS=(sync --skill-dir "$DEST" --profile "$HOOK_PROFILE")
   if [ -n "${GK_HOOKS_JSON:-}" ]; then HOOK_ARGS+=(--hooks "$GK_HOOKS_JSON"); fi
   HOOK_OUT=$(python3 "$DEST/scripts/gk_hook_manage.py" "${HOOK_ARGS[@]}" 2>&1) || HOOK_RC=$?
   echo "  hook: $HOOK_OUT"
   if [ "$HOOK_RC" -eq 0 ]; then
-    HOOK_STATUS_ARGS=(status --skill-dir "$DEST")
+    HOOK_STATUS_ARGS=(status --skill-dir "$DEST" --profile "$HOOK_PROFILE")
     if [ -n "${GK_HOOKS_JSON:-}" ]; then HOOK_STATUS_ARGS+=(--hooks "$GK_HOOKS_JSON"); fi
     echo "  hook verify: $(python3 "$DEST/scripts/gk_hook_manage.py" "${HOOK_STATUS_ARGS[@]}" 2>&1 | tr '\n' ' ')"
   else

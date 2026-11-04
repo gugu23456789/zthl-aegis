@@ -279,6 +279,55 @@ dead-code-multilang:
 - **State A 组织**：`STATE_A_PATH` env（默认 `./state_a` 子目录或 submodule）；`SWE_RB_PKG` 安装源待
   zthl-swe-rb 推远端后生效（git+https 占位）
 
+### 3.9 SARIF + code scanning（可选，任何有静态检查器的仓库）
+
+> **定位（2026-11-04 用户定案）**：静态检查器的价值取决于**结果能否被消费**。私有 JSON 形状
+> 只有写脚本的人读得懂；SARIF 2.1.0 是 GitHub code scanning / GitLab SAST / VS Code SARIF
+> Viewer 的共同最小公分母 —— 一份结果，三端消费。参考实现：`zthl-aegis` 的
+> `scripts/gk_sarif.py` + `ci.yml` 的 `security-audit` job。
+
+**三条硬约束**：
+
+1. **确定性**：SARIF 不带时间戳、不带随机量，同一输入逐字相同 ⟹ 可进棘轮基线、可 diff。
+   （`partialFingerprints` 只用 规则/文件/行号/消息 四个稳定量做哈希。）
+2. **不伪造位置**：拿不到行号就省略 `region`；树外载体（`../xxx`）**不生成** `locations`
+   —— SARIF 的 relative uri 逃出仓库根会被 code scanning 判越界。宁可不给位置，不编路径。
+3. **门禁与出口分离**：`--gate` 的退出码是门禁；SARIF **上传**只是报告出口。
+   出口失败（仓库未启用 code scanning / 与 CodeQL default setup 互斥）不应把全部 PR 判红。
+
+```yaml
+security-audit:
+  runs-on: ubuntu-24.04
+  timeout-minutes: 20
+  permissions:
+    contents: read
+    security-events: write      # job 级；job 级 permissions 会整体替换顶层，故 contents 必须重复
+  steps:
+    # ... 各静态门，每个都必须真实失败（禁 || true）...
+    - name: SARIF (unified static results)
+      # 三份私有 JSON 归一；always()：前面的门红掉时更需要这份清单
+      if: always()
+      run: python scripts/gk_sarif.py --out results.sarif --gate
+    - name: upload SARIF to code scanning
+      # fork PR 无 security-events 写权限（平台限制）⟹ 跳过而非判红
+      if: always() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+      continue-on-error: true    # 报告出口，非门禁（门禁在上一 step）
+      uses: github/codeql-action/upload-sarif@<40-hex SHA>   # v3.39.2
+      with:
+        sarif_file: results.sarif
+        category: aegis-static
+```
+
+**落地要点（踩过的坑）**：
+
+- `upload-sarif` 同样必须 **40-hex SHA pin**（与 §9 action pin 同纪律）；`v3` 浮动 tag 会漂。
+- 仓库启用 **CodeQL default setup** 时，workflow 侧 SARIF 上传会被拒（两者互斥）——
+  二选一：关掉 default setup，或放弃 workflow 上传。属**配置态**，不该表现为"每次 PR 全红"。
+- `--gate` 只是把三份结果再归一一次出判据，**不替代**任何原始门（原门仍各自失败）。
+- 别把"无命中"的 PASS 占位项写进 results —— 那会把告警面板灌成噪声。
+- **改造前先确认原步骤是不是装饰性的**：`scan --json > f.json` 这类形态多数恒 exit 0
+  （数据输出契约），命中缺陷也不红 ⟹ 必须先跑一次门禁形态（无 `--json`，issues>0 ⟹ exit 1）。
+
 ## 4. 安全与编码防御
 
 **security-audit**：
@@ -360,6 +409,10 @@ dead-code-multilang:
 - `persist-credentials: false` + action **40 位 commit SHA** pin（供应链；tag 会漂移）
 - **npm install 必须 `--ignore-scripts`**（防 preinstall/postinstall 钩子投毒——ChainDrop 事件 2026-08-04：keyv@6.0.0 等 1300+ 包带 `"preinstall":"node setup.mjs"`，npm install 即触发窃密器；浏览器等二进制由显式 `npx playwright install` 下载，不受影响）
 - zizmor `|| true` 非阻塞 = 无防御；安全 job 不得 `continue-on-error: true`
+- **装饰性检查步**（2026-11-04）：`scan --json > f.json` 这类**数据输出契约**多数恒 exit 0 ⟹
+  命中缺陷也不红。静态扫描步必须先跑门禁形态（无 `--json`，issues>0 ⟹ exit 1），再落 JSON
+- **报告出口 ≠ 门禁**：SARIF 上传 / artifact 上传失败可以容忍（配置态），
+  但生成 SARIF 的 `--gate` 步必须真实失败；二者不得混为一个 continue-on-error 步
 - 发布 job 必须有 `attest-build-provenance`（`id-token: write` / `attestations: write`）；`environment: release` 可选——**单人维护不要配 required reviewers**，GitHub 不允许触发者自审，会永久等待
 - Pages 部署：github-pages 环境 deployment branch 白名单漏加 main → 部署失败
 - GitCode 环境无 GitHub Actions 等效语义，模板不可直接照搬（需移植）
@@ -378,6 +431,7 @@ dead-code-multilang:
 | 注入 | `inputs.*` / 不可信 `github.event.*` 不得直接进 `run:`，经 `env:` 中转 | 脚本注入 |
 | 发布证明 | `actions/attest-build-provenance`；`environment: release` 可选，但单人维护不要配 required reviewers | 供应链可核验，且不自锁 |
 | PR 边界 | `pull_request_target` 不得 checkout PR head | 不可信代码 + 写 token |
+| 结果可消费 | 静态门结果同时产出 SARIF 2.1.0（确定性、不伪造位置） | 私有 JSON 进不了 code scanning / SAST 面板 = 检查了但没人看得见 |
 
 ```yaml
 permissions: { contents: read }

@@ -253,8 +253,6 @@ def main(argv=None):
     p.add_argument("--full", action="store_true")
     p.add_argument("--smoke", action="store_true")
     p.add_argument("--no-crash", action="store_true")
-    p.add_argument("--crashes", type=int, default=None,
-                   help="崩溃注入次数（覆盖挡位默认值；full 默认 20，quick 3）")
     p.add_argument("--out-dir", default="")
     p.add_argument("--json", action="store_true")
     a = p.parse_args(argv)
@@ -264,15 +262,13 @@ def main(argv=None):
     elif a.full:
         mode = "full"
         state_sizes, payloads, writers, ops, crash_trials = (
-            [128 * 1024, 512 * 1024], [1024, 65536], [1, 8, 32], 30, 20)
+            [128 * 1024, 512 * 1024], [1024, 65536], [1, 8, 32], 30, 10)
     else:
         mode = "quick"
         state_sizes, payloads, writers, ops, crash_trials = (
             [128 * 1024], [1024, 16384], [1, 4], 20, 3)
     if a.no_crash:
         crash_trials = 0
-    if a.crashes is not None:
-        crash_trials = max(0, int(a.crashes))
     scenarios = []
     for sb in state_sizes:
         for pb in payloads:

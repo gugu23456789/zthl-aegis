@@ -35,6 +35,11 @@ _RELEASE_PINS = {                # version → sha256(audit.py)；None=未登记
     # 2026-08-24: v0.1.0 发布 wheel（GitHub Release）audit.py 哈希已登记
     "0.1.0": "faf1f2939dcde30d9ee385a1216d72ddc376d5ba039a4a012e5892e01623721a",
     "0.2.3": "52bd3a9b93acd29bb0fc2040c6b1af2aa35ce8cded531d2f6536adac00333a28",
+    # 2026-11-04: v0.3.1（tag a33763d）—— 新增 inventory + SC2155/SC2046/E722/F841 + 性能修复。
+    # 该哈希取自 tag 提交的 zthl_bashpy_migrate/audit.py（本机升级后实测；发 wheel 后应复核）。
+    "0.3.1": "1ffd11a86aa2ff20a244ee57dac93e454f614523d12517dff9cba0f88a747c55",
+    # 2026-11-04: v0.3.2 —— 新增 SARIF（sarif.py + cli.py），**audit.py 零改动** ⟹ 同哈希。
+    "0.3.2": "1ffd11a86aa2ff20a244ee57dac93e454f614523d12517dff9cba0f88a747c55",
 }
 _DEV_SOURCE_DIRS = (
     os.environ.get("ZTHL_BASHPY_DIR", ""),
