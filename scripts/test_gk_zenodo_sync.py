@@ -84,11 +84,13 @@ def test_full_flow(tmp_path, capsys, monkeypatch):
     assert sum(1 for m, u in calls if m == "DELETE") == 1          # 继承的旧文件被清掉
     assert sum(1 for m, u in calls if m == "POST" and u.endswith("/files")) == 5
     assert urls[-1].endswith("/depositions/777/actions/publish")   # publish 最后一步
-    # 元数据：只读键不得回写（doi 由服务端生成），version/日期必须写上
+    # 元数据：只读键不得回写（doi 由服务端生成），标题/版本/许可必须确定性写入
     meta = bodies["put"]["metadata"]
     assert "doi" not in meta and "relations" not in meta
     assert meta["version"] == "v0.9.6.3"
-    assert meta["title"] == "T"
+    assert meta["title"] == "ZTHL Aegis v0.9.6.3"          # 不继承旧草稿的旧标题
+    assert meta["license"] == {"id": "other-open"}         # 不落成默认 cc-by-4.0
+    assert "MulanPSL2" in meta["description"]              # 正文写明真实许可
     # 空日期项必须剔除（否则 Zenodo 400: metadata.dates Invalid date provided）
     assert "dates" not in meta
 

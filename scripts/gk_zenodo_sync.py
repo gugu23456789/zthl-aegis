@@ -139,6 +139,11 @@ def main(argv=None):
     ap.add_argument("--concept", required=True, help="Concept recid（如 23934594）")
     ap.add_argument("--version", required=True, help="发布版本号，如 v0.9.6.3")
     ap.add_argument("--dist", default="dist", help="发布产物目录")
+    ap.add_argument("--title", default="", help="标题（默认 `ZTHL Aegis <version>`）")
+    ap.add_argument("--license-id", default="other-open",
+                    help="Zenodo 许可证 id；Mulan PSL v2 不在内置列表 ⟹ other-open，正文里写明")
+    ap.add_argument("--keep-license", action="store_true",
+                    help="沿用草稿自带 license（默认覆盖，避免继承成 cc-by-4.0）")
     ap.add_argument("--dry-run", action="store_true")
     a = ap.parse_args(argv)
 
@@ -206,6 +211,17 @@ def main(argv=None):
         uploaded.append(name)
 
     meta = _clean_meta(obj.get("metadata"))
+    # 标题/版本/许可必须由本脚本**确定性写入**：草稿继承自上一版，
+    #   2026-11-04 实测新版本标题仍是 `ZTHL Aegis v0.9.6.2`、license 被落成 cc-by-4.0。
+    meta["title"] = a.title or ("ZTHL Aegis %s" % a.version)
+    if not a.keep_license:
+        # Mulan PSL v2 不在 Zenodo 内置列表 ⟹ other-open + 正文写明（否则默认 CC BY 是**错误声明**）
+        meta["license"] = {"id": a.license_id}
+        _lic = ("许可：Mulan Permissive Software License v2"
+                "（https://license.coscl.org.cn/MulanPSL2）")
+        _desc = str(meta.get("description") or "")
+        if "MulanPSL2" not in _desc:
+            meta["description"] = (_desc + "<p>" + _lic + "</p>") if _desc else "<p>" + _lic + "</p>"
     meta["version"] = a.version
     meta["publication_date"] = datetime.date.today().isoformat()
     body = json.dumps({"metadata": meta}).encode("utf-8")
