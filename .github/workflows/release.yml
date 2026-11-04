@@ -120,6 +120,17 @@ jobs:
             "dist/release-manifest.json" \
             --title "ZTHL Aegis $VERSION" \
             "${NOTES[@]}"
+      - name: archive to Zenodo (new version)
+        # 每个 Release 自动归档为 Zenodo 新版本（Concept DOI 自动指向最新）：
+        #   未配置 secrets.ZENODO_TOKEN 时脚本自行跳过（exit 0），存档失败不阻断发版。
+        # Concept recid 取自包内 `references/archive.json` 的 Concept DOI（单一事实源）。
+        continue-on-error: true
+        env:
+          ZENODO_TOKEN: ${{ secrets.ZENODO_TOKEN }}
+          VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+        run: |
+          CONCEPT=$(python -c "import json;print(json.load(open('references/archive.json'))['concept_doi'].rsplit('.',1)[-1])")
+          python scripts/gk_zenodo_sync.py --concept "$CONCEPT" --version "$VERSION" --dist dist
 
   sync-main:
     name: sync main to latest tag

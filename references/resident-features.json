@@ -12,6 +12,7 @@
     {"id": "mcp-loader", "doc": "README.md", "pattern": "gk_mcp_loader"},
     {"id": "browser-toolface-gate", "doc": "README.md", "pattern": "R0\\.18"},
     {"id": "archive-concept-doi", "doc": "README.md", "pattern": "Concept DOI"},
+    {"id": "zenodo-sync", "doc": "README.md", "pattern": "gk_zenodo_sync"},
     {"id": "arch-wal", "doc": "references/architecture-overview.md", "pattern": "gk_state_wal"},
     {"id": "arch-bench", "doc": "references/architecture-overview.md", "pattern": "gk_bench_"},
     {"id": "arch-mcp", "doc": "references/architecture-overview.md", "pattern": "gk_mcp_loader"}

@@ -80,6 +80,9 @@ flowchart LR
   可用 `gh attestation verify` 核验。
 - 存档标识：Zenodo **Concept DOI**（元 DOI，指向最新版）写进 `references/archive.json`；
   每个版本的 **Version DOI** 只写 release notes，不进包内静态文件。
+- 自动存档：`scripts/gk_zenodo_sync.py` 在 Release 发布后创建 Zenodo 新版本并上传同一组附件
+  （zip / SHA256SUMS / PROVENANCE / SBOM / manifest），Concept DOI 因此始终指向最新版；
+  未配置 `ZENODO_TOKEN` 时该步自行跳过，不影响发版。
 - 公开包是 **clean export**（`scripts/oss_scrub.py` 白名单导出），不是开发仓；
   核验顺序与两种 DOI 的口径见 [`PROVENANCE.md`](PROVENANCE.md)。
 

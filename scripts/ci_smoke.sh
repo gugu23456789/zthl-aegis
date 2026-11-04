@@ -62,6 +62,7 @@ echo "== 4/4 fast pytest =="
   scripts/test_opcap_evidence_alias.py \
   scripts/test_pack_release.py \
   scripts/test_gk_doc_features.py \
-  scripts/test_gk_snapshot_gc.py
+  scripts/test_gk_snapshot_gc.py \
+  scripts/test_gk_zenodo_sync.py
 
 echo "ci_smoke: OK"
