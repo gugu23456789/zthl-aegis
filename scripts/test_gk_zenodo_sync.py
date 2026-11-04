@@ -121,6 +121,36 @@ def test_reuse_existing_draft(tmp_path, capsys, monkeypatch):
     assert not any(u.endswith("/actions/newversion") for _, u in calls)
 
 
+def test_find_draft_by_concept_search(tmp_path, capsys, monkeypatch):
+    """`latest_draft` 链接缺失时，须按 conceptrecid 检索找到草稿（v0.9.6.4 实测失败路径）。"""
+    monkeypatch.setenv("ZENODO_TOKEN", "t0ken")
+    calls = []
+
+    def fake(method, url, token=None, body=None, headers=None, timeout=120):
+        calls.append((method, url))
+        if "/records?q=conceptrecid:" in url:
+            return 200, {"hits": {"hits": [{"id": 23934595}]}}
+        if method == "GET" and "/deposit/depositions?q=conceptrecid:" in url:
+            return 200, [{"id": 23934595, "state": "done"},
+                         {"id": 23934610, "state": "unsubmitted"}]
+        if method == "GET" and url.endswith("/deposit/depositions/23934595"):
+            return 200, {"links": {}, "metadata": {"title": "T"}}
+        if method == "GET" and url.endswith("/deposit/depositions/23934610"):
+            return 200, {"metadata": {"title": "T"}, "files": []}
+        if method == "PUT":
+            return 200, {"metadata": {"title": "T"}}
+        if url.endswith("/actions/publish"):
+            return 202, {"doi": "10.5281/zenodo.23934610"}
+        return 201, {}
+
+    monkeypatch.setattr(Z, "_req", fake)
+    rc, out = _run(capsys, "--concept", "23934594", "--version", "v0.9.6.3",
+                   "--dist", str(_dist(tmp_path)))
+    assert rc == 0
+    assert out["record"] == "23934610"
+    assert not any(u.endswith("/actions/newversion") for _, u in calls)
+
+
 def test_newversion_failure_exit_1(tmp_path, capsys, monkeypatch):
     monkeypatch.setenv("ZENODO_TOKEN", "t0ken")
     calls = []

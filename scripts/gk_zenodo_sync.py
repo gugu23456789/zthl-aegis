@@ -109,14 +109,29 @@ def _clean_meta(meta):
     return out
 
 
-def find_draft(rec, token):
-    """复用**已存在的草稿**（上次失败留下的），避免 `newversion` 因草稿占用而报错。"""
+def find_draft(rec, concept, token):
+    """找**已存在的草稿**（上次失败留下的），避免 `newversion` 撞上「Please remove all files first」。
+
+    两条路（2026-11-04 实测：只靠 (a) 不够 —— legacy API 的 `links.latest_draft`
+    在草稿已带文件时不返回，导致重复 `newversion` 被 400 拒绝）：
+      (a) 记录自身的 `links.latest_draft`；
+      (b) 按 `conceptrecid` 检索全部 deposit，取 state != "done" 的最大 id。
+    """
     st, obj = _req("GET", "%s/deposit/depositions/%s" % (API, rec), token)
-    if st != 200 or not isinstance(obj, dict):
-        return None
-    ld = ((obj.get("links") or {}).get("latest_draft") or "").rstrip("/")
-    did = ld.rsplit("/", 1)[-1]
-    return did if did.isdigit() and did != str(rec) else None
+    if st == 200 and isinstance(obj, dict):
+        ld = ((obj.get("links") or {}).get("latest_draft") or "").rstrip("/")
+        did = ld.rsplit("/", 1)[-1]
+        if did.isdigit() and did != str(rec):
+            return did
+    url = "%s/deposit/depositions?q=conceptrecid:%s&size=20&all_versions=true" % (API, concept)
+    st, obj = _req("GET", url, token)
+    hits = obj if isinstance(obj, list) else ((obj or {}).get("hits") or {}).get("hits") or []
+    drafts = [h for h in hits
+              if isinstance(h, dict) and str(h.get("state") or "") != "done"
+              and str(h.get("id") or "").isdigit()]
+    if drafts:
+        return str(max(drafts, key=lambda h: int(h["id"]))["id"])
+    return None
 
 
 def main(argv=None):
@@ -152,7 +167,7 @@ def main(argv=None):
         return 0
 
     # 复用上次失败留下的草稿；没有才 newversion（否则 Zenodo 会因草稿占用拒绝建新版本）
-    draft = find_draft(rec, token)
+    draft = find_draft(rec, a.concept, token)
     if draft:
         # 提示走 stderr：stdout 只留**单条**最终 JSON（调用方按单条解析）
         print("复用已有草稿 %s" % draft, file=sys.stderr)
