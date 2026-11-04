@@ -141,6 +141,16 @@ TTL/GC、回收判据全在 `references/state-storage.md`，本文不复制。
 （`gk_state_ops.py` / `gk_views.py` / `gk_discover_archive.py`）是裸 `json.dump` ⟹ 对外安全声明
 **不得**概括为「所有 state 写入都原子/带校验」。
 
+**WAL 写路径（M1–M4）**：`gk_state_wal.py` 逐条 WAL（`{seq,pid,ts,ops,crc}`）→ 每 200 条 / 1 MB
+checkpoint；读序 **WAL → state**，进程退出 flush、尾部坏行修复。写放大 128–512x → < 1.3。
+基准套件 `gk_bench_*.py` 与 `references/bench-baseline.json` 由 `bench-quick`（CI）与
+`bench-nightly`（每日 full）守护；跨 OS 只守硬失败（失败写 / 崩溃校验 / 场景 ok），
+写放大与 p99 只作 WARN。
+
+**MCP 工具面**：`gk_mcp_loader.py` 按 `sealed / egress / gated / ui / read / write / command`
+分类校验；hook R0.18 对 `install_browser`、`browser_record_*` 默认 BLOCK（显式 env 才放行）；
+出网仍单口（R0.14）。
+
 ---
 
 ## 3. 门禁分层（hook 侧）

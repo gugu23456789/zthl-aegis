@@ -60,6 +60,37 @@ flowchart LR
 **无环保证**：`写 → 网关 → state` 与 `片/侧车 → 压缩 → manifest` 两条支路只在 state 汇合；
 读面没有回写边。**崩溃安全**：先片/侧车、后 manifest；交换前的旧状态始终完整。
 
+### 性能与常驻基准
+
+- **state 写路径 = WAL + checkpoint**：`scripts/gk_state_wal.py` 逐条记录 `{seq,pid,ts,ops,crc}`，
+  每 200 条或 1 MB 折回主 state；读序 **WAL → state**，进程退出 flush，尾部坏行可修复。
+  写放大由 128–512x 降到 < 1.3。
+- **基准套件**：`scripts/gk_bench_state.py`、`gk_bench_satellite.py`、`gk_bench_gate.py`、
+  `gk_bench_release.py`；`--full` 覆盖 32 并发写、崩溃恢复与 `.tmp` 残留回收。
+- **门禁**：`ci.yml` 的 `bench-quick`（正确性 + 阈值）；`bench-nightly.yml` 每日跑 full →
+  与 `references/bench-baseline.json` 对比 → 产物留档。跨 OS 只守硬失败（失败写 / 崩溃校验 /
+  场景 ok），ratio（写放大、p99）降级为 WARN。
+- 基线只随版本或人工 `--init-baseline` 滚动，CI **不自动改写**（否则门禁变成自证）。
+
+### 发布与可核验性
+
+- 包内 `PROVENANCE.json` 记录 source repo / commit / tag、导出策略与工具 sha256、排除面；
+  它被 `SHA256SUMS` 覆盖，`release-manifest.json` 另存同一组字段。
+- `SBOM.cdx.json`（CycloneDX 1.5）随包发布；构建带 Sigstore SLSA attestation，
+  可用 `gh attestation verify` 核验。
+- 存档标识：Zenodo **Concept DOI**（元 DOI，指向最新版）写进 `references/archive.json`；
+  每个版本的 **Version DOI** 只写 release notes，不进包内静态文件。
+- 公开包是 **clean export**（`scripts/oss_scrub.py` 白名单导出），不是开发仓；
+  核验顺序与两种 DOI 的口径见 [`PROVENANCE.md`](PROVENANCE.md)。
+
+### MCP 工具面安全
+
+- 工具清单由 `scripts/gk_mcp_loader.py` 校验，按 `sealed / egress / gated / ui / read / write /
+  command` 分类；未登记工具不进入加载计划。
+- hook `R0.18` 对浏览器工具面加闸：`install_browser` 与 `browser_record_*` 默认 **BLOCK**，
+  需显式 `GK_MCP_ALLOW_BROWSER_INSTALL=1` / `GK_MCP_ALLOW_BROWSER_RECORD=1`。
+- 出网仍走单一出口（`R0.14`），新增工具面不新开网口。
+
 ### 目录结构
 
 | 路径 | 用途 |

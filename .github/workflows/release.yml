@@ -55,6 +55,9 @@ jobs:
         run: python scripts/gk_package_integrity.py --json
       - name: smoke gate
         run: bash scripts/ci_smoke.sh
+      - name: resident feature coverage (self-description)
+        # 发布面门禁：常驻功能必须在自述文档得到反映，自动刷新文档不得漂移。
+        run: python scripts/gk_doc_features.py
       - name: pack (deterministic zip + SHA256SUMS + PROVENANCE + manifest)
         env:
           VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}

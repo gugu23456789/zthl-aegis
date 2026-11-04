@@ -45,6 +45,10 @@ jobs:
         env:
           CI_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before }}
         run: bash scripts/ci_smoke.sh
+      - name: resident feature coverage (self-description)
+        # 常驻功能（WAL/基准/MCP 工具面/来源链）必须写进自述文档；
+        # 同时校验 GK-FACTS/GK-REFS/容量水位表等自动刷新文档未漂移。
+        run: python scripts/gk_doc_features.py
 
   venv-gate:
     # 2026-11-02 owner 要求：CI 必须在内置虚拟环境里完整跑一遍。
