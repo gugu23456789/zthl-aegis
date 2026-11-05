@@ -26,6 +26,8 @@
 - 补回 `scripts/gk_mcp_loader.py` + `scripts/test_gk_mcp_loader.py`（30 条臂）：修掉对已下线
   `BROWSER_*` 常量的导入；`sdk-info` 探测 `ClientSession`/`stdio_client`/`sse_client`/`FastMCP`/`Tool`
   的实际可解析面；`connect --tools` 支持离线核对（`--tools` 仅限 connect，避免承诺面恒假红）。
+- 修 `test_gk_monitor_decision` 的陈旧断言：`monitor_last` 已随载荷下沉迁入 `gk_monitor_payload.py`，
+  改为「CLI 判后端接线 / 载荷模块判留痕」，CI 快速门恢复。
 - `state_lock` 的取锁预算可由 `GK_STATE_LOCK_TIMEOUT` 注入（非法值回落 5s；不允许用 env 关闭超时）。
 
 ### 文档

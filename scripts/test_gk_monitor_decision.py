@@ -109,11 +109,16 @@ def test_backend_unreachable_is_named_error():
 
 def test_cli_wires_decision_backend_and_keeps_legacy_escape_hatch():
     """接线面：`_monitor_api` 主路径调决策后端；旧 PRM 车道只由 env 逃生舱开启；
-    机检面带 `monitor_last`（复盘可见）。"""
+    机检面带 `monitor_last`（复盘可见）。
+
+    2026-11-05：落库载荷已下沉 `gk_monitor_payload.py`（B2 第 2 步）⟹ CLI 内不再有该字面量，
+    断言拆两处：CLI 负责接后端 / 载荷模块负责带 `monitor_last`，语义不变。
+    """
     src = CLI.read_text(encoding="utf-8")
+    payload = (CLI.parent / "scripts" / "gk_monitor_payload.py").read_text(encoding="utf-8")
     assert "gk_monitor_decision.py" in src
     assert "GK_MONITOR_API_LEGACY" in src
-    assert "monitor_last" in src
+    assert "monitor_last" in payload
 
 
 def test_sink_machine_check_carries_monitor_last(tmp_path):
