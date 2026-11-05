@@ -432,10 +432,8 @@ hook 写类门禁 + 凭据面分离）。
 
 | 机制 | 入口 / 文件 | 说明 |
 |:--|:--|:--|
-| 状态 WAL | `gk_state_wal` / `checkpoint` | 长寿命 state 的预写日志与检查点；崩溃后按片恢复 |
 | 基准 | `gk_bench_state` · `bench-nightly` · `references/bench-baseline.json` | 状态基准与夜间回归基线 |
 | 供应链清单 | `PROVENANCE.json` · `SBOM.cdx.json`（CycloneDX） | 发布包附带来源与依赖清单 |
-| MCP 加载器 | `gk_mcp_loader` | MCP 工具面加载与闸门接入 |
 | 浏览器工具面 | `R0.18` | 浏览器类工具的可执行面校验 |
 | 外部存档 | `references/archive.json`（Concept DOI） | 发布物外部归档与 DOI 解析 |
 | 余额审计 | `balance --audit` / `balance --record` / `balance --usage` | 定期或随机采样；判 `DROP_FAST`/`INSUFFICIENT_BALANCE`/`CACHE_COLLAPSE`（复用 `gk_cache_observe`） |
@@ -443,6 +441,7 @@ hook 写类门禁 + 凭据面分离）。
 | 写入落盘校验 | `gk_edit_verify` | sha256 / 锚点 / 行号回读比对，防「改了但没落盘」 |
 | 恶意代码模式 | `gk_threat_patterns` + Gate R0.19 | 单一模式源；EDIT 载荷范围内外同判 |
 | 信用分账本 | `gk_credit_ledger` / `credit-ledger.jsonl` | 旁挂 append-only + 封印；非对称定价（`success +5` / `fail −15` / `overspend −10` / `exempt −1`）；跨会话 `score = Σdelta`；**只读观测**，无门禁消费（见 [credit-economy.md](references/credit-economy.md)） |
+| 非交互凭据闸 | hook Gate R0.20 | `git push` 指向 https remote、命令内未声明 `GIT_TERMINAL_PROMPT=0` 且无 credential.helper ⟹ **BLOCK**（防宿主登录弹窗）；SSH remote / 已配 helper / 显式非交互放行 |
 | SARIF 输出 | `gk_sarif.py` | 静态结果归一为 SARIF 2.1.0，`--gate` 让 error 级真实失败 |
 | 相位探针（私仓） | `phase-probe` | 公开包返回 `PLUGIN_NOT_SHIPPED`；统计与臂设计不随公开包 |
 

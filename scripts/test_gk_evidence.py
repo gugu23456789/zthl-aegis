@@ -51,19 +51,23 @@ def test_normalize_evidence_mixed_forms_preserved():
 
 
 def test_evidence_normalizer_cli_wired():
-    """静态红先：CLI 落库块不再用裸 `e.split(':')`，改调 `normalize_evidence`。
+    """静态红先：落库块不再用裸 `e.split(':')`，改调 `normalize_evidence`。
 
     并钉住 import **与该调用同载荷** —— 首版把 import 误落进通用 `_state_write()` helper 载荷
     （grep 得到「函数名在源码里」即误判接线成功），而落库块载荷未 import ⟹ 运行期 `NameError`
     被该块尾的 `2>/dev/null || true` 静默吞掉（history 整条不写）= 静默族复发。故判据升为
-    「import 恰一处 ∧ 落在落库块载荷内（HK_HMAC 锚之后、调用之前）」。
+    「import 恰一处 ∧ 落在落库块载荷内（进入载荷即取锁之后、调用之前）」。
+
+    2026-11-04（B2 下沉）：落库载荷已搬到 `scripts/gk_monitor_payload.py` ⟹ 判据面迁移到该
+    模块；同时仍钉 CLI 侧无裸 split、且确实接线到模块。
     """
     src = CLI.read_text(encoding="utf-8")
-    assert "normalize_evidence" in src, "落库块未接线 normalize_evidence（归一下沉未生效）"
-    assert "e.split(':')[0]" not in src, "落库块仍有裸 `e.split(':')[0]` ⟹ 盘符仍被误切"
+    payload = (SD / "scripts" / "gk_monitor_payload.py").read_text(encoding="utf-8")
+    assert "gk_monitor_payload.py" in src, "CLI 未接线到下沉模块"
+    assert "normalize_evidence" in payload, "落库块未接线 normalize_evidence（归一下沉未生效）"
+    assert "e.split(':')[0]" not in src, "CLI 仍有裸 `e.split(':')[0]` ⟹ 盘符仍被误切"
+    assert "e.split(':')[0]" not in payload, "落库块仍有裸 `e.split(':')[0]` ⟹ 盘符仍被误切"
     _imp = "from gk_subagent_report import normalize_evidence"
-    assert src.count(_imp) == 1, f"归一 helper 的 import 必须**恰一处**（实得 {src.count(_imp)}）"
-    _call = src.index("evidence=normalize_evidence(")
-    _anchor = src.index('GK_HMAC_VALID="$hmac_valid" python3 -c')
-    assert _anchor < src.index(_imp) < _call, (
-        "import 未与落库块调用**同载荷**（误落它处 ⟹ 运行期 NameError 被 2>/dev/null 静默吞）")
+    assert payload.count(_imp) == 1, f"归一 helper 的 import 必须**恰一处**（实得 {payload.count(_imp)}）"
+    assert payload.index(_imp) < payload.index("evidence=normalize_evidence("), (
+        "import 未与落库块调用**同载荷**（误落它处 ⟹ 运行期 NameError 被静默吞）")

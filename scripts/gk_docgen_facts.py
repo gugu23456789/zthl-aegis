@@ -150,7 +150,6 @@ _CATEGORY = {
     "architecture-overview.md": "1. Architecture and routing",
     "meta-routing-protocol.md": "1. Architecture and routing",
     "state-storage.md": "1. Architecture and routing",
-    "flows-a-b-c.md": "1. Architecture and routing",
     "extension-registry.md": "1. Architecture and routing",
     "superagent-comparison.md": "1. Architecture and routing",
     "stages.md": "2. Execution and CLI",

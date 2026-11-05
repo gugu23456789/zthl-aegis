@@ -52,9 +52,13 @@ def test_py_path_posix_form_unchanged():
 
 
 def _history_segment():
-    start = TXT.index('echo "$subagent_out" | GK_TASK=')
-    end = TXT.index("[hist] ERROR HISTORY_WRITE_FAILED", start)
-    return TXT[start:end]
+    """落库载荷段（2026-11-04 B2 下沉后 = `scripts/gk_monitor_payload.py` 全文）。
+
+    原锚 `echo "$subagent_out" | GK_TASK=` 已随下沉消失 ⟹ 判据面迁移到模块文件；先钉 CLI 接线，
+    再对模块断言「路径经 env 传入、禁内联 bash 形态」。
+    """
+    assert "gk_monitor_payload.py" in TXT, "CLI 未接线到下沉模块（锚失效，臂失去意义）"
+    return (CLI.parent / "scripts" / "gk_monitor_payload.py").read_text(encoding="utf-8")
 
 
 def test_history_payload_uses_env_paths():
@@ -95,12 +99,18 @@ def test_state_write_core_uses_env_paths():
 
 
 def test_checksum_write_core_uses_env_paths():
+    """校验和刷新已下沉 `gk_gate_checksum.py`（批 A）⟹ 判据面迁移：
+    CLI 侧只传 `_gk_py_path` 归一后的 `--state`（解释器形态为锚），不再内联 python 载荷。
+    """
     body = _no_comments(_func("_state_checksum_write"))
-    assert "GK_PY_SCRIPTS" in body and "GK_PY_STATE" in body, body[:300]
-    assert "sys.path.insert(0,os.environ['GK_PY_SCRIPTS'])" in body
-    assert "state_lock(os.environ['GK_PY_STATE'])" in body
-    assert "'$SKILL_DIR/scripts'" not in body
+    assert "gk_gate_checksum.py" in body, "校验和刷新未接线到下沉模块"
+    assert '_st_py=$(_gk_py_path "$STATE_FILE")' in body or \
+        "_st_py=$(_gk_py_path \"$STATE_FILE\")" in body, (
+        "state 路径未经解释器形态归一（真因 D 复发面）: %s" % body[:300])
+    assert '--state "$_st_py"' in body, "未把归一后的路径传给模块"
+    assert "python3 -c" not in body, "校验和函数仍有内联 python 载荷"
     assert "'$STATE_FILE'" not in body
+    assert "'$SKILL_DIR/scripts'" not in body
 
 
 def test_discover_carry_payloads_use_env_paths():

@@ -247,8 +247,10 @@ def state_lock(path, timeout: float = None):
     **退化为无锁** ⟹ 并发 `set-nested`/`append-list` 读-改-写丢写，Windows 实测 6 进程仅 3~4 落地）。
     仅当两者皆不可用（罕见平台）才无锁 —— 与升级前行为一致，不新增失败面。
 
-    `timeout=None` ⟹ 走 `GK_STATE_LOCK_TIMEOUT`（秒）覆盖，缺省 `LOCK_TIMEOUT`；显式传值优先。
-    （2026-11-05 bench-nightly 归因：32 写者 × 5s 在被挤占的 runner 上假红；超时本身仍判失败。）
+    `timeout=None` ⟹ 走 `GK_STATE_LOCK_TIMEOUT`（秒）覆盖，缺省 `LOCK_TIMEOUT`。
+    为什么要有这个口：基准/CI 的 32 写者场景在被挤占的 runner 上会因 5s 预算假红
+    （2026-11-05 bench-nightly 归因），而超时本身仍必须是失败（fail-loud 语义不变）。
+    显式传值（含 `timeout=0` 的试探调用）优先于 env。
     """
     if timeout is None:
         timeout = _env_lock_timeout()

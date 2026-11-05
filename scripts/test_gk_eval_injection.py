@@ -109,23 +109,21 @@ def test_control_repr_form_does_inject(tmp_path):
 #   `json.dump: command not found` + `command substitution: syntax error near unexpected token '||'`
 #   —— 与 `ECC-084E37B42CFB` **同病象串但不同源** ⟹ 诊断会被误导到 META 发射块（本轮实测即先误判）。
 # 该载荷是**脚本字面**（非运行期值形态）⟹ 静态即可判定，属源码不变量，故用静态臂。
-def test_monitor_history_payload_has_no_backticks():
-    """`monitor --subagent` 落库块的**内联 python 载荷**（bash 双引号内）不得含反引号。
+def test_monitor_history_payload_is_file_not_inline():
+    """落库载荷必须是**文件调用**（2026-11-04 下沉）。
 
-    后果面（本轮实测）：注释里的反引号对被当命令执行 ⟹ stderr 噪声；因替换结果落在注释内
-    为空串，写库本身未失败（`gate_data.subagent_last` 已正确落库）——但噪声与真因同形，
-    且若换成**非注释**位置即会破坏 python 源（同族事故见 `ECC-084E37B42CFB`）。
+    原臂守「双引号区内不得含反引号」；下沉后该风险**结构性消失**（代码不在引号区），
+    故判据升级为结构面：① CLI 不再出现该块的 `python3 -c "` 内联形态；
+    ② 模块可编译。两者同时成立 ⟹ 命令替换类注入不可能经此路径发生。
     """
-    src = CLI.read_text(encoding="utf-8")
-    i = src.index('echo "$subagent_out" | GK_TASK=')
-    # 2026-09-27 修（本臂**腐化假阳性**）+ C3① 边界更新：正确边界 = 该 payload **自己的**
-    # 收尾行（列 0 的 `"` + 重定向）⟹ 取 `\n" 2>>`（C3① 前为 `" 2>/dev/null || true`，
-    # 改 fail-loud 后为 `" 2>>"${GK_DBG_LOG…}" || {…}`；`i` 之后首次出现即该收尾行）。
-    k = src.index('\n" 2>>', i)
-    payload = src[i:k]
-    bad = [ln.strip() for ln in payload.splitlines() if "`" in ln]
-    assert not bad, (
-        "落库块内联 python 载荷含反引号 ⟹ 运行期触发 bash 命令替换：\n" + "\n".join(bad))
+    import py_compile
+    import tempfile
+    cli = CLI.read_text(encoding="utf-8")
+    assert 'GK_HMAC_VALID="$hmac_valid" python3 -c "' not in cli, "落库载荷仍是内联形态"
+    assert "gk_monitor_payload.py" in cli, "CLI 未接线到下沉模块"
+    mod = CLI.parent / "scripts" / "gk_monitor_payload.py"
+    py_compile.compile(str(mod), cfile=str(Path(tempfile.gettempdir()) / "gk_mon_payload.pyc"),
+                       doraise=True)
 
 
 def _dq_backtick_hits(src: str):

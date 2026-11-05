@@ -8,10 +8,11 @@ monitor --align 的升格实现：0 API、纯静态扫描、JSON 检查项输出
 2026-08-28 合并 audit --docs 文档审查引擎（gk_audit_docs.check_docs 的 C1-C5
 7 项检查全部吸纳），统一 doc-align 为文档一致性 + 漂移的单一入口。
 
-检查器（30 项 = run_all 静态注册数的**唯一事实源**；`comment_code_mismatch` 双向判等，
+检查器（31 项 = run_all 静态注册数的**唯一事实源**；`comment_code_mismatch` 双向判等，
        见该检查器 ④。audit_docs 的 7 项经 `for r in check_audit_docs_merged()` **一次
-       append** 展开 ⟹ 静态计数 30 = 下表 1–28 行中 audit_docs 的 7 行折为 1 个单位，
-       另含 2 项后加检查：`skill_duty_pointer`、`gk_facts` 事实块比对）:
+       append** 展开 ⟹ 静态计数 31 = 下表 1–28 行中 audit_docs 的 7 行折为 1 个单位，
+       另含 3 项后加检查：`skill_duty_pointer`、`gk_facts` 事实块比对、
+       `retired_doc_export` 退役文档不得留在导出面）:
  1. papers_framework_drift   — 论文框架 vs 当前架构事实（2026-10-27 起一篇已归档；
                                在册篇目建事实清单，部分篇目在 SKIP 内 ⟹ 检查面 = 在册且未 skip 的篇目）
  2. cli_protocol_commands    — references/cli-protocol.md 命令数 vs gatekeeper-cli.sh _CMD_REG
@@ -251,6 +252,57 @@ def check_stale_layering_refs(skill_dir: str) -> dict:
     else:
         result["status"] = "PASS"
         result["detail"] = "活跃文档无 L1-L7/7 层审查 陈旧引用"
+    return result
+
+
+# ── 检查器: 退役文档不得留在公开导出面 ──────────────────────────────
+# 2026-11-05（用户质询「flows-abc 已经退役了，放出去不是误导吗」）：
+#   文件地图/引用漂移只查「链接还在不在」，**不查「这份文档该不该对外」**——于是
+#   flows-a-b-c.md 正文写着「已合并至 meta-routing-protocol」却仍以 status: public
+#   进公开索引；ecc-impact-v7.md 这类内部裁定同样默认随包导出。本检查补这一面：
+#   正文含退役标记 ⟹ 必须命中 oss-export-whitelist 的四类排除之一，否则 FAIL。
+_RETIRED_MARKERS = ("已退役", "已废弃", "已合并至", "status: deprecated", "status: retired")
+
+
+def check_retired_doc_export(skill_dir: str) -> dict:
+    """退役文档不得留在公开导出面（`references/*.md`）。
+
+    判据 = 正文含 `_RETIRED_MARKERS` ⟹ 必须被 `references/oss-export-whitelist.json`
+    的 exclude_names / prefixes / suffixes / globs 之一覆盖（与 `oss_scrub.is_excluded`
+    同语义，四类都按原样匹配，不新增第二套排除规则）。
+    """
+    result = {"check": "retired_doc_export"}
+    refs = Path(skill_dir) / "references"
+    try:
+        wl = json.loads((refs / "oss-export-whitelist.json").read_text(encoding="utf-8"))
+        names = {e["pattern"] for e in wl.get("exclude_names", [])}
+        prefixes = tuple(e["pattern"] for e in wl.get("exclude_prefixes", []))
+        suffixes = tuple(e["pattern"] for e in wl.get("exclude_suffixes", []))
+        globs = [re.compile(e["pattern"]) for e in wl.get("exclude_globs", [])]
+    except Exception as e:
+        return {**result, "status": "SKIP", "detail": "导出白名单不可读：%s" % e}
+
+    def _excluded(rel: str) -> bool:
+        return (rel in names or (prefixes and rel.startswith(prefixes))
+                or (suffixes and rel.endswith(suffixes))
+                or any(rx.search(rel) for rx in globs))
+
+    leaked, retired = [], []
+    for p in sorted(refs.glob("*.md")):
+        if not any(m in _read(p) for m in _RETIRED_MARKERS):
+            continue
+        retired.append(p.name)
+        if not _excluded("references/" + p.name):
+            leaked.append(p.name)
+    if leaked:
+        result.update({"status": "FAIL",
+                       "detail": "退役文档仍在导出面（删除或加入 exclude_globs）: "
+                                 + ", ".join(leaked[:8]),
+                       "leaked": leaked, "retired": retired})
+    else:
+        result.update({"status": "PASS",
+                       "detail": "退役文档 %d 份均已脱离导出面" % len(retired),
+                       "retired": retired})
     return result
 
 
@@ -1794,6 +1846,12 @@ def run_all(skill_dir: str, papers_dir: str, review_skill_dir: str,
     checks.append(r)
 
     r = check_contract_enum_impl_binding(skill_dir)
+    if r["status"] == "FAIL":
+        issues += 1
+    checks.append(r)
+
+    # 2026-11-05：退役文档不得留在公开导出面（flows-a-b-c / ecc-impact-v7 实测漏出）
+    r = check_retired_doc_export(skill_dir)
     if r["status"] == "FAIL":
         issues += 1
     checks.append(r)

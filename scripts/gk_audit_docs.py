@@ -107,8 +107,17 @@ def check_docs(skill_dir: str = str(DEFAULT_SKILL)) -> dict:
         doc_files = set(re.findall(r"[\u251c\u2514]\u2500\u2500\s*([\w-]+\.md)(?=\s|$)", ref_seg))
         doc_files |= set(re.findall(r"references/([\w-]+\.md)(?=\s|$)", ref_seg))
         actual_files = _tracked_ref_md(sd, ref_dir)
-        missing = sorted(actual_files - doc_files)
-        extra = sorted(doc_files - actual_files)
+
+        def _export_excluded(name: str) -> bool:
+            """导出面排除的文档：在公开树里缺席是**预期**，不算文件地图漂移。"""
+            try:
+                import oss_scrub as _S
+                return bool(_S.is_excluded("references/" + name))
+            except Exception:
+                return False
+
+        missing = sorted(f for f in actual_files - doc_files if not _export_excluded(f))
+        extra = sorted(f for f in doc_files - actual_files if not _export_excluded(f))
         checks.append({"doc": "architecture-overview.md", "check": "file map",
                        "declared": len(doc_files), "actual": len(actual_files),
                        "match": len(missing) == 0 and len(extra) == 0,

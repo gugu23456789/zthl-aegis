@@ -58,3 +58,48 @@ def test_missing_file():
     """Missing state file → unreadable."""
     result = verify_checksum("/nonexistent/path/.gatekeeper.state")
     assert result["error"] == "STATE_FILE_UNREADABLE"
+
+
+# ── refresh（2026-11-04 内联块下沉后的等价臂）──────────────────────────────
+
+def _chk(gate_data):
+    return hashlib.sha256(json.dumps(gate_data, sort_keys=True).encode()).hexdigest()[:16]
+
+
+def test_refresh_noop_when_matching(tmp_path):
+    from gk_gate_checksum import refresh_checksum
+    gd = {"project_type": "standing"}
+    p = tmp_path / "s.json"
+    _write_state(_make_state(gd, _chk(gd)), str(p))
+    before = p.read_bytes()
+    r = refresh_checksum(str(p), invoke_epoch=10**12)
+    assert r["action"] == "noop", r
+    assert p.read_bytes() == before
+
+
+def test_refresh_updates_after_legit_write(tmp_path):
+    import os
+    import time
+    from gk_gate_checksum import refresh_checksum
+    gd = {"project_type": "standing", "task_pipeline": [{"id": "x"}]}
+    p = tmp_path / "s.json"
+    _write_state(_make_state(gd, "stale0000000000"), str(p))
+    r = refresh_checksum(str(p), invoke_epoch=int(time.time()) - 3600)
+    assert r["action"] == "updated", r
+    assert json.loads(p.read_text())["_checksum"] == _chk(gd)
+
+
+def test_refresh_refuses_wash_when_untouched(tmp_path):
+    import os
+    import time
+    from gk_gate_checksum import refresh_checksum
+    gd = {"project_type": "standing"}
+    p = tmp_path / "s.json"
+    _write_state(_make_state(gd, "stale0000000000"), str(p))
+    old = time.time() - 3600
+    os.utime(p, (old, old))
+    before = p.read_bytes()
+    r = refresh_checksum(str(p), invoke_epoch=int(time.time()))
+    assert r["action"] == "refused", r
+    assert r["error"] == "CHECKSUM_REFUSE_WASH"
+    assert p.read_bytes() == before  # 拒写：不得洗白

@@ -39,16 +39,15 @@ def _py_fn(src: str, name: str) -> str:
 
 
 def _cli_history_payload(src: str) -> str:
-    """切出 `monitor --subagent` 的落库 python 载荷（双引号区）。
+    """切出 `monitor --subagent` 的落库载荷源码。
 
-    锚 = 派发行 `GK_TASK="$task" GK_HMAC_VALID="$hmac_valid" python3 -c "`
-      … 首个「列 0 收尾行」`\n" 2>>`（C3① 前该行是 `" 2>/dev/null || true`；改 fail-loud 后为
-      `" 2>>"${GK_DBG_LOG…}" || {…}` ⟹ 判据面不变，仅边界字面量随实装更新）。
-    ⚠ 以 `str.index` 取**首次出现**（对齐本仓既有「注释不得写字面量以免更早命中」的教训）。
+    2026-11-04（B2 下沉）：载荷已从 CLI 内联块搬到 `scripts/gk_monitor_payload.py` ⟹ 判据面
+    随代码迁移 —— 不再按旧锚 `GK_TASK=… python3 -c "` 切双引号区，改为「先钉 CLI 接线到模块，
+    再返回模块源码」。臂语义不变（锁必须覆盖读-改-写、禁止裸 `json.dump(...STATE_FILE...)`）。
     """
-    a = src.index('GK_TASK="$task" GK_HMAC_VALID="$hmac_valid" python3 -c "')
-    b = src.index('\n" 2>>', a)
-    return src[a:b]
+    assert "gk_monitor_payload.py" in src, (
+        "CLI 未接线到下沉模块 ⟹ 锚失效，臂失去意义")
+    return (SCRIPTS / "gk_monitor_payload.py").read_text(encoding="utf-8")
 
 
 def test_arm15a_concurrent_register_no_lost_update(tmp_path):

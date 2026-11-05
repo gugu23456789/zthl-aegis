@@ -71,3 +71,47 @@ def test_lock_failure_does_not_break_block_semantics(sandbox, monkeypatch):
         h._record_block_intent()
     except Exception as e:  # pragma: no cover
         pytest.fail("fail-quiet 契约被破坏: %r" % e)
+
+
+# ─── 取锁预算可注入（2026-11-05 bench-nightly 归因）────────────────────────────
+def test_env_lock_timeout_override(monkeypatch):
+    """`GK_STATE_LOCK_TIMEOUT` 覆盖取锁预算；非法/非正一律回落默认（不许关掉超时）。"""
+    from gk_json_utils import LOCK_TIMEOUT, _env_lock_timeout
+
+    monkeypatch.delenv("GK_STATE_LOCK_TIMEOUT", raising=False)
+    assert _env_lock_timeout() == LOCK_TIMEOUT
+
+    monkeypatch.setenv("GK_STATE_LOCK_TIMEOUT", "30")
+    assert _env_lock_timeout() == 30.0
+    monkeypatch.setenv("GK_STATE_LOCK_TIMEOUT", "7.5")
+    assert _env_lock_timeout() == 7.5
+
+    for bad in ("", "abc", "0", "-1", "None"):
+        monkeypatch.setenv("GK_STATE_LOCK_TIMEOUT", bad)
+        assert _env_lock_timeout() == LOCK_TIMEOUT, "非法值 %r 必须回落默认" % bad
+
+
+def test_explicit_timeout_beats_env(monkeypatch, tmp_path):
+    """显式传值（含 `timeout=0` 试探）优先于 env —— 观测口径不得被基准的放宽带走。"""
+    import subprocess
+    from gk_json_utils import state_lock, state_lock_stats, reset_state_lock_stats
+
+    path = str(tmp_path / "s.json")
+    monkeypatch.setenv("GK_STATE_LOCK_TIMEOUT", "30")
+    # 子进程持锁 2s：确保主进程必然撞锁（与 env 的 30s 预算形成对照）
+    holder = subprocess.Popen(
+        [sys.executable, "-c",
+         "import sys,time;sys.path.insert(0,%r);import gk_json_utils as g;"
+         "lk=g.state_lock(%r);lk.__enter__();print('locked',flush=True);time.sleep(2)"
+         % (HERE, path)],
+        stdout=subprocess.PIPE, text=True)
+    try:
+        assert holder.stdout.readline().strip() == "locked"
+        reset_state_lock_stats()
+        with pytest.raises(TimeoutError):
+            with state_lock(path, timeout=0):
+                pass
+        assert state_lock_stats()["last_timeout_s"] == 0.0, "显式 timeout=0 未生效"
+    finally:
+        holder.kill()
+        holder.wait(timeout=10)

@@ -49,7 +49,7 @@ MANIFESTS = {
         "id": "bashpy-migrate",
         "name": "zthl-bashpy-migrate",
         "url": ("pip:zthl-bashpy-migrate | dev:${ZTHL_BASHPY_DIR} "
-                "| npm:@zthl-harness/dsh-bashpy-migrate@0.2.3"),
+                "| npm:@zthl-harness/dsh-bashpy-migrate@0.2.4"),
         "isolate": False,
         "intercept": ("analyze", "verify", "audit",
                       # 生命周期子命令（2026-08-27 统一入口：cmd_migrate 转发 gk_bashpy_upgrade.py，
@@ -60,7 +60,10 @@ MANIFESTS = {
                    # DSH npm 包装器登记（2026-08-26）：本地 tarball sha512
                    # （scripts/npm-bundle.sh 产出 npm-integrity.json），DSH 加载时对账——
                    # 零公共 registry 投毒面（对齐 §4.4 npm pin 预留）。
-                   "integrity": ("sha512-422dcb92511bf7035798d58b6a9b06d73847adeb3fb78ea1e6e4adfa6dea1b8646b4708d5944c0c03c2fb11f01abe6961086c3c9488c50a365f33a6c2682537b")},
+                   # 2026-11-05：0.2.3 → 0.2.4（peer 放宽到 >=0.1.1-rc.2 <0.3.0 以覆盖 dsh-tools
+                   #   0.2.x）。旧 pin 422dcb92… 与任何现存 tarball 都对不上（npm pack 字节不可
+                   #   复现）⟹ 本次 pin 取自**同一次构建**的 0.2.4 tgz。
+                   "integrity": ("sha512-117e791103c57a0e64bc25f19a54e66a352774a7cd8f4dce96306092bec44e21fda84759979d8b32b4b29e6acc4b5193f4dafbcfeedbb67e5757767effab4fed")},
         "disabled": False,
         "write": False,
         "undo": None,
@@ -113,8 +116,9 @@ MANIFESTS = {
 if not (Path(__file__).resolve().parent / "gk_paper_review.py").is_file():
     MANIFESTS.pop("paper-review", None)
 
-# 2026-11-05：`git-workflow` 是同级独立技能，公开包不随附 ⟹ 载体缺失时不登记
-#   （与 README「公开包只自带 1 个加载器」同步；避免留下指向缺件的登记项）。
+# 2026-11-05（用户质询「插件介绍是不是错了」）：`git-workflow` 是**同级独立技能**，
+#   公开包不随附它 ⟹ 载体缺失时同样不该留下登记项（否则加载安全网把「已登记但缺件」
+#   当插件故障）。README 的「公开包只自带 1 个加载器」由本分支保证，二者同步。
 _GITWORKFLOW_LOADER = (Path(__file__).resolve().parent.parent.parent
                        / "git-workflow" / "scripts" / "gk_gitworkflow_loader.py")
 if not _GITWORKFLOW_LOADER.is_file():

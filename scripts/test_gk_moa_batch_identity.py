@@ -164,34 +164,29 @@ def test_plan_bound_ack_merges_with_sections(tmp_path):
 
 # ── 派发写入（行为臂：真跑 CLI 落库载荷）──────────────────────────────────
 
+def _payload_path():
+    """2026-11-04（B2）：落库载荷已下沉为模块文件，判据面随之迁移（单源）。"""
+    return CLI.parent / "scripts" / "gk_monitor_payload.py"
+
+
 def _hist_region() -> str:
-    """落库段：`GK_HMAC_VALID=` 锚 → python -c 收尾行（列 0 的 `"`）末。"""
-    txt = CLI.read_text(encoding="utf-8")
-    i = txt.index("GK_HMAC_VALID=")
-    j = txt.index('\n"', i) + 1
-    return txt[i:txt.index("\n", j + 1)]
+    """落库段 = `scripts/gk_monitor_payload.py` 全文（原 CLI 内联区已删）。"""
+    return _payload_path().read_text(encoding="utf-8")
 
 
 def _run_payload(tmp_path, ecc, extra_env=None):
-    """抽取落库载荷、代入状态/技能路径、喂合成 ECC 真跑，返回写后的 state。"""
-    txt = CLI.read_text(encoding="utf-8")
-    i = txt.index("GK_HMAC_VALID=")
-    src = txt[i:txt.index('\n"', i) + 1]
-    body = src.split('python3 -c "', 1)[1]
+    """真跑落库载荷（模块文件），返回写后的 state。"""
     sd = str(CLI.parent).replace("\\", "/")
     state = tmp_path / ".gatekeeper.state"
     state.write_text('{"gate_data":{}}', encoding="utf-8")
     out = tmp_path / "sub-1.json"
     out.write_text(json.dumps(ecc, ensure_ascii=False), encoding="utf-8")
-    body = (body.replace("$SKILL_DIR", sd)
-                .replace("$STATE_FILE", str(state).replace("\\", "/"))
-                .replace("$GK_DBG_LOG", str(tmp_path / "dbg.log").replace("\\", "/")))
     env = dict(os.environ, GK_TASK=ecc.get("task", ""), GK_HMAC_VALID="skip",
                GK_OUTPUT_FILE=str(out), GK_REPORT_FILE=str(tmp_path / "sub-1.md"),
                # 真因 D（2026-11-02）：路径经 env 传入（形态锚在解释器，见 `_gk_py_path`）
                GK_PY_SCRIPTS=sd + "/scripts", GK_PY_STATE=str(state).replace("\\", "/"))
     env.update(extra_env or {})
-    r = subprocess.run([sys.executable, "-c", body], input=json.dumps(ecc),
+    r = subprocess.run([sys.executable, str(_payload_path())], input=json.dumps(ecc),
                        capture_output=True, text=True, env=env, timeout=90)
     assert r.returncode == 0, (r.returncode, r.stdout[-800:], r.stderr[-800:])
     return json.loads(state.read_text(encoding="utf-8"))
@@ -307,36 +302,30 @@ def test_cli_monitor_guards_batch_flags_to_subagent():
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX bash payload test")
 def test_history_payload_runs_under_real_bash(tmp_path):
-    """行为臂（**真实 bash**）：落库载荷经 bash `python3 -c "<body>"` 展开执行 ⟹ 不得被截断。
+    """结构 + 行为臂：落库载荷必须是**文件调用**，且能在真实 bash 下跑通并落 batch_id。
 
-    根因（2026-10-03 实测：crossfull 的 postR/L2 车道全报 `HISTORY_WRITE_FAILED`，
-    `gk_dbg.log` 抓到 `NameError: name 'n' is not defined`）：载荷在 bash **双引号区内**，
-    若体内出现 ASCII 双引号字面量（如 `"\\n"`），bash 会提前收尾该引号段，其后**未引号段**
-    的反斜杠被处理（`\\n` → `n`）⟹ python 收到 `n.join(...)` → NameError → 落库失败。
-    ⚠ 现有 `_run_payload` 把载荷文本**整段当 python 跑**（不经 bash）⟹ 对本案**结构上漏检**；
-    本臂把 body 逐字嵌回 `python3 -c "..."` 交真实 bash 解析，忠实复现。
+    2026-11-04（B2）下沉后，原「双引号区早闭合」风险**结构性消失**（不再有内联代码）。
+    本臂守两点：① CLI 不再出现该块的内联 `python3 -c "` 形态；② 文件形态在 bash 下真跑成功。
     """
-    txt = CLI.read_text(encoding="utf-8")
-    i = txt.index("GK_HMAC_VALID=")
-    src = txt[i:txt.index('\n"', i) + 1]          # 收尾于列 0 的闭合引号之前
-    body = src.split('python3 -c "', 1)[1]
+    cli = CLI.read_text(encoding="utf-8")
+    assert 'GK_HMAC_VALID="$hmac_valid" python3 -c "' not in cli, "落库载荷仍是内联形态"
+    assert "gk_monitor_payload.py" in cli, "CLI 未接线到下沉模块"
     ecc = _ecc("plan-refinement: %s — 质询 组1" % PLAN)
     state = tmp_path / ".gatekeeper.state"
     state.write_text('{"gate_data":{}}', encoding="utf-8")
     out = tmp_path / "sub-1.json"
     out.write_text(json.dumps(ecc, ensure_ascii=False), encoding="utf-8")
-    script = 'python3 -c "' + body + '"'
     env = dict(os.environ, STATE_FILE=str(state), SKILL_DIR=str(CLI.parent),
                GK_DBG_LOG=str(tmp_path / "dbg.log"), GK_TASK=ecc["task"],
                GK_HMAC_VALID="skip", GK_OUTPUT_FILE=str(out),
                GK_REPORT_FILE=str(tmp_path / "sub-1.md"),
                # 真因 D（2026-11-02）：路径经 env 传入（形态锚在解释器，见 `_gk_py_path`）
                GK_PY_SCRIPTS=str(CLI.parent / "scripts"), GK_PY_STATE=str(state))
-    r = subprocess.run(["bash", "-c", script], input=json.dumps(ecc), capture_output=True,
+    r = subprocess.run(["bash", "-c", 'python3 "$1"', "_", str(_payload_path())],
+                       input=json.dumps(ecc), capture_output=True,
                        text=True, env=env, cwd=str(CLI.parent), timeout=90)
     both = (r.stdout or "") + (r.stderr or "")
-    assert "NameError" not in both, ("载荷在真实 bash 下被截断（引号区早闭合）", both[-500:])
     assert r.returncode == 0, (r.returncode, both[-500:])
     d = json.loads(state.read_text(encoding="utf-8"))
     assert d["gate_data"]["subagent_history"][-1].get("batch_id") != "", \
-        "真实 bash 下未写入 batch_id ⟹ 落库链在 bash 引号面断裂"
+        "文件形态下未写入 batch_id ⟹ 落库链断裂"

@@ -16,11 +16,10 @@ Citation discipline:
 | Document | Purpose |
 |:--|:--|
 | [architecture-overview.md](architecture-overview.md) | ZTHL Aegis（SPZ Gatekeeper）— 架构自述 |
-| [extension-registry.md](extension-registry.md) | Extension Registry — Gatekeeper Skill 扩展注册表 |
-| [flows-a-b-c.md](flows-a-b-c.md) | 流程路由 |
+| [extension-registry.md](extension-registry.md) | Extension Registry — 扩展注册表 |
 | [meta-routing-protocol.md](meta-routing-protocol.md) | META 路由协议 — 工作发现 + 仓库路由 + 阶段推进 |
 | [state-storage.md](state-storage.md) | State 存储与回收（ZTHL Aegis） |
-| [superagent-comparison.md](superagent-comparison.md) | 与 DeepSeek Harness Super-agent 的架构对照（2026-11-02） |
+| [superagent-comparison.md](superagent-comparison.md) | 与 DeepSeek Harness Super-agent 的架构对照（2026-11-05 重写） |
 
 ### 2. Execution and CLI
 
@@ -46,9 +45,9 @@ Citation discipline:
 | Document | Purpose |
 |:--|:--|
 | [ecc-impact-20260609-gitnexus.md](ecc-impact-20260609-gitnexus.md) | ECC-IMPACT-20260609-gitnexus |
-| [ecc-impact-v7.md](ecc-impact-v7.md) | ECC-IMPACT: 飞轮 v7 实施计划裁定 |
+| [ecc-impact-v7.md](ecc-impact-v7.md) |  |
 | [ecc-write-spec.md](ecc-write-spec.md) | ECC 写入规范（正本） |
-| [game-path-audit.md](game-path-audit.md) | Gatekeeper 游戏路径审计 — 6 条路径追踪 |
+| [game-path-audit.md](game-path-audit.md) |  |
 
 ### 5. Templates
 
@@ -64,6 +63,7 @@ Citation discipline:
 | Document | Purpose |
 |:--|:--|
 | [credit-economy.md](credit-economy.md) | 信用分与额度银行（Credit Economy） |
+| [flows-a-b-c.md](flows-a-b-c.md) |  |
 | [oss-hooks.md](oss-hooks.md) | 技能的 Hook：契约、门禁与安装安全网 |
 | [oss-moa-phase-provenance.md](oss-moa-phase-provenance.md) | MoA 相位/污染 provenance（公开口径） |
 | [research-408.md](research-408.md) | Research 408 — 计算机 408 四轴优化分析 |

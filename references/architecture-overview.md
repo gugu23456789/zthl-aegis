@@ -17,7 +17,7 @@ updated: 2026-11-02
 <!-- GK-FACTS:START（由 scripts/gk_docgen_facts.py 生成，勿手改） -->
 | 事实 | 值 | 来源（可复算） |
 |:--|:--|:--|
-| CLI 行数 | 12779 | `wc -l gatekeeper-cli.sh` |
+| CLI 行数 | 12349 | `wc -l gatekeeper-cli.sh` |
 | CLI 命令数 | 52 | `^_CMD_REG[` 计数 |
 | 红队站点 | 16 | `gk_chain.py` 的 `Step("RED-*")` |
 | 自检检查函数 | 37 | `gk_self_check.py` 的 `def check_*` |
@@ -31,6 +31,11 @@ updated: 2026-11-02
 
 > 漂移由 `doc-align` 的 `gk_facts` 项守护；更新跑 `python scripts/gk_docgen_facts.py --write`。
 > `references/` 文件地图在 §1（`git ls-files` 机检，C3）；本机另有 gitignore 的 `ecc-audit-*.md` 运行档案，不计入。
+>
+> **非交互凭据闸（Gate R0.20）**：`git push` 指向 https remote、命令内未声明
+> `GIT_TERMINAL_PROMPT=0`、且仓库无 `credential.helper` ⟹ **BLOCK**（防宿主接管弹登录框）；
+> SSH remote / 已配 helper / 显式非交互一律放行。判据只信**命令内**声明，不信进程 env
+> （宿主可能已设 `GIT_TERMINAL_PROMPT=0`）。
 
 ---
 
@@ -86,7 +91,7 @@ spz-gatekeeper-r-sequence/
 │   ├── standard-maintenance-module.md
 │   ├── wasm-engineering-template.md
 │   ├── ci-pipeline-template.md
-│   ├── game-path-audit.md
+│   ├── game-path-audit.md            # 私仓留存（不导出）
 │   ├── trae-cross-user-leakage-report.md
 │   ├── convergence-evaluator.md
 │   ├── predicate-applicability.md
@@ -107,8 +112,7 @@ spz-gatekeeper-r-sequence/
 │   ├── ecc-impact-2026-08-13-key-question.md
 │   ├── ecc-impact-20260826-plugin-dual-loop.md
 │   ├── ecc-impact-flywheel.md
-│   ├── ecc-impact-v7.md
-│   └── flows-a-b-c.md
+│   └── ecc-impact-v7.md              # 私仓留存（不导出）
 │
 ├── monitor-schemas/                  # STAGE_0..5 门禁 schema（JSON）
 └── docs/                             # 内部计划/分析/备份（不随公开包导出）
@@ -225,6 +229,4 @@ TTL/GC、回收判据全在 `references/state-storage.md`，本文不复制。
 
 ## 常驻子系统索引（自动覆盖检查用）
 
-- **状态 WAL**：`gk_state_wal` 提供预写日志与 checkpoint，读取侧按片并集重建。
 - **基准**：`gk_bench_*`（状态基准、发布耗时基准）与夜间回归基线。
-- **MCP 工具面**：`gk_mcp_loader` 负责加载与闸门接入。

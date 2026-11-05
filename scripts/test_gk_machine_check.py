@@ -19,12 +19,14 @@ CLI = Path(__file__).resolve().parent.parent / "gatekeeper-cli.sh"
 
 
 def _hist_region() -> str:
-    """落库段：`GK_HMAC_VALID=` 锚 → python -c 收尾行（列 0 的 `"`）末。"""
+    """落库载荷源码（B2 下沉后 = `scripts/gk_monitor_payload.py` 全文）。
+
+    2026-11-04：载荷从 CLI 内联块搬到模块文件 ⟹ 判据面随代码迁移。先钉「CLI 仍接线到该模块」，
+    再把模块当作落库段返回；断言点（machine_check / 字节上限 / 键集单源）不变。
+    """
     txt = CLI.read_text(encoding="utf-8")
-    i = txt.index("GK_HMAC_VALID=")
-    j = txt.index('\n"', i) + 1
-    k = txt.index("\n", j + 1)
-    return txt[i:k]
+    assert "gk_monitor_payload.py" in txt, "CLI 未接线到下沉模块（锚失效，臂失去意义）"
+    return (CLI.parent / "scripts" / "gk_monitor_payload.py").read_text(encoding="utf-8")
 
 
 def _dump_region() -> str:
@@ -66,32 +68,25 @@ def test_report_dump_validated():
 # ─── 行为臂：真跑落库载荷（合成 ECC）⟹ entry 必须带 machine_check ───
 
 def _run_payload(tmp_path, ecc: dict) -> dict:
-    """抽取落库载荷、代入状态/技能路径、喂合成 ECC 真跑，返回写后的 state。
+    """喂合成 ECC 真跑落库载荷，返回写后的 state。
 
-    载荷内 `'$STATE_FILE'` / `'$SKILL_DIR'` / `'$GK_DBG_LOG'` 是 bash 期插值（本臂手工代入），
-    `GK_TASK`/`GK_OUTPUT_FILE`/`GK_REPORT_FILE` 走 env（与 CLI 同形态）。
+    2026-11-04（B2 下沉）：载荷已是 `scripts/gk_monitor_payload.py`（**文件调用**）⟹ 不再从
+    CLI 切双引号区、也不再手工代入 bash 插值；路径统一走 env（真因 D 的口径保留）。
     """
     import json
     import os
     import subprocess
     import sys
-    txt = CLI.read_text(encoding="utf-8")
-    i = txt.index("GK_HMAC_VALID=")
-    src = txt[i:txt.index('\n"', i) + 1]
-    body = src.split('python3 -c "', 1)[1]
-    sd = str(CLI.parent)
     state = tmp_path / ".gatekeeper.state"
     state.write_text('{"gate_data":{}}', encoding="utf-8")
     out = tmp_path / "sub-1.json"
     out.write_text(json.dumps(ecc, ensure_ascii=False), encoding="utf-8")
-    body = (body.replace("$SKILL_DIR", sd).replace("$STATE_FILE", str(state))
-                .replace("$GK_DBG_LOG", str(tmp_path / "dbg.log")))
     env = dict(os.environ, GK_TASK=ecc.get("task", ""), GK_HMAC_VALID="skip",
                GK_OUTPUT_FILE=str(out), GK_REPORT_FILE=str(tmp_path / "sub-1.md"),
                # 真因 D（2026-11-02）：路径经 env 传入（形态锚在解释器，见 `_gk_py_path`）
                GK_PY_SCRIPTS=str(CLI.parent / "scripts"), GK_PY_STATE=str(state))
-    r = subprocess.run([sys.executable, "-c", body], input=json.dumps(ecc),
-                       capture_output=True, text=True, env=env, timeout=90)
+    r = subprocess.run([sys.executable, str(CLI.parent / "scripts" / "gk_monitor_payload.py")],
+                       input=json.dumps(ecc), capture_output=True, text=True, env=env, timeout=90)
     assert r.returncode == 0, (r.returncode, r.stdout[-600:], r.stderr[-600:])
     return json.loads(state.read_text(encoding="utf-8"))
 

@@ -43,6 +43,10 @@ _RELEASE_PINS = {                # version → sha256(audit.py)；None=未登记
     # 2026-11-04: v0.3.3（tag 5ae535f）—— 新增分诊模型 triage.py + `audit --triage`，
     #   **audit.py 零改动** ⟹ 同哈希（已从 GitHub Release wheel 实测提取并复核）。
     "0.3.3": "1ffd11a86aa2ff20a244ee57dac93e454f614523d12517dff9cba0f88a747c55",
+    # 2026-11-04: v0.4.0 —— 三层精细化（L1 reason/inline_blocks；L2 artifact 归一化器注入；
+    #   L3 `audit --mount` 挂载断言）。**audit.py 有改动** ⟹ 新哈希（取自本机源码，
+    #   发 wheel 后应复核）。注意：加载器版本取 pip 元数据，升级后需刷新 editable 安装。
+    "0.4.0": "0c3240df4c4dbb0b688bacd28da4172dad19d5ce5bea2cb13a6367bafec1af99",
 }
 _DEV_SOURCE_DIRS = (
     os.environ.get("ZTHL_BASHPY_DIR", ""),

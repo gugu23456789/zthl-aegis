@@ -1069,7 +1069,14 @@ class TestMoaSuspectFieldWhitelist:
     """
 
     def _src(self) -> str:
-        return CLI_PATH.read_text(encoding="utf-8")
+        """写入面 = CLI（派发行）+ 下沉的落库载荷模块（2026-11-04 B2）。
+
+        判据不变（entry 白名单字段 / hmac 状态注入必须真落到写入口）；B2 把落库载荷搬到
+        `scripts/gk_monitor_payload.py` ⟹ 扫描面随之扩展，避免「文件里没有 = 判红」的假红。
+        """
+        payload = CLI_PATH.parent / "scripts" / "gk_monitor_payload.py"
+        return (CLI_PATH.read_text(encoding="utf-8") + "\n"
+                + payload.read_text(encoding="utf-8"))
 
     def test_entry_whitelist_carries_aggregator_fields(self):
         s = self._src()
@@ -1080,9 +1087,14 @@ class TestMoaSuspectFieldWhitelist:
                 f"subagent_history entry 白名单缺 {field}（MoA 聚合器读侧将零生效）"
 
     def test_hmac_status_env_wired_to_writer(self):
-        """hmac 校验态须由 bash 注入 python 写入口（否则 hmac_status 恒 skip）。"""
+        """hmac 校验态须由 bash 注入 python 写入口（否则 hmac_status 恒 skip）。
+
+        2026-11-04（B2 下沉）：派发行改为「env + 换行续行 + 模块文件」⟹ 原单行字面量断链。
+        判据拆成两条同义事实：① env 注入在派发行；② 写入口确实是被调用的模块。
+        """
         s = self._src()
-        assert 'GK_TASK="$task" GK_HMAC_VALID="$hmac_valid" python3' in s
+        assert 'GK_HMAC_VALID="$hmac_valid"' in s, "hmac 校验态未注入写入口"
+        assert 'python3 "$SKILL_DIR/scripts/gk_monitor_payload.py"' in s, "写入口未接线到载荷模块"
         assert "os.environ.get('GK_HMAC_VALID'" in s
 
 

@@ -60,10 +60,12 @@ def test_batch_narrow_union_strips_crlf():
 
 
 def test_budget_snap_lf_newline():
-    """`_budget_snap` heredoc python：Windows print 出 \\r\\n ⟹ 三字段串尾粘 \\r，
-    账单差额对账（session/global 域比对）被污染。"""
-    m = re.search(r"_budget_snap\(\)\s*\{", _txt())
-    assert m, "_budget_snap 函数锚点丢失"
-    body = _txt()[m.end(): m.end() + 1600]
+    """`_budget_snap`：Windows print 出 \\r\\n ⟹ 三字段串尾粘 \\r 污染账单对账。
+
+    2026-11-04 内联块下沉后，判据面随代码迁到 `scripts/gk_budget_snap.py`。
+    """
+    p = os.path.join(SK, "scripts", "gk_budget_snap.py")
+    with open(p, encoding="utf-8") as f:
+        body = f.read()
     assert "reconfigure(newline=" in body, \
-        "_budget_snap heredoc 缺 sys.stdout.reconfigure(newline=…)（CRLF 净化）"
+        "gk_budget_snap.py 缺 sys.stdout.reconfigure(newline=…)（CRLF 净化）"
