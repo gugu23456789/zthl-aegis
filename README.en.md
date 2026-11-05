@@ -377,35 +377,40 @@ disclaimer are in [`MAINTENANCE.md`](MAINTENANCE.md).
 
 ### Positioning: Super-agent vs. this repository
 
-Architecture-only comparison with the Super-agent prototype published by the DeepSeek Harness
-team (2026-10-31, MIT). Full version:
+Architecture-only comparison with `dsh-superagent-prototype`, open-sourced by the DeepSeek Harness
+team on 2026-10-31 (MIT; a research prototype shipped as a plugin bundle for DeepSeek Harness,
+scoped to one GitHub repository). Full version and sources:
 [`references/superagent-comparison.md`](references/superagent-comparison.md).
 
-| Dimension | Super-agent (DeepSeek Harness) | This repository (ZTHL Aegis) |
+| Dimension | Super-agent (DSH prototype) | This repository (ZTHL Aegis) |
 |---|---|---|
-| Goal | System owns session management; humans move up to decision & acceptance | Same goal, with **replayability first**: autonomy is bounded by gates |
-| Topology | Resident **Router** + isolated **Worker** | `gk_route_center` (repo routing) + `subagent_runner` (7 roles) + single CLI entry |
-| Session semantics | Session is an implementation detail | `state_domain` / worktree / session id are explicit and auditable |
-| State & execution | Stateless loop in the cloud, DB-held state, local execution env | **Local-first**: single-source state + lock + checksum + worktrees |
-| Messaging | Event-driven, async multi-channel | Append-only satellites + journal chain + event bus; workers return structured JSON only |
-| Supervision | External **Watchdog** (an AI that supervises agents and may repair) | **Audit bureau** (reports findings, does not block) + safe-termination gate + abstain |
-| Human role | Decision and acceptance; attention is scarce | Veto is non-delegable; independent scoring first, adjudication later (double-blind discipline) |
-| What is measured | Tasks and models; humans are not measured | Object axis (gates/evidence) + **human axis (OPCAP: operator capability & bandwidth)** |
-| Failure handling | Watchdog intervenes to keep work continuous | Fail-closed; undecidable ⟹ abstain / `[UNFITTED]` |
-| License / release | MIT prototype repo | MulanPSL-2.0; public tree produced by a checked export |
+| Form | Plugin bundle for dsh; one repo, always-on listener for GitHub (optionally Feishu) | Standalone skill + CLI + hooks; multi-domain state, worktree isolation |
+| Domain model | Five primitives — Sources / Triggers / Threads / Mandates / Tickets; **stateless Eval** checks each Trigger against repo policy → Ticket; an immutable Mandate fixes scope and "operational strength" | State-domain routing + gate verdicts + finding ledger + frozen plans; no Ticket abstraction |
+| Authority | People allow-list (initially just the operator) + three accept modes `off` / `observe` (default) / `auto`; `auto` still needs at least one team-written rule; **message text cannot change permissions** | Hook write-gates + `guard-edit` + budget bank (quota / raise / appeal); default deny |
+| Out-of-scope work | Handed back to the router; no self-escalation (anti-drift) | Domain conflicts fail closed (`STATE_DOMAIN_EXPLICIT_CONFLICT`) + finding accountability |
+| State | One SQLite `Store` + durable outbox + source read positions (restart-safe) | Single-source JSON state + cross-process lock + checksum + append-only satellites |
+| Isolation | One git worktree per Ticket, `maxWorkers` pool; shell >5s moves to background, 30-minute hard cap with an audit trail | Worktree isolation + single writer; no command-duration model (synchronous CLI) |
+| Human attention | **Attention budget**: structured handoffs, one question at a time, panel lists only items needing a person | Human axis OPCAP (capability / bandwidth) + `abstain` (no verdict without evidence) |
+| Default posture | `observe`: inferred work is only recorded as "would accept", nothing runs | Fail-closed deny; credit score stays out of gate verdicts by default (read-only observation) |
+| Security boundary | Workers run `danger-full-access` as the operator's OS user; mitigated by stripping KEY/SECRET env vars, `blockedCommands`, loopback-only panel; docs recommend a dedicated OS account | Hook interception + non-interactive credential gate (R0.20) + key integrity + separate credential surface |
+| Evidence / benchmarks | No published benchmarks; no independent re-computation path | Replayable (checksum / ledger / `audit` replay); public tree produced by a checked export |
+| License | MIT (self-described research prototype, not an official product) | MulanPSL-2.0 |
 
-**Shared:** router/worker split, "session is not the user's burden", an independent supervisor
-beside the executors, and humans kept at the decision layer.
-**Different:** throughput vs. replayability; cloud-resident state vs. local fail-closed state;
-a supervisor that may repair vs. one that only reports; measuring tasks only vs. measuring the
-operator as a separate axis.
+**Shared:** router/worker layering, sessions kept out of the user's way, humans moved up to decision
+and acceptance, a side-channel supervisor (policy Eval ↔ audit bureau), and human attention treated
+as a scarce budget.
 
-### Single-operator governance: no fictional "second institution"
+**Different:** default posture (record-only observe vs fail-closed deny); authority model (immutable
+Mandate scope vs gates + budget bank); evidence strength (no published benchmarks vs replayable
+re-computation); isolation granularity (same OS user + command blocklist vs hook write-gates +
+separated credential surface).
 
-Single-member companies (one-person LLC / OPC) are ordinary legal forms. A protocol that requires
-an *institutional second party* to certify completion would exclude the single operators already
-delegating work to personal agents. This repo **does not pretend that party exists**; four
-machine-checkable substitutes take its place:
+### Single-operator deployments: no fictional "second institution"
+
+Solo developers and one-person shops are ordinary. A protocol that requires an *institutional second
+party* to certify completion would exclude exactly the people already delegating work to personal
+agents. This repo **does not pretend that party exists**; four machine-checkable substitutes take
+its place:
 
 | Substitute | Implemented here | Role |
 |:--|:--|:--|
@@ -414,9 +419,15 @@ machine-checkable substitutes take its place:
 | Segregated audit | Credit bank ↔ audit office ↔ red team (post-R dual independent runs) | The same person's two roles are separated **on the record** |
 | Sample floor | `n<30 ⟹ [UNFITTED]`; undecidable ⟹ `abstain` | No hard fit on tiny samples, and "nobody reviewed it" is not compliance |
 
+This pairs with **OPCAP (the human axis)**: the solo deployment decides *who* is governed (one
+person); OPCAP decides *how that person is measured*. The object axis (gates/evidence) proves a
+verdict can be recomputed; the human axis (capability/bandwidth) shows whether the process is
+sustainable for that person. Neither invents a second institution: the former substitutes gates and
+ledgers for review, the latter substitutes observable bandwidth for "team capacity".
+
 In one line: **do not invent a second institution, but do not treat missing review as compliance
-either** — build the auditability an institution would have provided into deterministic gates and
-ledgers.
+either** — build the auditability an institution would provide into gates and ledgers, and the
+capacity judgement it would provide into an observable human axis.
 
 ### Roadmap
 

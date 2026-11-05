@@ -364,31 +364,35 @@ python scripts/gk_doc_release.py --strict
 
 ### 定位：Super-agent 与本仓的对照
 
-仅做架构面对照，对象是 DeepSeek Harness 团队 2026-10-31 公开的 Super-agent 原型（MIT）。完整版见
+仅做架构面对照。对象是 DeepSeek Harness 团队 2026-10-31 开源的 `dsh-superagent-prototype`
+（MIT，研究原型；作为 DeepSeek Harness 的插件 bundle 运行，单 GitHub 仓）。完整版与出处见
 [`references/superagent-comparison.md`](references/superagent-comparison.md)。
 
-| 维度 | Super-agent（DeepSeek Harness） | 本仓（ZTHL Aegis） |
+| 维度 | Super-agent（DSH 官方原型） | 本仓（ZTHL Aegis） |
 |---|---|---|
-| 目标 | 系统接管会话管理，人上移到决策与验收 | 同目标，但**先保证可回放**，自主度受门禁约束 |
-| 拓扑 | 常驻 **Router** + 隔离 **Worker** | `gk_route_center`（仓库路由）+ `subagent_runner`（7 角色）+ CLI 单入口 |
-| 会话语义 | Session 是实现细节 | `state_domain` / worktree / session id 显式建模、可审计 |
-| 状态与执行 | 云端无状态 loop、DB 存状态、本地执行 | **本地优先**：单源 state + 锁 + 校验和 + worktree |
-| 消息 | 事件驱动、异步多信道 | append-only 卫星 + journal 链 + event bus；子代理只回结构化 JSON |
-| 监督 | 外部 **Watchdog**（AI 监督 AI，可介入修复） | **审计署**（只出 finding，不直接阻断）+ 安全终止门 + abstain |
-| 人的角色 | 决策与验收；注意力稀缺 | 否决权不可让渡；先独立打分、事后裁定（双盲纪律） |
-| 度量对象 | 任务与模型，不测人 | 物轴（门禁/证据）+ **人轴（OPCAP：操作者能力与带宽）** |
-| 失败处理 | Watchdog 介入，维持任务连续 | 默认拒绝；不可判 ⟹ abstain / `[UNFITTED]` |
-| 许可/发布 | MIT 原型仓 | MulanPSL-2.0；公开树由机检导出产生 |
+| 形态 | dsh 的插件 bundle；单仓、常驻监听 GitHub（可选飞书） | 独立技能 + CLI + hook；多域 state、worktree 隔离 |
+| 领域模型 | 五原语 Sources / Triggers / Threads / Mandates / Tickets；**无状态 Eval** 按仓库策略判 Trigger → Ticket；Mandate 不可变（定作用域与「操作强度」） | state 域路由 + 门禁判定 + finding 台账 + 计划冻结；无 Ticket 抽象 |
+| 权限面 | 人员 allow-list（初始仅操作者）+ 三档接受 `off` / `observe`（默认）/ `auto`；`auto` 仍需至少一条团队写的规则；**消息内容不能改权限** | hook 写类门禁 + `guard-edit` + 额度银行（配额/提额/申诉）；默认拒绝 |
+| 越界处理 | 越界请求交回 router，不自行扩权（防会话漂移） | 域冲突 fail-closed（`STATE_DOMAIN_EXPLICIT_CONFLICT`）+ finding 追责 |
+| 状态 | 单 SQLite `Store` + 持久 outbox + 源读位点（重启安全） | 单源 JSON state + 跨进程锁 + checksum + append-only 卫星 |
+| 执行隔离 | 每 Ticket 一个 git worktree，`maxWorkers` 池；>5s 命令转后台，30 分钟硬杀并留审计 | worktree 隔离 + 单写者；无命令时长模型（同步 CLI） |
+| 人的注意力 | **注意力预算**：结构化 handoff、一票一问、面板只列需人处理项 | 人轴 OPCAP（能力/带宽）+ `abstain`（证据不足不下结论） |
+| 默认姿态 | `observe`：推断项只记「would accept」，不执行 | 默认拒绝（fail-closed）；信用分默认不进判定（只读观测） |
+| 安全边界 | worker 以操作者 OS 用户 `danger-full-access` 运行；靠剥 KEY/SECRET 类 env、`blockedCommands`、loopback 面板收敛，文档建议专用 OS 账号 | hook 拦截 + 非交互凭据闸（R0.20）+ 密钥完整性 + 专用凭据面 |
+| 证据 / 基准 | 未发布基准；无独立复算入口 | 可回放（checksum / 账本 / `audit` 重放）；公开树由机检导出 |
+| 许可 | MIT（自述为研究原型，非官方产品） | MulanPSL-2.0 |
 
-**相同**：Router/Worker 分层、会话不是用户负担、执行者旁边有独立监督面、人留在决策层。
-**不同**：吞吐 vs 可回放；云端常驻状态 vs 本地 fail-closed；监督者可否修复 vs 只报告；
-只测任务 vs 把人作为独立轴测量。
+**相同**：Router/Worker 分层、会话不外露、人上移到决策与验收、旁路监督（策略 Eval ↔ 审计署）、
+把人的注意力当稀缺资源来预算。
 
-### 单人治理：不假装存在「第二个机构」
+**不同**：默认姿态（observe 记录 vs fail-closed 拒绝）；权威模型（不可变 Mandate 定作用域 vs
+门禁 + 额度银行）；证据强度（未发布基准 vs 可回放复算）；隔离粒度（同 OS 用户 + 命令黑名单 vs
+hook 写类门禁 + 凭据面分离）。
 
-单人公司（一人有限公司 / LLC / OPC）是常规法律形态。一个要求「机构性第二方」来认证完成的
-协议，会把已经在把工作委派给个人 agent 的单人操作者排除在外。本仓**不假设这个第二方存在**，
-用四件可机检的替代物补位：
+### 单人部署形态：不假装存在「第二个机构」
+
+独立开发者/单人作坊是常态：一个人既写代码又做验收。一个要求「机构性第二方」来认证完成的
+协议，会把这批人排除在外。本仓**不假设这个第二方存在**，用四件可机检的替代物补位：
 
 | 替代物 | 本仓落地 | 作用 |
 |:--|:--|:--|
@@ -397,8 +401,12 @@ python scripts/gk_doc_release.py --strict
 | 分权审计 | 额度银行 ↔ 审计署 ↔ 红队（后 R 双独立互斥） | 同一人的两种角色在**记录**上分账 |
 | 样本下限 | `n<30 ⟹ [UNFITTED]`；不可判 ⟹ `abstain` | 不拿小样本硬拟合，也不把「没人复核」当合规 |
 
-一句话：**不假装有第二个机构，但也不把缺少复核当成合规**——把本应由机构提供的可审计性，
-做进确定性门禁与账本里。
+这与 **OPCAP（人轴）** 是同一论证的两半：单人形态决定**治理对象是一个人**，OPCAP 决定**怎么量
+这个人**——物轴（门禁/证据）证明结论可复算，人轴（能力/带宽）说明这套流程对这个人是否可持续。
+两者都不引入「第二个机构」：前者用确定性门禁与账本代替复核，后者用可观测带宽代替「团队容量」。
+
+一句话：**不假装有第二个机构，也不把缺少复核当合规**——把机构本应提供的可审计性做进门禁与账本，
+把机构本应提供的容量判断做成可观测的人轴。
 
 ### 路线图
 
