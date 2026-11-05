@@ -11,6 +11,9 @@
 
 本仓是公开发布通道。文档索引见 [`references/README.md`](references/README.md)，所有导出的文档都由它链接。
 
+**移动端 / 抓取入口**：[文件地图](FILES.md)（全量路径 + 一句说明）· [llms.txt](llms.txt)（精选索引）。
+两者由 `scripts/gk_repo_index.py` 生成，`gk_release_preflight` 的 `repo_index` 项守漂移。
+
 ### 许可
 
 木兰宽松许可证第 2 版（Mulan PSL v2）。双语全文见 [`LICENSE`](LICENSE)，中文正本见

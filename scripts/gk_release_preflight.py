@@ -8,7 +8,7 @@ v0.9.6.8–v0.9.6.10 连续三版在 `pack` 步 argparse 退出 2（workflow 传
 `pack_release.py` 不认），且 publish 步要求的 `dist/PROVENANCE.json` 从未产出。
 本脚本把这些契约在**打包前**变成可执行判据（fail-loud），而不是等 CI 红。
 
-六项检查（全部确定性、零网络）
+七项检查（全部确定性、零网络）
 ==============================
 1. `pack_contract`   workflow 中 `pack_release.py` 用到的 flag ⊆ 脚本 parser 支持的 flag；
 2. `pack_fixture`    用最小夹具真跑一次 `pack(... --source-*)`，断言 zip / manifest /
@@ -19,7 +19,9 @@ v0.9.6.8–v0.9.6.10 连续三版在 `pack` 步 argparse 退出 2（workflow 传
 6. `workflow_paths`  workflow `run:` 引用的仓库内路径必须**存在**，或登记在
                      `references/ci-external-paths.json`（带 reason）。
                      2026-11-05 事故：公开 `ci.yml` 引用 `docs/analysis/bomb-inventory-*.json`
-                     （`docs/` 是导出排除面）⟹ 公开 CI 恒红，而私仓 preflight 永远绿。
+                     （`docs/` 是导出排除面）⟹ 公开 CI 恒红，而私仓 preflight 永远绿；
+7. `repo_index`      `FILES.md` / `llms.txt` 必须与当前公开面一致（`gk_repo_index.py --check`）。
+                     移动端/抓取入口，手写必漂移 ⟹ 与 GK-FACTS 同款「生成器 + 漂移门」。
 
 用法：`python scripts/gk_release_preflight.py [--json]`；退出码 0 = 全绿，1 = 有失败。
 `oss_scrub.py export` 会在**导出树**内自动再跑一次（`--skip-preflight` 可显式跳过）。
@@ -255,6 +257,15 @@ def workflow_paths() -> dict:
             "detail": "%d 个引用路径 / 允许清单 %d 条" % (len(refs), len(globs))}
 
 
+def repo_index_check() -> dict:
+    """`FILES.md` / `llms.txt` 与公开面一致（移动端/抓取入口不漂移）。"""
+    r = _run_json([str(ROOT / "scripts" / "gk_repo_index.py"), "--check", "--json"])
+    ok = bool(r.get("ok"))
+    return {"id": "repo_index", "status": "PASS" if ok else "FAIL",
+            "detail": ("files=%s" % r.get("files")) if ok
+                      else "；".join(r.get("issues") or ["check 失败"])[:300]}
+
+
 def run_all() -> dict:
     try:
         wf = WORKFLOW.read_text(encoding="utf-8")
@@ -262,7 +273,8 @@ def run_all() -> dict:
         return {"ok": False, "checks": [{"id": "workflow", "status": "FAIL",
                                          "detail": "读不到 %s: %s" % (WORKFLOW, e)}]}
     checks = [pack_contract(wf), pack_fixture(), docgen_check(),
-              doc_features_check(), release_assets(wf), workflow_paths()]
+              doc_features_check(), release_assets(wf), workflow_paths(),
+              repo_index_check()]
     return {"ok": all(c["status"] == "PASS" for c in checks), "checks": checks}
 
 

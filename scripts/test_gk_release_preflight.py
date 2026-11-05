@@ -113,3 +113,9 @@ def test_run_blocks_skips_comments():
             "jobs:\n  a:\n    steps:\n      - run: echo hi >/dev/null\n")
     blocks = PF._run_blocks(text)
     assert blocks and all("references/ghost.md" not in b for b in blocks)
+
+
+def test_repo_index_real_tree_is_fresh():
+    """仓库里的 FILES.md / llms.txt 必须与公开面一致（移动端入口不漂移）。"""
+    r = PF.repo_index_check()
+    assert r["status"] == "PASS", r

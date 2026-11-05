@@ -162,7 +162,7 @@ def sdk_info() -> dict:
 
 
 def normalize_tools(payload) -> list:
-    """把任意版本的 `list_tools()` 结果归一为 `[{"name","description"}]`。
+    """把任意版本的 `list_tools` 结果归一为 `[{"name","description"}]`。
 
     兼容五类形态（实测/文档跨 SDK 版本）：
       ① `[Tool, ...]`（对象，取 `.name`）

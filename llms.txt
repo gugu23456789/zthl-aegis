@@ -1,0 +1,60 @@
+# ZTHL Aegis (智御)
+
+> 面向 AI 辅助软件工程的确定性治理层：门禁 + 阶段推进 + 审计/红队 + 证据留痕。
+
+## 文档
+
+- [CONTRIBUTING.md](CONTRIBUTING.md): Contributing / 参与贡献
+- [CONVENTIONS.md](CONVENTIONS.md): SPZ Gatekeeper Skill — Git 管理规范
+- [MAINTENANCE.md](MAINTENANCE.md): Maintenance Status / 维护状态
+- [PROVENANCE.md](PROVENANCE.md): 来源声明（Provenance）
+- [README.en.md](README.en.md): 英文自述（English README）
+- [README.md](README.md): 项目自述：门禁做什么、怎么装、插件与治理边界
+- [SECURITY.md](SECURITY.md): 安全问题私下披露渠道
+- [SKILL.md](SKILL.md): Agent 入口：路由 / 契约 / 强制 invoke 表
+- [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md): 第三方组件许可与来源
+- [references/README.md](references/README.md): 文档索引（所有导出文档都由它链接）
+- [references/architecture-overview.md](references/architecture-overview.md): 架构自述：数据流 / 门禁分层 / 真实形态
+- [references/ci-pipeline-template.md](references/ci-pipeline-template.md): CI 模板与发版门禁（含发版前三步）
+- [references/cli-protocol.md](references/cli-protocol.md): CLI Protocol — Gatekeeper Command Reference & PRM Monitor
+- [references/convergence-evaluator.md](references/convergence-evaluator.md): 收敛评估器（Convergence Evaluator）—— 机制正本
+- [references/credit-economy.md](references/credit-economy.md): 额度银行 / 经济回路正本
+- [references/ecc-impact-20260609-gitnexus.md](references/ecc-impact-20260609-gitnexus.md): ECC-IMPACT-20260609-gitnexus
+- [references/ecc-write-spec.md](references/ecc-write-spec.md): ECC 写入规范（正本）
+- [references/extension-registry.md](references/extension-registry.md): Extension Registry — 扩展注册表
+- [references/meta-routing-protocol.md](references/meta-routing-protocol.md): META 路由协议 — 工作发现 + 仓库路由 + 阶段推进
+- [references/oss-hooks.md](references/oss-hooks.md): 开源面 hook 口径与 MCP 安全网现状
+- [references/oss-moa-phase-provenance.md](references/oss-moa-phase-provenance.md): MoA 相位/污染 provenance（公开口径）
+- [references/plan-writing-safety-net.md](references/plan-writing-safety-net.md): 计划写入安全网（Plan-Writing Safety Net，简称 **PW-SN**）
+- [references/plugin-loading-test-framework.md](references/plugin-loading-test-framework.md): 插件加载安全网协议 + 插件导入测试安全网框架
+- [references/prm-monitor-methodology.md](references/prm-monitor-methodology.md): PRM Monitor：方法论与交叉审查
+- [references/research-408.md](references/research-408.md): Research 408 — 计算机 408 四轴优化分析
+- [references/security-incident-response.md](references/security-incident-response.md): 密钥泄露应急处置流程（BP.08.05 对照）
+- [references/sequence-node-safety-net-template.md](references/sequence-node-safety-net-template.md): 序列节点安全网模板（Sequence-Node Safety Net Template）
+- [references/stages.md](references/stages.md): Stage Guide (0–5)
+- [references/standard-maintenance-module.md](references/standard-maintenance-module.md): 标准维护模块（自愈层）
+- [references/state-storage.md](references/state-storage.md): 状态存储形态、卫星片与容量纪律
+- [references/superagent-comparison.md](references/superagent-comparison.md): 与 dsh Super-agent 的一手材料对照
+- [references/trae-cross-user-leakage-report.md](references/trae-cross-user-leakage-report.md): Trae IDE 跨用户上下文注入漏洞报告
+- [references/wasm-engineering-template.md](references/wasm-engineering-template.md): WASM 工程标准模板（通用）
+- [references/xspi-defense.md](references/xspi-defense.md): XSPI 污染攻防机制正本（跨站/间接提示注入）
+
+## 关键入口
+
+- [LICENSE](LICENSE): Mulan PSL v2 许可正本
+- [gatekeeper-cli.sh](gatekeeper-cli.sh): 确定性 CLI：state / 门禁 / 审计 / 评审 / finding / cron
+- [install.sh](install.sh): 安装到 .trae/skills（非破坏、默认注册 hook）
+- [scripts/gk_bashpy_loader.py](scripts/gk_bashpy_loader.py): bashpy-migrate 插件加载器（release→dev→missing）
+- [scripts/gk_doc_align.py](scripts/gk_doc_align.py): 文档对齐门（35 项机检）
+- [scripts/gk_mcp_loader.py](scripts/gk_mcp_loader.py): MCP 加载安全网（声明 / 接线 / 决策 + 跨 SDK 版本）
+- [scripts/gk_plugin_manifest.py](scripts/gk_plugin_manifest.py): 插件加载安全网（未登记不可加载）
+- [scripts/gk_release_preflight.py](scripts/gk_release_preflight.py): 发版预检（参数 / 产物 / 资产 / 路径 / 索引 契约）
+- [scripts/gk_satellite.py](scripts/gk_satellite.py): 状态 WAL：append 片 + per-arm 索引叶
+- [scripts/gk_self_check.py](scripts/gk_self_check.py): 环境自检（37 项，quick/full 两档）
+- [scripts/pack_release.py](scripts/pack_release.py): 确定性打包（zip + SHA256SUMS + PROVENANCE + manifest）
+- [scripts/pre_tool_hook.py](scripts/pre_tool_hook.py): hook 门禁执行面（Gate 0-9 + R0.x 家族）
+- [uninstall.sh](uninstall.sh): 按 manifest 精确卸载
+
+## 全量文件
+
+- [FILES.md](FILES.md): 全部公开面文件（路径 + 一句说明）

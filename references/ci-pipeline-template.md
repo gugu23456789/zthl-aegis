@@ -394,6 +394,11 @@ security-audit:
   （37 项 + 全量测试；quick 只覆盖 22 个测试文件）；② `python scripts/gk_release_preflight.py`；
   ③ `python scripts/oss_scrub.py export --out <dir>`（导出树内自动重跑 ②）。
   三步全绿再打 tag。反例（v0.9.6.14）：陈旧断言（①没跑）与导出面缺路径（③没跑）各红一次。
+- **移动端 / 抓取索引**（2026-11-05）：`scripts/gk_repo_index.py` 生成 `FILES.md`（公开面全量
+  路径 + 一句说明 + 直达链接）与 `llms.txt`（llmstxt.org 约定：标题 + 链接 + 摘要）。GitHub
+  移动端没有 “Go to file”、目录树懒加载 ⟹ 这两个文件是**一次请求就拿到全貌**的入口。
+  生成器确定性（无时间戳、按 posix 排序、描述取手工注/md H1/py docstring），
+  preflight 的 `repo_index` 项守漂移，导出时在导出树内重生成。
 - 非审计类项目：仅保留原生构建 + CTest 作为发布门禁
 
 ## 6. 产物与失败诊断
