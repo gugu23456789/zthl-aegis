@@ -123,8 +123,18 @@ def plugin_manifest_issues(manifests: dict, root: Path, is_excluded=None) -> lis
             out.append(_issue("error", "plugin_manifest", "write=True 但缺 undo", plugin=key))
         if not m.get("write") and m.get("undo"):
             out.append(_issue("warn", "plugin_manifest", "write=False 却声明 undo", plugin=key))
+        # 包内 vendor（2026-11-05，本体随包）：声明了就必须在；存在则外部源告警不再成立。
+        vendor = str(m.get("vendor") or "")
+        if vendor:
+            vrel = vendor.replace("${SKILL_DIR}/", "", 1)
+            if not (root / vrel).is_file():
+                out.append(_issue("error", "plugin_manifest", "vendor 源缺失",
+                                  plugin=key, path=vrel))
+                continue
         url = str(m.get("url") or "")
         if not url.startswith("builtin:"):
+            if vendor:
+                continue          # 包内载体已在上面核过 ⟹ 不是「本包缺件」
             if ".." in url or url.startswith("pip:") or url.startswith("npm:"):
                 out.append(_issue("warn", "plugin_manifest", "外部源（不属本包缺件）",
                                   plugin=key, url=url))

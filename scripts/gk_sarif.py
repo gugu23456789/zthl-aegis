@@ -50,6 +50,9 @@ _ARTIFACT_HINTS = {
 _TAGS = ["aegis", "static-analysis"]
 _SEV_RANK = {"note": 0, "warning": 1, "error": 2}
 _LEVEL_OF_PKG = {"error": "error", "warn": "warning", "warning": "warning"}
+# 设计内信息 ≠ 缺陷（2026-11-05）：外部源插件（pip/npm/同级技能）按设计不随包，
+# 之前映射成 warning 会在 GitHub Security 页变黄条，读者误读为漏洞 ⟹ 降为 note。
+_DESIGN_NOTE_PKG = frozenset(("plugin_manifest",))
 
 
 def _posix(p) -> str:
@@ -132,7 +135,8 @@ def _pkg_findings(root: Path) -> list:
             msg = "%s（%s）" % (msg, json.dumps(extra, ensure_ascii=False, sort_keys=True))
         out.append({
             "rule": "pkg_%s" % check,
-            "level": _LEVEL_OF_PKG.get(str(it.get("level") or "").lower(), "note"),
+            "level": ("note" if check in _DESIGN_NOTE_PKG
+                      else _LEVEL_OF_PKG.get(str(it.get("level") or "").lower(), "note")),
             "message": msg,
             "file": file,
             "line": None,

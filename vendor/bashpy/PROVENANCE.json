@@ -1,0 +1,12 @@
+{
+  "schema": "gk-vendor-artifact/1",
+  "package": "zthl-bashpy-migrate",
+  "version": "0.4.0",
+  "artifact": "zthl_bashpy_migrate-0.4.0-py3-none-any.whl",
+  "sha256": "45dfd03b2e4f6798447f606403cc932aa9353c0db6e4a958f2b0e5b048c55f7e",
+  "wheel_tag": "py3-none-any",
+  "built_from": "zthl-bashpy-migrate working tree @ a777dc0",
+  "build_cmd": "pip wheel <src> --no-deps --no-build-isolation",
+  "built_python": "3.11.5",
+  "note": "纯 Python wheel。加载器优先用包内 wheel（zipimport，无需安装），SHA256 由同目录 SHA256SUMS 校验；校验不过则拒绝该源。"
+}

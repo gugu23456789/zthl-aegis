@@ -3,16 +3,39 @@
 覆盖: 发布包校验通过 / 发布包未校验 / 哈希不匹配拦截 / dev 回退 / missing / error。
 安全网 R1: 只 patch 被测模块边界（_IMPORT_MODULE 注入点），不 patch 标准库全局。
 """
+import hashlib
 import json
 import sys
 import types
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 
 sys.path.insert(0, str(Path(__file__).parent))
 
 import gk_bashpy_loader as gbl
+
+
+@pytest.fixture(autouse=True)
+def _isolate_vendor(tmp_path, monkeypatch):
+    """默认断掉仓内 vendor（2026-11-05 起本体随包）⟹ 既有发布包/dev 臂仍测各自分支。"""
+    monkeypatch.setattr(gbl, "_VENDOR_DIR", tmp_path / "_no_vendor")
+
+
+def _mk_vendor(tmp_path, monkeypatch, sha_ok=True, version="0.4.0", extra=0):
+    d = tmp_path / "vendor" / "bashpy"
+    d.mkdir(parents=True, exist_ok=True)
+    w = d / ("zthl_bashpy_migrate-%s-py3-none-any.whl" % version)
+    w.write_bytes(b"PK\x05\x06" + b"\x00" * 18)
+    h = hashlib.sha256(w.read_bytes()).hexdigest()
+    (d / "SHA256SUMS").write_text(
+        "%s  %s\n" % (h if sha_ok else "0" * 64, w.name), encoding="utf-8")
+    for i in range(extra):
+        (d / ("zthl_bashpy_migrate-%s-%d-py3-none-any.whl" % (version, i))).write_bytes(b"x")
+    monkeypatch.setattr(gbl, "_VENDOR_DIR", d)
+    return w
 
 
 def _fake_audit_module(bomb_scan_fn=None):
@@ -201,3 +224,37 @@ class TestUpgradePendingFields:
             st = gbl.load_status()
         assert st["latest_known"] is None
         assert st["upgrade_pending"] is False
+
+
+class TestVendorSource:
+    """本体随包（2026-11-05）：包内 wheel 优先 + SHA256 校验（fail-closed）。"""
+
+    def test_vendor_verified_wins(self, tmp_path, monkeypatch):
+        w = _mk_vendor(tmp_path, monkeypatch)
+        with patch("gk_bashpy_loader._imported_module_file", return_value=w):
+            st = gbl.load_status()
+        assert st["source"] == "vendor" and st["hash_verified"] is True
+        assert st["version"] == "0.4.0"
+
+    def test_vendor_hash_mismatch_rejected(self, tmp_path, monkeypatch):
+        _mk_vendor(tmp_path, monkeypatch, sha_ok=False)
+        st = gbl.load_status()
+        assert st["source"] == "hash_mismatch" and st["hash_verified"] is False
+
+    def test_vendor_multiple_wheels_rejected(self, tmp_path, monkeypatch):
+        _mk_vendor(tmp_path, monkeypatch, extra=1)
+        st = gbl.load_status()
+        assert st["source"] == "hash_mismatch" and "数量" in st["detail"]
+
+    def test_vendor_absent_falls_back_missing(self, monkeypatch):
+        monkeypatch.setattr(gbl, "_installed_version", lambda: None)
+        monkeypatch.setattr(gbl, "_import_dev", lambda: False)
+        assert gbl.load_status()["source"] == "missing"
+
+    def test_load_bomb_scan_from_vendor(self, tmp_path, monkeypatch):
+        w = _mk_vendor(tmp_path, monkeypatch)
+        mod = _fake_audit_module()
+        with patch("gk_bashpy_loader._imported_module_file", return_value=w), \
+             patch.object(gbl, "_IMPORT_MODULE", return_value=mod):
+            fn, st = gbl.load_bomb_scan()
+        assert st["source"] == "vendor" and callable(fn)

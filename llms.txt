@@ -4,6 +4,7 @@
 
 ## 文档
 
+- [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md): 贡献者公约（Contributor Covenant v2.1 精简版）
 - [CONTRIBUTING.md](CONTRIBUTING.md): Contributing / 参与贡献
 - [CONVENTIONS.md](CONVENTIONS.md): SPZ Gatekeeper Skill — Git 管理规范
 - [MAINTENANCE.md](MAINTENANCE.md): Maintenance Status / 维护状态

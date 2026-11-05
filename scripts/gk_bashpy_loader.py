@@ -54,6 +54,9 @@ _DEV_SOURCE_DIRS = (
     os.path.join(_user_home(), "zthl-bashpy-migrate"),
     win_abs_to_wsl(os.path.join(_user_home(), "zthl-bashpy-migrate")),
 )
+# 包内 wheel（2026-11-05）：本体随包发布 ⟹ **包内优先**（离线自包含，版本不受本机 pip 漂移影响）。
+# 纯 Python wheel 可直接 zipimport（sys.path 插入 .whl），无需安装；SHA256 由同目录 SHA256SUMS 校验。
+_VENDOR_DIR = Path(__file__).resolve().parent.parent / "vendor" / "bashpy"
 GK_DBG_LOG = Path(__file__).resolve().parent / "gk_dbg.log"
 
 _CACHE_FILE = Path(os.environ.get("GK_BASHPY_CACHE",
@@ -115,10 +118,40 @@ def _import_dev() -> bool:
     return any(d and os.path.isdir(d) for d in _DEV_SOURCE_DIRS)
 
 
+def _vendor_version(name: str) -> str:
+    m = re.match(r"zthl_bashpy_migrate-([^-]+)-", name or "")
+    return m.group(1) if m else ""
+
+
+def _vendor_wheel():
+    """→ `(wheel|None, sha256, error)`；目录不存在 ⟹ `(None, "", "")`（旧包无 vendor）。"""
+    if not _VENDOR_DIR.is_dir():
+        return None, "", ""
+    whls = sorted(_VENDOR_DIR.glob("zthl_bashpy_migrate-*.whl"))
+    if len(whls) != 1:
+        # 多件/零件都无法确定唯一包内版本 ⟹ 拒绝 vendor 源（不落回 dev/pip 的静默降级）。
+        return (whls[0] if whls else None), "", \
+            "vendor 下 wheel 数量应为 1（实际 %d）" % len(whls)
+    want = ""
+    try:
+        for ln in (_VENDOR_DIR / "SHA256SUMS").read_text(encoding="utf-8").splitlines():
+            parts = ln.split()
+            if len(parts) >= 2 and parts[-1].lstrip("*") == whls[0].name:
+                want = parts[0].strip().lower()
+    except OSError:
+        return whls[0], "", "缺 SHA256SUMS"
+    got = _sha256_file(whls[0])
+    if not want:
+        return whls[0], got, "SHA256SUMS 未登记 %s" % whls[0].name
+    if got != want:
+        return whls[0], got, "wheel SHA256 不匹配（期望 %s，实得 %s）" % (want, got)
+    return whls[0], got, ""
+
+
 def load_status() -> dict:
     """加载状态（供 self-check / RED-MIGRATE 消费）。
 
-    source ∈ {release, release_unverified, hash_mismatch, dev, missing, error}
+    source ∈ {vendor, release, release_unverified, hash_mismatch, dev, missing, error}
     """
     lc = _read_last_check()
     latest = lc.get("latest_version")
@@ -133,6 +166,33 @@ def load_status() -> dict:
         # pinned=版本已登记 _RELEASE_PINS，不代表哈希校验通过（哈希状态看 hash_verified）
         d["pin_status"] = "pinned" if (ver and ver in _RELEASE_PINS) else "unpinned"
         return d
+
+    # ① 包内 wheel 优先（本体随包）：SHA256 校验不过 ⟹ 拒绝该源（fail-closed）。
+    vw, _vsha, verr = _vendor_wheel()
+    if verr:
+        _dbg(f"vendor rejected: {verr}")
+        return _with_extra({"source": "hash_mismatch",
+                            "version": _vendor_version(vw.name) if vw else "",
+                            "hash_verified": False,
+                            "detail": "包内 wheel 校验失败（拒绝该源）: %s" % verr,
+                            "module_file": str(vw or "")})
+    if vw is not None:
+        vver = _vendor_version(vw.name)
+        if str(vw) not in sys.path:
+            sys.path.insert(0, str(vw))
+        try:
+            f = _imported_module_file()
+            return _with_extra({"source": "vendor", "version": vver,
+                                "hash_verified": True,
+                                "detail": "包内 wheel（zipimport）SHA256 校验通过",
+                                "module_file": str(f)})
+        except Exception as e:  # noqa: BLE001 — 已校验但导入失败须显式
+            _dbg(f"vendor import failed: {type(e).__name__}: {e}")
+            return _with_extra({"source": "error", "version": vver,
+                                "hash_verified": True,
+                                "detail": "包内 wheel 已校验但导入失败: %s: %s"
+                                          % (type(e).__name__, e),
+                                "module_file": ""})
 
     version = _installed_version()
     if version is not None:
@@ -196,7 +256,7 @@ def load_bomb_scan():
             return None, {"source": "missing", "version": None,
                           "hash_verified": False,
                           "detail": "发布包哈希不匹配且 dev 回退失败", "module_file": ""}
-    if status["source"] in ("release", "release_unverified", "dev"):
+    if status["source"] in ("vendor", "release", "release_unverified", "dev"):
         try:
             mod = _IMPORT_MODULE(f"{PKG}.{MODULE_TO_PIN}")
             _dbg(f"loaded: source={status['source']} file={status.get('module_file')}")

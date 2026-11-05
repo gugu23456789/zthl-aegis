@@ -3,7 +3,7 @@
 > 生成器：`scripts/gk_repo_index.py --write`；漂移由 `gk_release_preflight.py` 的 `repo_index` 项守。
 > 用途：**移动端**（GitHub App 没有 “Go to file”）与抓取工具一次拿到全量路径；点路径直达文件。
 
-**共 828 个文件。**
+**共 834 个文件。**
 
 ## 索引生成物
 
@@ -12,6 +12,7 @@
 
 ## 根目录
 
+- [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) — 贡献者公约（Contributor Covenant v2.1 精简版）
 - [CONTRIBUTING.md](CONTRIBUTING.md) — Contributing / 参与贡献
 - [CONVENTIONS.md](CONVENTIONS.md) — SPZ Gatekeeper Skill — Git 管理规范
 - [LICENSE](LICENSE) — Mulan PSL v2 许可正本
@@ -28,6 +29,8 @@
 
 ## .github/
 
+- [.github/ISSUE_TEMPLATE/bug.yml](.github/ISSUE_TEMPLATE/bug.yml) — CI 配置
+- [.github/pull_request_template.md](.github/pull_request_template.md) — 文件
 - [.github/workflows/bench-nightly.yml](.github/workflows/bench-nightly.yml) — CI 配置
 - [.github/workflows/ci.yml](.github/workflows/ci.yml) — CI 配置
 - [.github/workflows/release.yml](.github/workflows/release.yml) — CI 配置
@@ -856,6 +859,12 @@
 - [scripts/test_zthl_context_e2e.py](scripts/test_zthl_context_e2e.py) — H3 **消费方级 e2e**：Context Projector（投影写盘）→ `pre_tool_hook` 读方。
 - [scripts/test_zthl_eventbus.py](scripts/test_zthl_eventbus.py) — H3 `zthl/eventbus.py` 单测 —— 逐条钉死「设计七条」的机械判据 + 消费方级降级验证。
 - [scripts/xplat_harness.py](scripts/xplat_harness.py) — Python 模块
+
+## vendor/
+
+- [vendor/bashpy/PROVENANCE.json](vendor/bashpy/PROVENANCE.json) — JSON 数据
+- [vendor/bashpy/SHA256SUMS](vendor/bashpy/SHA256SUMS) — 无后缀文件
+- [vendor/bashpy/zthl_bashpy_migrate-0.4.0-py3-none-any.whl](vendor/bashpy/zthl_bashpy_migrate-0.4.0-py3-none-any.whl) — 文件
 
 ## zthl/
 

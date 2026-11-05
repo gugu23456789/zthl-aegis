@@ -94,3 +94,21 @@ def test_real_tree_has_no_integrity_errors():
     r = G.collect(Path(__file__).resolve().parent.parent)
     errors = [i for i in r["issues"] if i["level"] == "error"]
     assert r["ok"], errors
+
+
+# ── 本体随包（2026-11-05，方案 B）：vendor 载体存在即满足，不再报「外部源」 ──────────
+
+def _manifest_with_vendor(path):
+    return {"p": {"id": "p", "intercept": ("a",), "url": "pip:x",
+                  "vendor": path, "write": False, "undo": None}}
+
+
+def test_vendor_source_satisfies_plugin_carrier(tmp_path):
+    (tmp_path / "vendor").mkdir()
+    (tmp_path / "vendor" / "x.whl").write_bytes(b"x")
+    assert G.plugin_manifest_issues(_manifest_with_vendor("vendor/x.whl"), tmp_path) == []
+
+
+def test_vendor_missing_is_error(tmp_path):
+    issues = G.plugin_manifest_issues(_manifest_with_vendor("vendor/nope.whl"), tmp_path)
+    assert any(i["level"] == "error" and i["check"] == "plugin_manifest" for i in issues)

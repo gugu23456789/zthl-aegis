@@ -97,15 +97,15 @@ loaded**; `disabled` is refused; `write=True` requires an `undo` hook (no invers
 `npm:` sources must carry a tarball `integrity` (supply-chain pin); every capability call passes
 `check_capability`; load/unload take a snapshot and can be rolled back.
 
-This repository registers **three** plugins, but the **public package ships only one loader**
-(`bashpy-migrate`). The other two depend on external sources: `paper-review` lives in the private
+This repository registers **three** plugins. The **public package bundles the `bashpy-migrate`
+wheel and its loader** (bundle preferred). The other two depend on external sources: `paper-review` lives in the private
 repo (export exclusion face) and `git-workflow` is a sibling skill ⟹ **neither is registered when
 its carrier is absent** (no "registered but missing file" entries).
 
 | Plugin id | Name / source | Source repository | Form in this package | Capability allow-list |
 |---|---|---|---|---|
 | `paper-review` | `gk_paper_review` (builtin; pre-submission simulated review — a self-check before submission, **not peer review**) | No public repo (private; includes venue-policy archives) | **Private-only**; not shipped publicly (source is in the export exclusion face) ⟹ the command entry returns the loading-safety-net `source=missing` | `paper-review` |
-| `bashpy-migrate` | `zthl-bashpy-migrate` (pip / npm wrapper) | [zthl-harness/zthl-bashpy-migrate](https://github.com/zthl-harness/zthl-bashpy-migrate) | Loader `scripts/gk_bashpy_loader.py`; the plugin itself is a separate package | `analyze` `verify` `audit` `status` `check` `upgrade` `rollback` |
+| `bashpy-migrate` | `zthl-bashpy-migrate` (pip / npm wrapper) | [zthl-harness/zthl-bashpy-migrate](https://github.com/zthl-harness/zthl-bashpy-migrate) | **Bundled wheel** `vendor/bashpy/*.whl` (SHA256-verified, preferred; zipimport, no install) + loader `scripts/gk_bashpy_loader.py`; pip / npm remain optional external sources | `analyze` `verify` `audit` `status` `check` `upgrade` `rollback` |
 | `git-workflow` | Standalone skill (MulanPSL-2.0) | [spz-ecosystem/git-workflow](https://github.com/spz-ecosystem/git-workflow) | Loader lives in the skill: `../git-workflow/scripts/gk_gitworkflow_loader.py` | `push` `branch` `worktree` `release` `security` `cleanup` `history` `selfcheck` `version` |
 
 **Not covered by the plugin net**: `doc-align` is a CLI subcommand (`_CMD_REG[doc-align]`, a
@@ -113,8 +113,10 @@ zero-API static scan), not a plugin; the **command entry points** of `migrate` /
 also live in `_CMD_REG`. The manifest governs loadability, capability allow-lists and unload
 rollback — not command routing.
 
-**Open-source surface**: the public package ships only the `bashpy-migrate` loader
-(`scripts/gk_bashpy_loader.py`); the plugin body is a separate package (pip / npm).
+**Open-source surface**: the public package bundles the `bashpy-migrate` body
+(`vendor/bashpy/zthl_bashpy_migrate-*.whl`) and loader (`scripts/gk_bashpy_loader.py`: bundle-first,
+SHA256 verified against the adjacent `SHA256SUMS`; a mismatch rejects that source). Upstream
+pip / npm remain optional external sources.
 `paper-review` source stays private (`gk_paper_review.py` / `_loader.py` are in the export
 exclusion face); `git-workflow` is a standalone skill
 ([spz-ecosystem/git-workflow](https://github.com/spz-ecosystem/git-workflow)) with its loader on

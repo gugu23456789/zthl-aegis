@@ -1,0 +1,56 @@
+name: Bug 报告
+description: 可复现的缺陷（门禁误判、CLI 行为异常、文档与实际不符）
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        安全问题请**不要**在这里公开提交，按 [SECURITY.md](../SECURITY.md) 私下联系维护者。
+  - type: textarea
+    id: what
+    attributes:
+      label: 现象
+      description: 实际发生了什么；期望是什么。
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: 最小复现
+      description: 命令 / 输入 / 相关文件路径（能直接跑最好）。
+      placeholder: |
+        python scripts/gk_release_preflight.py --json
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: 版本
+      description: tag（如 v0.9.6.14）或 commit sha。
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: 平台
+      options:
+        - Linux / WSL
+        - Windows（Git Bash / PowerShell）
+        - macOS
+        - 其他
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: 输出 / 日志
+      description: 相关 stdout / stderr（请去掉密钥与个人信息）。
+      render: shell
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: 自查
+      options:
+        - label: 我已确认这不是「未登记插件」等设计内行为（见 README 的加载安全网章节）
+        - label: 我已搜索过既有 issue

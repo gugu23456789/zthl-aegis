@@ -50,6 +50,9 @@ MANIFESTS = {
         "name": "zthl-bashpy-migrate",
         "url": ("pip:zthl-bashpy-migrate | dev:${ZTHL_BASHPY_DIR} "
                 "| npm:@zthl-harness/dsh-bashpy-migrate@0.2.4"),
+        # 2026-11-05：本体随包（方案 B）——包内 wheel 为**首选源**，SHA256 由
+        # vendor/bashpy/SHA256SUMS 校验；pip/npm 仅作外部补充。
+        "vendor": "vendor/bashpy/zthl_bashpy_migrate-0.4.0-py3-none-any.whl",
         "isolate": False,
         "intercept": ("analyze", "verify", "audit",
                       # 生命周期子命令（2026-08-27 统一入口：cmd_migrate 转发 gk_bashpy_upgrade.py，
