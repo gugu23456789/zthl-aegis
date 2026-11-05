@@ -83,7 +83,7 @@ MANIFESTS = {
     },
     "git-workflow": {
         "id": "git-workflow",
-        "name": "git-workflow (umbrella skill, MulanPSL-2.0, v2.1.0)",
+        "name": "git-workflow (umbrella skill, MulanPSL-2.0, v2.1.1)",
         "url": "builtin:${SKILL_DIR}/../git-workflow/scripts/git-workflow.sh",
         "isolate": False,
         # 2026-08-30 技能加载安全网登记（加载安全网模版第三次应用，用户质询"分析 spz-gatekeeper 与
@@ -98,7 +98,7 @@ MANIFESTS = {
                       "history", "selfcheck", "version"),
         "config": {"entry": "git-workflow.sh:main",
                    "loader": "git-workflow/scripts/gk_gitworkflow_loader.py",
-                   "version": "2.1.0.post1",
+                   "version": "2.1.1",
                    "delegate": "spz-gatekeeper-r-sequence cmd_push (F8.1, 防循环哨兵 GIT_WORKFLOW_DELEGATING)",
                    "dep": "github-push 子模块（可选，重试+限速）"},
         "disabled": False,
