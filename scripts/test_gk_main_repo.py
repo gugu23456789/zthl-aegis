@@ -11,11 +11,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import gk_main_repo as MR  # noqa: E402
 
 
+def _canon(p) -> str:
+    """被测模块的规范形态 = 正斜杠（`_abs`/`_to_win` 显式归一）⟹ 断言按它比。"""
+    return str(p).replace("\\", "/")
+
+
 def test_env_absolute_wins(tmp_path):
     d = tmp_path / "repo"
     d.mkdir()
     r = MR.resolve(env={"GK_MAIN_REPO": str(d)})
-    assert r["ok"] is True and r["source"] == "env" and r["wsl"] == str(d)
+    assert r["ok"] is True and r["source"] == "env" and r["wsl"] == _canon(d)
 
 
 def test_relative_env_is_rejected(tmp_path):
@@ -29,7 +34,7 @@ def test_state_target_repo(tmp_path):
     st = tmp_path / "s.json"
     st.write_text(json.dumps({"target_repo": str(repo), "gate_data": {}}), encoding="utf-8")
     r = MR.resolve(state_file=str(st), env={})
-    assert r["ok"] and r["source"] == "state.target_repo" and r["wsl"] == str(repo)
+    assert r["ok"] and r["source"] == "state.target_repo" and r["wsl"] == _canon(repo)
 
 
 def test_meta_target_repo_fallback(tmp_path):
@@ -40,7 +45,7 @@ def test_meta_target_repo_fallback(tmp_path):
     st = tmp_path / "s.json"
     st.write_text(json.dumps({"gate_data": {"plan": str(plan)}}), encoding="utf-8")
     r = MR.resolve(state_file=str(st), env={})
-    assert r["ok"] and r["source"] == "meta.target_repo" and r["wsl"] == str(repo)
+    assert r["ok"] and r["source"] == "meta.target_repo" and r["wsl"] == _canon(repo)
 
 
 def test_git_fallback(tmp_path):

@@ -881,7 +881,9 @@ def _resolve_state_file(repo):
             root = os.path.dirname(r.stdout.strip())
     except Exception:  # noqa: BLE001 — 非 git / 无 git ⟹ 回落 repo（行为不劣化）
         pass
-    return os.path.join(root, ".gatekeeper.state")
+    # git 在 Windows 上输出正斜杠（`C:/…/.git`），直接 os.path.join 会拼出
+    # `C:/…\.gatekeeper.state` 混用分隔符 ⟹ 统一成宿主原生形态（POSIX 不变）。
+    return os.path.join(os.path.normpath(root), ".gatekeeper.state")
 
 
 def _dep_missing_code(state_file, fid):
