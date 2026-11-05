@@ -5786,10 +5786,10 @@ _monitor_api() {
       else
         SYSTEM_PROMPT="$system_prompt" USER_PROMPT="$user_prompt" req_body=$(python3 "$SKILL_DIR/scripts/gk_req_body.py" "$API_MODEL" "$DS_REASONING_EFFORT" 2>/dev/null)
       fi
-      resp=$(curl -s --max-time 60 -X POST "${API_BASE}/chat/completions" \
-        -H "Authorization: Bearer ${api_key}" \
-        -H "Content-Type: application/json" \
-        -d "$req_body" 2>/dev/null)
+      resp=$(printf 'header = "Authorization: Bearer %s"\n' "${api_key//[$'\r\n']/}" \
+        | curl -s --max-time 60 -X POST "${API_BASE}/chat/completions" \
+          -H "Content-Type: application/json" \
+          -d "$req_body" --config - 2>/dev/null)
       content=$(echo "$resp" | python3 "$SKILL_DIR/scripts/gk_json.py" get choices.0.message.content 2>/dev/null)
       [ -n "$content" ] && break 2  # success → exit both loops
       retry=$((retry + 1))
@@ -6696,6 +6696,13 @@ print('{\"ok\":true,\"pid\":%d}' % p.pid)
 cmd_set_key() {
   local provider="${1:-}" key="${2:-}" _kf="" _file_ok=false
 
+  # 2026-11-05（方案 A）：`set-key migrate` = 旧落点（<skill>/.keys）→ 新落点
+  #   （$XDG_DATA_HOME/zthl/.keys，缺省 ~/.local/share/zthl/.keys）**只 copy 不删**。
+  if [ "$provider" = "migrate" ]; then
+    python3 "$SKILL_DIR/scripts/gk_api_key.py" migrate --skill-dir "$SKILL_DIR"
+    return $?
+  fi
+
   # 2026-11-02（开源包可用性）：`set-key status` = 只读面，报来源与掩码，**不回显完整 key**。
   if [ "$provider" = "status" ] || [ "$provider" = "--status" ]; then
     local _src="unset" _mask=""
@@ -6723,7 +6730,15 @@ print(json.dumps({"ok": True, "provider": sys.argv[1], "key_source": sys.argv[2]
       ;;
   esac
 
-  [ -z "$key" ] && { echo '{"error":"key argument required","usage":"set-key deepseek sk-xxx OR set-key mimo tp-xxx"}'; return 1; }
+  [ -z "$key" ] && { echo '{"error":"key argument required","usage":"set-key deepseek sk-xxx | set-key deepseek -  (stdin，推荐：不进 shell history/ps)"}'; return 1; }
+
+  # 2026-11-05（红队 F-3）：`set-key <provider> -` 从 stdin 读 —— 原用法把 key 写在命令行上
+  #   ⟹ 进 shell history（明文落盘）与 `ps` argv。传 `-` 则只走管道，两处都不留痕。
+  if [ "$key" = "-" ]; then
+    IFS= read -r key || true
+    key="${key%$'\r'}"
+  fi
+  [ -z "$key" ] && { echo '{"error":"empty key from stdin"}'; return 1; }
 
   local env_var
   if [ "$provider" = "mimo" ]; then
@@ -6736,6 +6751,7 @@ print(json.dumps({"ok": True, "provider": sys.argv[1], "key_source": sys.argv[2]
   #   唯一重启后仍生效的入口；路径单源 = `scripts/gk_api_key.py`（`$GATEKEEPER_KEY_FILE` 可覆盖）。
   _kf=$(_gk_key_file "$provider")
   mkdir -p "$(dirname "$_kf")" 2>/dev/null || true
+  chmod 700 "$(dirname "$_kf")" 2>/dev/null || true    # 方案 A：目录 0700（ext4 上才真生效）
   if ( umask 077; printf '%s\n' "$key" > "$_kf" ) 2>/dev/null; then
     chmod 600 "$_kf" 2>/dev/null || true
     _file_ok=true
@@ -6753,9 +6769,13 @@ print(json.dumps({"ok": True, "provider": sys.argv[1], "key_source": sys.argv[2]
   fi
   local _note="Key set for current session; persisted to key file (cross-platform)."
   if [ -n "$_ps_exe" ]; then
-    local safe_key; safe_key=$(printf '%s' "$key" | sed "s/'/''/g")
-    "$_ps_exe" -NoProfile -Command "[System.Environment]::SetEnvironmentVariable('${env_var}', '${safe_key}', 'User')" 2>/dev/null \
-      && _note="Key set for current session + key file + Windows User env (restart IDE for Process scope)."
+    # 2026-11-05（红队 F-4）：key 经**子进程继承的 env** 传入（上面已 export），不拼进
+    #   `-Command` 字符串，也不用 `env VAR=...`（那会把赋值塞进 env 自己的 argv）——
+    #   原式 `SetEnvironmentVariable('...','sk-…')` 让 key 在 `ps` 的 powershell argv 里裸奔。
+    if "$_ps_exe" -NoProfile -Command \
+         "[System.Environment]::SetEnvironmentVariable('${env_var}', \$env:${env_var}, 'User')" 2>/dev/null; then
+      _note="Key set for current session + key file + Windows User env (restart IDE for Process scope)."
+    fi
   fi
   python3 -c 'import json,sys
 print(json.dumps({"ok": True, "provider": sys.argv[1], "env_var": sys.argv[2],
@@ -6805,6 +6825,18 @@ _main_repo_hit() {
 #   逐调用归因）判缓存崩溃/失效点，`--record` 落本机台账，`--jitter N` 把采样时刻随机化。
 #   默认（不带新 flag）输出**逐字不变** —— 加性变更，不影响既有消费者。
 cmd_balance() {
+  # 2026-11-05（红队 F-1）：`bash -x` 的 xtrace 会打印**变量展开**（`api_key=sk-…`、
+  #   `printf '…%s' sk-…`）⟹ key 进 stderr；若用户把 stderr 落盘/贴 issue 即泄露。
+  #   本命令全程关闭 xtrace（含其内部的 `_resolve_api_key` 赋值），返回前恢复。
+  local _gk_xtrace=0
+  case $- in *x*) _gk_xtrace=1; set +x ;; esac
+  _cmd_balance_body "$@"
+  local _gk_rc=$?
+  [ "$_gk_xtrace" = "1" ] && set -x
+  return "$_gk_rc"
+}
+
+_cmd_balance_body() {
   local _json=0 _record=0 _audit=0 _usage="" _jitter="0" _strict=0 _hist="" _ji=0
   while [ $# -gt 0 ]; do
     case "${1:-}" in
@@ -6843,9 +6875,13 @@ cmd_balance() {
       ;;
   esac
 
-  local resp; resp=$(curl -s --max-time 30 -X GET "$balance_url" \
-    -H "Accept: application/json" \
-    -H "Authorization: Bearer ${api_key}" 2>/dev/null)
+  # 2026-11-05（密钥防泄露）：Authorization **不进 argv** —— 用 `curl --config -` 从 stdin 读，
+  #   `ps` / 任务管理器 / `curl -v` 之外的错误面都看不到 key；key 也不进 stdout/stderr/台账。
+  #   ⚠ `bash -x` 会打印**变量展开**（含本行参数），调试时不要把 stderr 落盘。
+  # 2026-11-05（投喂提醒）：余额不足一轮质询时，`gk_views.topup_reminder` 追加一行幽默提醒
+  #   —— 仅当用户**显式**设置 `GK_BALANCE_MIN_CNY`（未配置 ⟹ 不 nag）；默认输出行序不变。
+  local resp; resp=$(printf 'header = "Authorization: Bearer %s"\n' "${api_key//[$'\r\n']/}" \
+    | curl -s --max-time 30 -X GET "$balance_url" -H "Accept: application/json" --config - 2>/dev/null)
 
   [ -z "$resp" ] && { echo '{"error":"balance API call failed"}'; return 1; }
 
@@ -7650,10 +7686,10 @@ cmd_reflect() {
     SYSTEM_PROMPT="$system_prompt" USER_PROMPT="$user_prompt" req_body=$(python3 "$SKILL_DIR/scripts/gk_req_body.py" "$API_MODEL" "$DS_REASONING_EFFORT" 2>/dev/null)
   fi
 
-  local resp; resp=$(curl -s --max-time 120 -X POST "${API_BASE}/chat/completions" \
-    -H "Authorization: Bearer ${api_key}" \
-    -H "Content-Type: application/json" \
-    -d "$req_body" 2>/dev/null)
+  local resp; resp=$(printf 'header = "Authorization: Bearer %s"\n' "${api_key//[$'\r\n']/}" \
+    | curl -s --max-time 120 -X POST "${API_BASE}/chat/completions" \
+      -H "Content-Type: application/json" \
+      -d "$req_body" --config - 2>/dev/null)
 
   local guidance; guidance=$(printf '%s' "$resp" | python3 "$SKILL_DIR/scripts/gk_json_utils.py" field choices.0.message.content --default '' --default-invalid '' --default-falsy '' 2>/dev/null || echo '')
 
@@ -10023,8 +10059,9 @@ except Exception:
   { [ "${GK_PREFLIGHT_BALANCE:-1}" = "0" ] || [ "$PROVIDER" = "mimo" ] || [ -z "$API_KEY" ]; } && _bal_enabled=0
   if [ "$_bal_enabled" = "1" ]; then
     local _bal_resp
-    _bal_resp=$(curl -s --max-time 8 -X GET "https://api.deepseek.com/user/balance" \
-      -H "Accept: application/json" -H "Authorization: Bearer ${API_KEY}" 2>/dev/null)
+    _bal_resp=$(printf 'header = "Authorization: Bearer %s"\n' "${API_KEY//[$'\r\n']/}" \
+      | curl -s --max-time 8 -X GET "https://api.deepseek.com/user/balance" \
+        -H "Accept: application/json" --config - 2>/dev/null)
     _bal=$(BAL_RESP="$_bal_resp" python3 "$SKILL_DIR/scripts/gk_views.py" balance 2>>"$GK_DBG_LOG")
   fi
   local pf_warn_json
@@ -11984,10 +12021,10 @@ cmd_attribution() {
   #   在 prompt 含撇号时 SyntaxError ⟹ `|| echo '""'` 静默变空 content（顺带修此缺陷）。
   local _at_prompt_json
   _at_prompt_json=$(printf '%s' "$prompt" | python3 "$SKILL_DIR/scripts/gk_views.py" attribution-prompt 2>/dev/null || echo '""')
-  local resp; resp=$(curl -s --max-time 120 -X POST "${_at_base%/}/chat/completions" \
-    -H "Content-Type: application/json" \
-    -H "Authorization: Bearer $api_key" \
-    -d "{\"model\":\"${_at_model}\",\"messages\":[{\"role\":\"user\",\"content\":${_at_prompt_json}}],\"max_tokens\":256,\"temperature\":0,\"logprobs\":true,\"top_logprobs\":3}" 2>/dev/null)
+  local resp; resp=$(printf 'header = "Authorization: Bearer %s"\n' "${api_key//[$'\r\n']/}" \
+    | curl -s --max-time 120 -X POST "${_at_base%/}/chat/completions" \
+      -H "Content-Type: application/json" \
+      -d "{\"model\":\"${_at_model}\",\"messages\":[{\"role\":\"user\",\"content\":${_at_prompt_json}}],\"max_tokens\":256,\"temperature\":0,\"logprobs\":true,\"top_logprobs\":3}" --config - 2>/dev/null)
   # 2026-09-20（ECC-PLAN ②·归口）：rg 单源 "$RG"（原 bare rg）
   if echo "$resp" | "$RG" -q '"error"'; then
     echo "{\"ok\":false,\"error\":\"API call failed\"}"
@@ -12327,6 +12364,11 @@ fi
 # ── 2026-10-23 交易凭证（后置半）：整次调用跑完 ⟹ 再取一次快照，差额即本笔 `cost`。
 #    前半（`_budget_snap` 定义 + `_bill_b0`）在**计费块之前**（见上），两半合起来才覆盖
 #    `_bill_edit`＋`pre-tool-check`（Gate 4）两个扣减点。
+# 2026-11-05（红队 F-1 残留，全局）：xtrace 会把**变量展开**打到 stderr（`api_key=sk-…`）。
+#   `balance` 已在函数内关掉 xtrace；其余命令（monitor/audit/reflect…）做不到逐个包裹，
+#   故在派发前给一条**一次性告警**：调试别把 stderr 落盘/贴 issue（`scripts/gk_red_keyleak.py`
+#   把这条告警也当契约测）。
+case $- in *x*) printf '%s\n' 'WARN[sec] bash -x 已开启：命令回显含变量展开（可能含 API key）；请勿把 stderr 落盘或贴到 issue。' >&2 ;; esac
 _dispatch "$cmd" "$@"
 _bill_rc=$?
 if [ -n "$_bill_b0" ]; then

@@ -7,6 +7,9 @@ permissions:
 on:
   push:
   pull_request:
+  # 2026-11-05（红队常态化）：密钥泄露向量每周一跑一次 —— 不只靠「改代码那次」记得跑。
+  schedule:
+    - cron: "0 3 * * 1"
   workflow_dispatch:
     inputs:
       plan:
@@ -81,6 +84,20 @@ jobs:
         run: python scripts/gk_release_preflight.py
       - name: package/hook integrity
         run: python scripts/gk_package_integrity.py --json
+
+  red-keyleak:
+    # 2026-11-05（红队常态化）：密钥泄露向量 —— argv / xtrace / shell history / 日志面 / 排除面。
+    #   纯静态 + 离线（0 依赖），push/PR 与每周 cron 各跑一次；HIGH 命中即红。
+    #   新增泄密面（新的 curl、新的日志写点）时，同步在脚本里加向量 —— 见脚本头 docstring。
+    name: red-keyleak (key leakage vectors)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+        with:
+          persist-credentials: false
+      - name: key leakage vectors
+        run: python3 scripts/gk_red_keyleak.py
 
   venv-gate:
     # 2026-11-02 owner 要求：CI 必须在内置虚拟环境里完整跑一遍。

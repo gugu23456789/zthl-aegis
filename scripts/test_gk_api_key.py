@@ -37,25 +37,61 @@ def _func(name):
 
 def test_key_path_provider_and_override(tmp_path, monkeypatch):
     monkeypatch.delenv("GATEKEEPER_KEY_FILE", raising=False)
-    assert K.key_path(str(tmp_path), "deepseek").endswith(os.path.join(".keys", "api_key"))
-    assert K.key_path(str(tmp_path), "mimo").endswith(os.path.join(".keys", "mimo_key"))
+    store = tmp_path / "store"
+    monkeypatch.setenv("GK_KEYS_DIR", str(store))
+    assert K.key_path(str(tmp_path), "deepseek") == str(store / "api_key")
+    assert K.key_path(str(tmp_path), "mimo") == str(store / "mimo_key")
     monkeypatch.setenv("GATEKEEPER_KEY_FILE", str(tmp_path / "x.key"))
     assert K.key_path(str(tmp_path), "mimo") == str(tmp_path / "x.key")
 
 
 def test_read_key_file_and_mimo_fallback(tmp_path, monkeypatch):
     monkeypatch.delenv("GATEKEEPER_KEY_FILE", raising=False)
+    monkeypatch.setenv("GK_KEYS_DIR", str(tmp_path / "store"))
     assert K.read_key(str(tmp_path)) == ("", "")
-    (tmp_path / ".keys").mkdir()
-    (tmp_path / ".keys" / "api_key").write_text("  test-key-12345678901234567890 \n",
-                                                encoding="utf-8")
+    (tmp_path / "store").mkdir()
+    (tmp_path / "store" / "api_key").write_text("  test-key-12345678901234567890 \n",
+                                               encoding="utf-8")
     key, src = K.read_key(str(tmp_path), "deepseek")
     assert (key, src) == ("test-key-12345678901234567890", "file")
     # mimo 未单独配置 ⟹ 回退 api_key（与 CLI 的 deepseek 回退同义）
     assert K.read_key(str(tmp_path), "mimo") == (key, "file")
-    (tmp_path / ".keys" / "mimo_key").write_text("mimo-key-abcdefghijklmnopqrst\n",
-                                                 encoding="utf-8")
-    assert K.read_key(str(tmp_path), "mimo")[0].startswith("mimo-key")
+
+
+def test_read_key_legacy_fallback(tmp_path, monkeypatch):
+    """方案 A：旧落点 `<skill>/.keys` 只读兼容（source=legacy），新落点优先。"""
+    monkeypatch.delenv("GATEKEEPER_KEY_FILE", raising=False)
+    monkeypatch.setenv("GK_KEYS_DIR", str(tmp_path / "store"))
+    (tmp_path / ".keys").mkdir()
+    (tmp_path / ".keys" / "api_key").write_text("legacy-key-1234567890123456\n",
+                                                encoding="utf-8")
+    assert K.read_key(str(tmp_path)) == ("legacy-key-1234567890123456", "legacy")
+    (tmp_path / "store").mkdir()
+    (tmp_path / "store" / "api_key").write_text("new-key-12345678901234567\n",
+                                                encoding="utf-8")
+    assert K.read_key(str(tmp_path)) == ("new-key-12345678901234567", "file")
+    # mimo 未单独配置 ⟹ 回退 api_key（含 legacy 面）
+    assert K.read_key(str(tmp_path), "mimo")[0] == "new-key-12345678901234567"
+
+
+def test_migrate_copies_without_deleting(tmp_path, monkeypatch):
+    """migrate = 只 copy 不删、不覆盖；重复跑报 exists。"""
+    monkeypatch.setenv("GK_KEYS_DIR", str(tmp_path / "store"))
+    (tmp_path / ".keys").mkdir()
+    (tmp_path / ".keys" / "api_key").write_text("k-123456789012345678901234\n", encoding="utf-8")
+    acts = K.migrate(str(tmp_path))
+    api = [a for a in acts if a["name"] == "api_key"][0]
+    assert api["action"] == "copied"
+    assert (tmp_path / "store" / "api_key").read_text(encoding="utf-8").strip().startswith("k-")
+    assert (tmp_path / ".keys" / "api_key").is_file(), "旧落点不得被删除"
+    assert [a for a in K.migrate(str(tmp_path)) if a["name"] == "api_key"][0]["action"] == "exists"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Windows 不支持 POSIX 权限位")
+def test_store_dir_is_0700(tmp_path, monkeypatch):
+    monkeypatch.setenv("GK_KEYS_DIR", str(tmp_path / "store"))
+    d = K.ensure_store()
+    assert (os.stat(d).st_mode & 0o777) == 0o700
 
 
 def test_explicit_key_file_wins(tmp_path, monkeypatch):

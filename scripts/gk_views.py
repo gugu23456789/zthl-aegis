@@ -173,6 +173,47 @@ def parse_balance(resp) -> dict:
             "available": available}
 
 
+TOPUP_URL = "https://platform.deepseek.com/top_up"
+DEFAULT_ALERT_CNY = 2.0
+
+
+def alert_threshold():
+    """余额告警阈值：**只有用户显式设置** `GK_BALANCE_MIN_CNY` 才返回数值，否则 None。
+
+    与「告警默认开启」的 preflight 软告警区分：幽默提醒只在用户主动配置阈值时出现，
+    避免对没配告警的人反复 nag（开源礼仪：可以自嘲求投喂，不能默认打扰）。
+    非法数值 ⟹ None（不猜阈值，也不要弹一条假的「余额不足」）。
+    """
+    raw = (os.environ.get("GK_BALANCE_MIN_CNY") or "").strip()
+    if not raw:
+        return None
+    try:
+        return float(raw)
+    except ValueError:
+        return None
+
+
+def topup_reminder(total):
+    """余额不足一轮质询时的**一行**投喂提醒（单源文案；不需提醒 ⟹ None）。
+
+    文案口径（2026-11-05，用户要求「搞笑可爱、开源社区可接受」）：
+      · 自嘲主体是**项目（大肥鱼）**，不是用户 —— 不用「白嫖」指责使用者（那是 guilt-trip）；
+      · 明说「不想投也完全没关系」+ 项目继续免费（对齐 OSS 赞助礼仪：don't feel obligated）；
+      · 只给一行、只在显式配置阈值时出现 ⟹ 不 nag、不阻断任何流程。
+    """
+    th = alert_threshold()
+    if th is None:
+        return None
+    try:
+        cur = float(total)
+    except (TypeError, ValueError):
+        return None
+    if cur >= th:
+        return None
+    return ("大肥鱼饿饿，饭饭～ (っ˘ڡ˘ς) 余额 %g 元不够跑完一轮质询了；想投喂就 %s ，"
+            "不想投也完全没关系 —— 开源嘛，白饭管饱，鱼不记仇。" % (cur, TOPUP_URL))
+
+
 def cmd_balance(_args) -> int:
     try:
         d = json.loads(os.environ.get("BAL_RESP", "") or "{}")

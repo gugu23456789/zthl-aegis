@@ -237,6 +237,8 @@ def render(out: dict) -> str:
         lines.append("Cache: status=%s steady=%s invalidation=%d" % (
             cache.get("cache_status"), cache.get("steady_cache_hit_ratio"),
             len(cache.get("invalidation_points") or [])))
+    if out.get("topup_reminder"):
+        lines.append(out["topup_reminder"])
     return "\n".join(lines)
 
 
@@ -288,8 +290,11 @@ def main(argv=None) -> int:
             cfind, cache = cache_health(payload)
             findings += cfind
     rec = record(hist, snap) if a.record else None
+    tip = gk_views.topup_reminder(snap.get("total"))
     out = {"snapshot": snap, "findings": findings, "advisory_only": True,
            "history": str(hist), "recorded": rec, "cache": cache}
+    if tip:                                   # 仅在用户显式配置阈值且余额不足时出现
+        out["topup_reminder"] = tip
     print(json.dumps(out, ensure_ascii=False) if a.json else render(out))
     if a.strict and any(f.get("severity") == HIGH for f in findings):
         return 1

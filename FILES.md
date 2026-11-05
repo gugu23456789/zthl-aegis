@@ -3,7 +3,7 @@
 > 生成器：`scripts/gk_repo_index.py --write`；漂移由 `gk_release_preflight.py` 的 `repo_index` 项守。
 > 用途：**移动端**（GitHub App 没有 “Go to file”）与抓取工具一次拿到全量路径；点路径直达文件。
 
-**共 834 个文件。**
+**共 838 个文件。**
 
 ## 索引生成物
 
@@ -360,6 +360,8 @@
 - [scripts/gk_receive_check.py](scripts/gk_receive_check.py) — Python 模块
 - [scripts/gk_red_arm_gen.py](scripts/gk_red_arm_gen.py) — Python 模块
 - [scripts/gk_red_intel.py](scripts/gk_red_intel.py) — Python 模块
+- [scripts/gk_red_keyleak.py](scripts/gk_red_keyleak.py) — Python 模块
+- [scripts/gk_red_stand.py](scripts/gk_red_stand.py) — Python 模块
 - [scripts/gk_red_vectors.py](scripts/gk_red_vectors.py) — Python 模块
 - [scripts/gk_reflect.py](scripts/gk_reflect.py) — Python 模块
 - [scripts/gk_release_preflight.py](scripts/gk_release_preflight.py) — 发版预检（参数 / 产物 / 资产 / 路径 / 索引 契约）
@@ -510,6 +512,7 @@
 - [scripts/test_gk_audit_state.py](scripts/test_gk_audit_state.py) — Python 模块
 - [scripts/test_gk_auto_tier.py](scripts/test_gk_auto_tier.py) — Python 模块
 - [scripts/test_gk_balance_audit.py](scripts/test_gk_balance_audit.py) — test_gk_balance_audit.py — 余额采样 + token/缓存异常判定（2026-11-04）。
+- [scripts/test_gk_balance_reminder.py](scripts/test_gk_balance_reminder.py) — test_gk_balance_reminder.py -- 余额投喂提醒单测（gk_views.topup_reminder，2026-11-05）
 - [scripts/test_gk_bare_guard_syspath.py](scripts/test_gk_bare_guard_syspath.py) — Python 模块
 - [scripts/test_gk_bare_pr_guard.py](scripts/test_gk_bare_pr_guard.py) — Python 模块
 - [scripts/test_gk_baseline_selfheal.py](scripts/test_gk_baseline_selfheal.py) — Python 模块
@@ -740,6 +743,7 @@
 - [scripts/test_gk_receive_check.py](scripts/test_gk_receive_check.py) — Python 模块
 - [scripts/test_gk_red_arm_gen.py](scripts/test_gk_red_arm_gen.py) — test_gk_red_arm_gen.py — 红先模版发生器安全网（2026-09-23，用户裁定「扩展红先测试模版」）。
 - [scripts/test_gk_red_intel.py](scripts/test_gk_red_intel.py) — Python 模块
+- [scripts/test_gk_red_stand.py](scripts/test_gk_red_stand.py) — test_gk_red_stand.py -- 红队常态化攻击机单测（gk_red_stand.py，2026-11-05）
 - [scripts/test_gk_red_vectors.py](scripts/test_gk_red_vectors.py) — Python 模块
 - [scripts/test_gk_reflect.py](scripts/test_gk_reflect.py) — test_gk_reflect.py -- Tests for gk_reflect.py
 - [scripts/test_gk_release_preflight.py](scripts/test_gk_release_preflight.py) — Python 模块
