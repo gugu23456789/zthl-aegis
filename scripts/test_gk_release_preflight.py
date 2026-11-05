@@ -119,3 +119,29 @@ def test_repo_index_real_tree_is_fresh():
     """仓库里的 FILES.md / llms.txt 必须与公开面一致（移动端入口不漂移）。"""
     r = PF.repo_index_check()
     assert r["status"] == "PASS", r
+
+
+# ── 随包 wheel 三件套（2026-11-05）───────────────────────────────────────────
+
+def test_vendor_artifact_real_tree_ok():
+    r = PF.vendor_artifact()
+    assert r["status"] == "PASS", r
+
+
+def test_vendor_artifact_missing_dir(tmp_path, monkeypatch):
+    monkeypatch.setattr(PF, "_VENDOR", tmp_path / "nope")
+    assert PF.vendor_artifact()["status"] == "FAIL"
+
+
+def test_vendor_artifact_hash_mismatch(tmp_path, monkeypatch):
+    d = tmp_path / "v"
+    d.mkdir()
+    w = d / "zthl_bashpy_migrate-9.9.9-py3-none-any.whl"
+    w.write_bytes(b"x")
+    (d / "SHA256SUMS").write_text("%s  %s\n" % ("0" * 64, w.name), encoding="utf-8")
+    (d / "PROVENANCE.json").write_text(
+        json.dumps({"version": "9.9.9", "artifact": w.name, "sha256": "0" * 64}),
+        encoding="utf-8")
+    monkeypatch.setattr(PF, "_VENDOR", d)
+    r = PF.vendor_artifact()
+    assert r["status"] == "FAIL" and "SHA256" in r["detail"]

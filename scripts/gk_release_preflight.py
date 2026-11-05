@@ -8,7 +8,7 @@ v0.9.6.8–v0.9.6.10 连续三版在 `pack` 步 argparse 退出 2（workflow 传
 `pack_release.py` 不认），且 publish 步要求的 `dist/PROVENANCE.json` 从未产出。
 本脚本把这些契约在**打包前**变成可执行判据（fail-loud），而不是等 CI 红。
 
-七项检查（全部确定性、零网络）
+八项检查（全部确定性、零网络）
 ==============================
 1. `pack_contract`   workflow 中 `pack_release.py` 用到的 flag ⊆ 脚本 parser 支持的 flag；
 2. `pack_fixture`    用最小夹具真跑一次 `pack(... --source-*)`，断言 zip / manifest /
@@ -21,7 +21,9 @@ v0.9.6.8–v0.9.6.10 连续三版在 `pack` 步 argparse 退出 2（workflow 传
                      2026-11-05 事故：公开 `ci.yml` 引用 `docs/analysis/bomb-inventory-*.json`
                      （`docs/` 是导出排除面）⟹ 公开 CI 恒红，而私仓 preflight 永远绿；
 7. `repo_index`      `FILES.md` / `llms.txt` 必须与当前公开面一致（`gk_repo_index.py --check`）。
-                     移动端/抓取入口，手写必漂移 ⟹ 与 GK-FACTS 同款「生成器 + 漂移门」。
+                     移动端/抓取入口，手写必漂移 ⟹ 与 GK-FACTS 同款「生成器 + 漂移门」；
+8. `vendor_artifact` 随包 wheel 三件套自洽：`PROVENANCE.json` ↔ `SHA256SUMS` ↔ 实际文件哈希
+                     必须一致（版本/文件名/哈希）。发新版 wheel 时忘了同步 ⟹ 这里直接红。
 
 用法：`python scripts/gk_release_preflight.py [--json]`；退出码 0 = 全绿，1 = 有失败。
 `oss_scrub.py export` 会在**导出树**内自动再跑一次（`--skip-preflight` 可显式跳过）。
@@ -40,6 +42,7 @@ ROOT = Path(__file__).resolve().parent.parent
 WORKFLOW = ROOT / ".github" / "workflows" / "release.yml"
 _WORKFLOW_DIR = ROOT / ".github" / "workflows"
 _CI_EXTERNAL = ROOT / "references" / "ci-external-paths.json"
+_VENDOR = ROOT / "vendor" / "bashpy"
 _SCRIPTS = str(ROOT / "scripts")
 if _SCRIPTS not in sys.path:
     sys.path.insert(0, _SCRIPTS)
@@ -266,6 +269,45 @@ def repo_index_check() -> dict:
                       else "；".join(r.get("issues") or ["check 失败"])[:300]}
 
 
+def vendor_artifact() -> dict:
+    """随包 wheel 三件套自洽：PROVENANCE ↔ SHA256SUMS ↔ 实际文件（版本/文件名/哈希）。"""
+    import hashlib
+    if not _VENDOR.is_dir():
+        return {"id": "vendor_artifact", "status": "FAIL",
+                "detail": "vendor/bashpy 不存在（本体随包后不该缺）"}
+    whls = sorted(_VENDOR.glob("zthl_bashpy_migrate-*.whl"))
+    if len(whls) != 1:
+        return {"id": "vendor_artifact", "status": "FAIL",
+                "detail": "wheel 数量应为 1（实际 %d）" % len(whls)}
+    w = whls[0]
+    actual = hashlib.sha256(w.read_bytes()).hexdigest()
+    try:
+        prov = json.loads((_VENDOR / "PROVENANCE.json").read_text(encoding="utf-8"))
+        sums = (_VENDOR / "SHA256SUMS").read_text(encoding="utf-8")
+    except (OSError, ValueError) as e:
+        return {"id": "vendor_artifact", "status": "FAIL",
+                "detail": "读不到 PROVENANCE.json / SHA256SUMS: %s" % e}
+    problems = []
+    if str(prov.get("artifact") or "") != w.name:
+        problems.append("PROVENANCE.artifact≠%s" % w.name)
+    if str(prov.get("sha256") or "").lower() != actual:
+        problems.append("PROVENANCE.sha256≠实际哈希")
+    ver = str(prov.get("version") or "")
+    if ver and not w.name.startswith("zthl_bashpy_migrate-%s-" % ver):
+        problems.append("PROVENANCE.version=%s 与文件名不符" % ver)
+    want = ""
+    for ln in sums.splitlines():
+        parts = ln.split()
+        if len(parts) >= 2 and parts[-1].lstrip("*") == w.name:
+            want = parts[0].strip().lower()
+    if want != actual:
+        problems.append("SHA256SUMS 未登记或与文件不符")
+    if problems:
+        return {"id": "vendor_artifact", "status": "FAIL", "detail": "；".join(problems)}
+    return {"id": "vendor_artifact", "status": "PASS",
+            "detail": "%s / %s…" % (ver or w.name, actual[:12])}
+
+
 def run_all() -> dict:
     try:
         wf = WORKFLOW.read_text(encoding="utf-8")
@@ -274,7 +316,7 @@ def run_all() -> dict:
                                          "detail": "读不到 %s: %s" % (WORKFLOW, e)}]}
     checks = [pack_contract(wf), pack_fixture(), docgen_check(),
               doc_features_check(), release_assets(wf), workflow_paths(),
-              repo_index_check()]
+              repo_index_check(), vendor_artifact()]
     return {"ok": all(c["status"] == "PASS" for c in checks), "checks": checks}
 
 
