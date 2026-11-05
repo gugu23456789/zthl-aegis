@@ -394,6 +394,24 @@ beside the executors, and humans kept at the decision layer.
 a supervisor that may repair vs. one that only reports; measuring tasks only vs. measuring the
 operator as a separate axis.
 
+### Single-operator governance: no fictional "second institution"
+
+Single-member companies (one-person LLC / OPC) are ordinary legal forms. A protocol that requires
+an *institutional second party* to certify completion would exclude the single operators already
+delegating work to personal agents. This repo **does not pretend that party exists**; four
+machine-checkable substitutes take its place:
+
+| Substitute | Implemented here | Role |
+|:--|:--|:--|
+| Decisions that do not hinge on live judgement | Deterministic gates (`advance` hard gates / hook write-gates / `guard-edit`) | Removes a "who signs off" step |
+| Replayable decisions | State checksum + credit ledger + `audit` replay + ember snapshots | Reviewable afterwards, without memory or self-report |
+| Segregated audit | Credit bank ↔ audit office ↔ red team (post-R dual independent runs) | The same person's two roles are separated **on the record** |
+| Sample floor | `n<30 ⟹ [UNFITTED]`; undecidable ⟹ `abstain` | No hard fit on tiny samples, and "nobody reviewed it" is not compliance |
+
+In one line: **do not invent a second institution, but do not treat missing review as compliance
+either** — build the auditability an institution would have provided into deterministic gates and
+ledgers.
+
 ### Roadmap
 
 T2/T6 stay dormant until a real `standard` task exists (no manufactured findings or family
