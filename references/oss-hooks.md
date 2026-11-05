@@ -90,9 +90,9 @@
 | 写面闸 | **已落**：`MCP_WRITE_VERBS` / `_mcp_inner_tool` / `GK_MCP_WRITE_GATE`（`ECC-BC63B84B28AB` 已闭） |
 | 出网闸 | **已落**：R0.14（含 octop-browser `browser_*` 前缀精确集、`urls`、sealed `browser_eval_js`） |
 | 工具面闸 | **已落**：R0.18（`install_browser` / `browser_record_*` 默认 BLOCK；`GK_MCP_ALLOW_BROWSER_INSTALL/RECORD=1` 显式放行；本地读/UI 放行） |
-| 加载安全网 | **未实装**：早期原型（`gk_mcp_loader` 的 `verify`/`connect`/`health-only`）**未并入主线**，仓内无该脚本，`gatekeeper-cli.sh` 也无 `mcp` 命令；工具面实际拦截由下面三行（写面/出网/工具面闸）承担 |
+| 加载安全网 | **已落（独立脚本）**：`scripts/gk_mcp_loader.py` 提供 `verify`（声明面）/ `connect`（接线面，未登记工具默认拒）/ `health-only`（降级决策，永不裸放行）/ `sdk-info`（SDK 符号面探测）。`_CMD_REG` 在受保护区（`PROTECTED_REGION::gate`）禁新增 ⟹ 未进 CLI 命令表，由脚本直接调用 |
 
-**配置本身算不算遗漏**：宿主级 `mcp.json`（`%APPDATA%\Trae CN\User\mcp.json`）与 octop-browser 的本机 venv **不应**原样入库（不可移植、含本机路径）。早期曾补过 `mcp_manifest.example.json` 与最小加载验证，但该原型**未并入主线**，模板随之撤出（否则模板会指向不存在的 `verify`）；工具面拦截仍由写面/出网/工具面三道闸承担。
+**配置本身算不算遗漏**：宿主级 `mcp.json`（`%APPDATA%\Trae CN\User\mcp.json`）与 octop-browser 的本机 venv **不应**原样入库（不可移植、含本机路径；manifest 里的 `integrity` 也是本机哈希）。加载器已回归主线，`mcp_manifest.example.json` 仍不随包分发，用法是**离线两段**：先在装了 MCP SDK 的一侧把 `list_tools()` 结果落盘（`[Tool]` / `[dict]` / `{"tools":…}` / 模型对象四种形态均可），再 `python3 scripts/gk_mcp_loader.py connect --manifest <本机 manifest> --tools <落盘文件>` 做接线核对；工具面拦截仍由写面/出网/工具面三道闸承担。
 
 ## 5. 「蓝色大肥鱼」系列是什么
 

@@ -432,8 +432,10 @@ hook 写类门禁 + 凭据面分离）。
 
 | 机制 | 入口 / 文件 | 说明 |
 |:--|:--|:--|
+| 状态 WAL | `gk_satellite`（append 片 + 索引叶） | 追加写先落片、再登记 per-arm 索引叶（热内联 + 冷侧车）；恢复按片并集重建 |
 | 基准 | `gk_bench_state` · `bench-nightly` · `references/bench-baseline.json` | 状态基准与夜间回归基线 |
 | 供应链清单 | `PROVENANCE.json` · `SBOM.cdx.json`（CycloneDX） | 发布包附带来源与依赖清单 |
+| MCP 工具面 | `pre_tool_hook.py`（`MCP_WRITE_VERBS` / `_mcp_inner_tool`）+ `gk_mcp_loader.py` | 写动词归一 + `GK_MCP_WRITE_GATE` 回退面；加载器做 manifest 声明/接线校验（`verify`/`connect`/`health-only`/`sdk-info`），**按符号面探测适配不同 MCP SDK 版本**（不按版本号猜） |
 | 浏览器工具面 | `R0.18` | 浏览器类工具的可执行面校验 |
 | 外部存档 | `references/archive.json`（Concept DOI） | 发布物外部归档与 DOI 解析 |
 | 余额审计 | `balance --audit` / `balance --record` / `balance --usage` | 定期或随机采样；判 `DROP_FAST`/`INSUFFICIENT_BALANCE`/`CACHE_COLLAPSE`（复用 `gk_cache_observe`） |

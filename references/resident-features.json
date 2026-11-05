@@ -3,6 +3,16 @@
   "note": "常驻功能 → 自述文档覆盖登记表。新增常驻能力时必须在此登记，否则发布门 gk_doc_features 判红。",
   "features": [
     {
+      "id": "state-wal",
+      "doc": "README.md",
+      "pattern": "gk_satellite"
+    },
+    {
+      "id": "wal-checkpoint",
+      "doc": "README.md",
+      "pattern": "按片并集重建"
+    },
+    {
       "id": "bench-state",
       "doc": "README.md",
       "pattern": "gk_bench_state"
@@ -26,6 +36,11 @@
       "id": "sbom-cyclonedx",
       "doc": "README.md",
       "pattern": "SBOM\\.cdx\\.json|CycloneDX"
+    },
+    {
+      "id": "mcp-loader",
+      "doc": "README.md",
+      "pattern": "MCP_WRITE_VERBS"
     },
     {
       "id": "browser-toolface-gate",

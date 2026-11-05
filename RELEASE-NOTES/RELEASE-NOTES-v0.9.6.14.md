@@ -9,8 +9,12 @@
   对比（`equivalent=true`）守护。
 - **发布预检安全网**：`gk_release_preflight` 五项机检（参数契约 / 资产四件套 / 文档事实块 /
   常驻功能覆盖 / 7 个发布资产），CI 与 release 两个 workflow 均接入。
-- **文档纠错**：撤除两个从未并入主线却被登记为“已发布功能”的条目（状态 WAL、MCP 加载器），
-  常驻功能覆盖从 23 项校正为 **18 项**；Super-agent 对照按一手材料重写。
+- **MCP 加载器回归主线并升级**：`gk_mcp_loader` 补回源码，且改为**按符号面探测**适配不同
+  MCP SDK 版本（不按版本号猜）；`list_tools()` 的五类载荷（对象 / 字典 / `{"tools":…}` /
+  分页 / pydantic `ListToolsResult`）统一归一，入口 `verify` / `connect` / `health-only` / `sdk-info`。
+- **文档纠错**：上一版把两个**实际存在于主线**的机制误判为“未实现”并撤除登记——状态 WAL 在
+  `gk_satellite`（分片 append + 索引叶），MCP 写面闸在 `pre_tool_hook`（`MCP_WRITE_VERBS`）；
+  常驻功能覆盖回到 **21 项**；Super-agent 对照按一手材料重写。
 
 ## 变更明细
 
@@ -19,6 +23,9 @@
 - 新增 `scripts/gk_monitor_payload.py`（311 行落库载荷逐字搬运）、`gk_monitor_envelope.py`、
   `gk_monitor_fixture.py`（build/extract/run/compare/selfcheck）。
 - 新增 `scripts/gk_budget_snap.py`、`gk_key_meta.py`（编辑预算快照 / 密钥元数据与指纹校验）。
+- 补回 `scripts/gk_mcp_loader.py` + `scripts/test_gk_mcp_loader.py`（30 条臂）：修掉对已下线
+  `BROWSER_*` 常量的导入；`sdk-info` 探测 `ClientSession`/`stdio_client`/`sse_client`/`FastMCP`/`Tool`
+  的实际可解析面；`connect --tools` 支持离线核对（`--tools` 仅限 connect，避免承诺面恒假红）。
 - `state_lock` 的取锁预算可由 `GK_STATE_LOCK_TIMEOUT` 注入（非法值回落 5s；不允许用 env 关闭超时）。
 
 ### 文档
@@ -42,8 +49,9 @@
 ## 升级说明
 
 - 命令与 state 契约不变；`migrate` / `plugin` / `audit` 等入口行为不变。
-- 若你此前依赖 `gk_mcp_loader` 或 `gk_state_wal`：它们**从未随主线发布**（本次只是撤掉
-  文档中的误登记），工具面拦截仍由写面 / 出网 / 工具面三道闸承担。
+- `gk_mcp_loader` 本轮回归主线，但**仍是独立脚本**（`python3 scripts/gk_mcp_loader.py <cmd>`）：
+  `_CMD_REG` 在受保护区，不新增 `mcp` 子命令；hook 侧消费点属后续工作。
+- 早期名字 `gk_state_wal` 并未单独成文件——状态 WAL 实际由 `gk_satellite` 承担。
 
 ## 配套
 

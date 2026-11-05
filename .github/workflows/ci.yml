@@ -49,9 +49,10 @@ jobs:
         # N-1（2026-11-04）：内联载荷**只降不升**。
         #   ① 基线冻结入库（docs/analysis/bomb-inventory-20261104.json）⟹ 只报 NEW，防「自证循环」；
         #   ② --max-payload 是硬棘轮：拆块后才许调低，禁止无对应拆解提交时调高。
+        #   2026-11-05：cmd_monitor 两处 ECC 信封块下沉（validate/hmac，4.7 KB）⟹ 96 → 88。
         run: |
           python scripts/gk_bomb_inventory.py --assert-baseline docs/analysis/bomb-inventory-20261104.json
-          python scripts/gk_bomb_inventory.py --max-payload 96
+          python scripts/gk_bomb_inventory.py --max-payload 88
 
   preflight:
     # 2026-11-04：把发布契约放到**日常 CI** 拦，而不是等 tag 推上去才炸。

@@ -21,7 +21,7 @@ updated: 2026-11-02
 | CLI 命令数 | 52 | `^_CMD_REG[` 计数 |
 | 红队站点 | 16 | `gk_chain.py` 的 `Step("RED-*")` |
 | 自检检查函数 | 37 | `gk_self_check.py` 的 `def check_*` |
-| references 入库 md | 28 | `git ls-files references/*.md`（顶层） |
+| references 入库 md | 25 | `git ls-files references/*.md`（顶层） |
 | 子代理角色 | 8 | `subagent_runner.ROLE_TOOLS` |
 | hook R0 门禁 | Gate R0.1–R0.20（19 个） | `pre_tool_hook.py` 的 `Gate R0.N` |
 | 红队向量 | 156 | `references/red-vectors.json` |
@@ -229,4 +229,6 @@ TTL/GC、回收判据全在 `references/state-storage.md`，本文不复制。
 
 ## 常驻子系统索引（自动覆盖检查用）
 
+- **状态 WAL**：`gk_satellite` 追加写先落片、再登记 per-arm 索引叶（热内联 + 冷侧车），恢复按片并集重建。
 - **基准**：`gk_bench_*`（状态基准、发布耗时基准）与夜间回归基线。
+- **MCP 工具面**：`pre_tool_hook.py` 的 `MCP_WRITE_VERBS` / `_mcp_inner_tool` / `GK_MCP_WRITE_GATE` 负责写类归一与回退面；加载器 `scripts/gk_mcp_loader.py`（`verify`/`connect`/`health-only`/`sdk-info`）负责 manifest 声明与接线校验，按**符号面探测**适配不同 MCP SDK 版本（不按版本号猜）。

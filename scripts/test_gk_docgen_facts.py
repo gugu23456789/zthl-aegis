@@ -78,7 +78,10 @@ def test_state_capacity_and_wall_blocks_reflect_constants():
     assert "{:,}".format(J.STATE_SIZE_WALL) in wall
     for pct in ("50", "80", "90", "95"):
         assert "≥ %s%%" % pct in wall
-    assert "WALL_BLOCK" in wall and "512 KB" in wall
+    # 2026-11-05：原断言钉死「WALL_BLOCK / 512 KB」两个已不存在的字面量（生成块早已改为
+    #   `STATE_SIZE_WALL = 2,621,440 B（2.5 MB）` + 运维覆盖口说明）⟹ 判据错位。
+    #   改为验证**现存契约**：整墙数值（上行 L78 已断言）+ 覆盖口必须写明。
+    assert "运维覆盖口" in wall and "GK_STATE_TRIM_KB" in wall
     assert "ECC_MAX_ENTRIES=256" in wall and "ECC_MAX_OPEN=96" in wall
 
 
