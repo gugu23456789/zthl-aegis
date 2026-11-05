@@ -1,0 +1,10 @@
+{
+  "schema": "gk-ci-external-paths/1",
+  "note": "workflow `run:` 里引用、但**按设计不随导出包**的仓库路径。每条必须写 reason；glob 必须至少命中一条真实引用（否则判过期）。消费方 = scripts/gk_release_preflight.py 的 workflow_paths 项。",
+  "paths": [
+    {
+      "glob": "docs/analysis/bomb-inventory-*.json",
+      "reason": "内联载荷基线属 docs/ 导出排除面 ⟹ 公开树必然缺失；公开 CI 由 --max-payload 硬棘轮兜底，私仓仍跑 --assert-baseline"
+    }
+  ]
+}

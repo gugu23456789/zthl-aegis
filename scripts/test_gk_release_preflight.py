@@ -7,6 +7,7 @@
   ② 发布资产必须是 7 个（5 核心 + 2 基准）；
   ③ 夹具打包必须产出 zip / SHA256SUMS / manifest / PROVENANCE 四件套。
 """
+import json
 import os
 import sys
 
@@ -58,3 +59,57 @@ def test_release_assets_real_workflow_is_pass():
 def test_pack_fixture_produces_four_pieces():
     r = PF.pack_fixture()
     assert r["status"] == "PASS", r
+
+
+# ── workflow_paths：导出面一致性（2026-11-05）────────────────────────────────
+def _wf_tree(tmp_path, monkeypatch, run_body: str, allow: list = None):
+    wfdir = tmp_path / ".github" / "workflows"
+    wfdir.mkdir(parents=True)
+    (wfdir / "ci.yml").write_text("jobs:\n  a:\n    steps:\n      - name: x\n"
+                                  "        run: |\n" + run_body, encoding="utf-8")
+    ci = tmp_path / "references" / "ci-external-paths.json"
+    ci.parent.mkdir(parents=True, exist_ok=True)
+    ci.write_text(json.dumps({"schema": "gk-ci-external-paths/1",
+                              "paths": allow or []}), encoding="utf-8")
+    monkeypatch.setattr(PF, "ROOT", tmp_path)
+    monkeypatch.setattr(PF, "_WORKFLOW_DIR", wfdir)
+    monkeypatch.setattr(PF, "_CI_EXTERNAL", ci)
+
+
+def test_workflow_paths_flags_missing_unregistered(tmp_path, monkeypatch):
+    _wf_tree(tmp_path, monkeypatch, "          python scripts/nope.py\n")
+    r = PF.workflow_paths()
+    assert r["status"] == "FAIL" and "scripts/nope.py" in r["detail"], r
+
+
+def test_workflow_paths_accepts_existing_and_registered(tmp_path, monkeypatch):
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts" / "ok.py").write_text("print(1)\n", encoding="utf-8")
+    _wf_tree(tmp_path, monkeypatch,
+             "          python scripts/ok.py\n          python docs/x/gone.json\n",
+             allow=[{"glob": "docs/x/*.json", "reason": "导出排除面"}])
+    r = PF.workflow_paths()
+    assert r["status"] == "PASS", r
+
+
+def test_workflow_paths_flags_stale_allowlist(tmp_path, monkeypatch):
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts" / "ok.py").write_text("print(1)\n", encoding="utf-8")
+    _wf_tree(tmp_path, monkeypatch, "          python scripts/ok.py\n",
+             allow=[{"glob": "docs/x/*.json", "reason": "已无引用"}])
+    r = PF.workflow_paths()
+    assert r["status"] == "FAIL" and "过期" in r["detail"], r
+
+
+def test_workflow_paths_requires_reason(tmp_path, monkeypatch):
+    _wf_tree(tmp_path, monkeypatch, "          python docs/x/gone.json\n",
+             allow=[{"glob": "docs/x/*.json"}])
+    r = PF.workflow_paths()
+    assert r["status"] == "FAIL" and "reason" in r["detail"], r
+
+
+def test_run_blocks_skips_comments():
+    text = ("# 说明里提到 references/ghost.md 但不在 run 块\n"
+            "jobs:\n  a:\n    steps:\n      - run: echo hi >/dev/null\n")
+    blocks = PF._run_blocks(text)
+    assert blocks and all("references/ghost.md" not in b for b in blocks)

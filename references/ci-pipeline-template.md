@@ -369,18 +369,31 @@ security-audit:
   离线校验进 CI（确定性、不依赖网络），联网 dry-run 进发包预检（**阻断**）。
   存档步骤本身**禁 `continue-on-error`**：v0.9.6.5 曾因它把 `403 Bucket is locked` 藏成绿色作业。
 - **发布流水线契约预检**（2026-11-04，`scripts/gk_release_preflight.py`）：把 workflow 与发布脚本
-  之间的三处**跨文件契约**在打包前机检，任一不满足即阻断：
+  之间的**跨文件契约**在打包前机检，任一不满足即阻断：
   ① 参数契约：workflow 里 `pack_release.py` 用到的 flag ⊆ 脚本 parser（事故：v0.9.6.8–v0.9.6.10
      连续三版传 `--source-*` 而脚本不认 ⟹ pack 步 argparse 退出 2）；
   ② 产物契约：夹具真跑一次 pack，必须产出 zip / SHA256SUMS / release-manifest.json /
      PROVENANCE.json 四件套，且 `PROVENANCE.source`（repo/commit/tag）可核；
   ③ 资产契约：publish 步必须挂 **7 个资产** = zip + SHA256SUMS + PROVENANCE + SBOM +
      manifest + `dist/bench/release.json` + `dist/bench/release-compare.json`
-     （基准步 `continue-on-error`，文件缺失时降级为 5 个，但**挂载点**必须在，禁止静默缺项）。
+     （基准步 `continue-on-error`，文件缺失时降级为 5 个，但**挂载点**必须在，禁止静默缺项）；
+  ④ 路径契约：workflow `run:` 引用的仓库路径必须存在或登记在 `references/ci-external-paths.json`
+     （2026-11-05 增，见下方「导出面路径一致性」）。
 - **导出期文档自洽**（2026-11-04）：`oss_scrub.py export` 在导出树内自动跑
   `gk_docgen_facts.py --write`（`DOCFACTS OK / SKIP`，执行失败 fail-loud）。事实块含本仓
   `references/*.md` 计数（私仓 50 / 公开 28）⟹ 「同步后在目标仓手工 --write」必然每版漂移；
   生成器必须支持「无 git 时按目录清单回退」，否则导出树会把索引整段清空。
+- **导出面路径一致性**（2026-11-05，`workflow_paths` 项）：workflow `run:` 里引用的仓库路径
+  必须**存在**，或登记在 `references/ci-external-paths.json`（每条带 reason；glob 无引用判过期）。
+  事故：公开 `ci.yml` 引用 `docs/analysis/bomb-inventory-*.json`，而 `docs/` 是导出排除面
+  ⟹ 公开 CI 恒红，私仓 preflight 却永远绿。
+- **导出树自动预检**（2026-11-05）：`oss_scrub.py export` 在导出产物上再跑一次
+  `gk_release_preflight.py`（`PREFLIGHT OK / SKIP`，失败 fail-loud；`--skip-preflight` 仅预演），
+  把「公开面独有的红」提前到本地，而不是等 tag 推上去。
+- **发版前本地三步**（2026-11-05 定稿）：① `GK_SELFCHECK_TESTS=full python scripts/gk_self_check.py`
+  （37 项 + 全量测试；quick 只覆盖 22 个测试文件）；② `python scripts/gk_release_preflight.py`；
+  ③ `python scripts/oss_scrub.py export --out <dir>`（导出树内自动重跑 ②）。
+  三步全绿再打 tag。反例（v0.9.6.14）：陈旧断言（①没跑）与导出面缺路径（③没跑）各红一次。
 - 非审计类项目：仅保留原生构建 + CTest 作为发布门禁
 
 ## 6. 产物与失败诊断

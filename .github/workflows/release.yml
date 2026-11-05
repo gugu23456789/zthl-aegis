@@ -3,6 +3,11 @@ name: release
 # 发布纪律（对齐 references/ci-pipeline-template.md §3.6 / §5 / §6 / §8）：
 #   tag → 全量 smoke → **发布预检（参数/产物/资产契约）** → 确定性打包（zip + SHA256SUMS +
 #   PROVENANCE + manifest）→ SBOM → 校验和回验 → GitHub Release（7 资产）
+#
+# 发版前本地三步（缺一步就会把红带到 tag 上，2026-11-05 实测）：
+#   ① GK_SELFCHECK_TESTS=full python scripts/gk_self_check.py
+#   ② python scripts/gk_release_preflight.py
+#   ③ python scripts/oss_scrub.py export --out <dir>   # 导出树内自动重跑 ②
 on:
   push:
     tags: ["v*"]
