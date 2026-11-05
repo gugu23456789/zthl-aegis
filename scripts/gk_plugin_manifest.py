@@ -113,6 +113,13 @@ MANIFESTS = {
 if not (Path(__file__).resolve().parent / "gk_paper_review.py").is_file():
     MANIFESTS.pop("paper-review", None)
 
+# 2026-11-05：`git-workflow` 是同级独立技能，公开包不随附 ⟹ 载体缺失时不登记
+#   （与 README「公开包只自带 1 个加载器」同步；避免留下指向缺件的登记项）。
+_GITWORKFLOW_LOADER = (Path(__file__).resolve().parent.parent.parent
+                       / "git-workflow" / "scripts" / "gk_gitworkflow_loader.py")
+if not _GITWORKFLOW_LOADER.is_file():
+    MANIFESTS.pop("git-workflow", None)
+
 _ACTIVE = {}  # pid -> {"snapshot": {...}}  运行时登记（undefine 注销）
 
 _NPM_URL_PREFIX = "npm:"

@@ -102,21 +102,24 @@ flowchart LR
 不得为空白、`intercept` 必须是名单序列（字符串会被子串命中）；`get_manifest()` 返回副本，
 能力查询对非法 manifest **零授权**。红队判据见 `scripts/test_gk_plugin_manifest_redteam.py`（G1–G12）。
 
-本仓登记 **3 个**插件；**公开包随附 2 个**（`paper-review` 源码不随包，见下）：
+本仓登记 **3 个**插件；**公开包只自带 1 个加载器**（`bashpy-migrate`）。另两个依赖外部源：
+`paper-review` 源码在私仓（导出排除面）、`git-workflow` 是同级独立技能 ⟹ 两者**载体不在场时
+manifest 不登记**（避免“已登记但缺件”）。
 
-| 插件 id | 名称 / 来源 | 本包内的形态 | 能力白名单 |
-|---|---|---|---|
-| `paper-review` | `gk_paper_review`（builtin；论文写作投稿前置模拟评审——投稿前自检，非同行审稿） | **私仓内置**；公开包不随附（源码在导出排除面）⟹ 命令入口返回加载安全网 `source=missing` | `paper-review` |
-| `bashpy-migrate` | `zthl-bashpy-migrate`（pip / npm 包装） | 加载器 `scripts/gk_bashpy_loader.py`；本体为独立包 | `analyze` `verify` `audit` `status` `check` `upgrade` `rollback` |
-| `git-workflow` | 独立技能（MulanPSL-2.0） | 加载器在技能侧 `../git-workflow/scripts/gk_gitworkflow_loader.py` | `push` `branch` `worktree` `release` `security` `cleanup` `history` `selfcheck` `version` |
+| 插件 id | 名称 / 来源 | 源码仓库 | 本包内的形态 | 能力白名单 |
+|---|---|---|---|---|
+| `paper-review` | `gk_paper_review`（builtin；论文写作投稿前置模拟评审——投稿前自检，非同行审稿） | 无公开仓（私仓，含评审口径档案） | **私仓内置**；公开包不随附（源码在导出排除面）⟹ 命令入口返回加载安全网 `source=missing` | `paper-review` |
+| `bashpy-migrate` | `zthl-bashpy-migrate`（pip / npm 包装） | [zthl-harness/zthl-bashpy-migrate](https://github.com/zthl-harness/zthl-bashpy-migrate) | 加载器 `scripts/gk_bashpy_loader.py`；本体为独立包 | `analyze` `verify` `audit` `status` `check` `upgrade` `rollback` |
+| `git-workflow` | 独立技能（MulanPSL-2.0） | [spz-ecosystem/git-workflow](https://github.com/spz-ecosystem/git-workflow) | 加载器在技能侧 `../git-workflow/scripts/gk_gitworkflow_loader.py` | `push` `branch` `worktree` `release` `security` `cleanup` `history` `selfcheck` `version` |
 
 **不在插件安全网内**：`doc-align` 是 CLI 子命令（`_CMD_REG[doc-align]`，0 API 静态扫描），
 不是插件；`migrate` / `paper-review` 的**命令入口**同样在 `_CMD_REG`。插件 manifest 只管
 「能否加载 + 能力白名单 + 卸载回滚」，不管命令路由。
 
-**开源面**：`paper-review` 源码**不随包**（`gk_paper_review.py` / `_loader.py` 在导出排除面）；
-`bashpy-migrate` 随包提供加载器、插件本体为独立包；`git-workflow` 为独立技能，加载器在技能侧。
-公开包的插件 manifest 对 `paper-review` **条件登记**（源不在场即不登记），不会留下指向缺件的登记项。
+**开源面**：公开包只随附 `bashpy-migrate` 的加载器（`scripts/gk_bashpy_loader.py`），插件本体是
+独立包（pip / npm）；`paper-review` 源码在私仓（`gk_paper_review.py` / `_loader.py` 在导出排除面）；
+`git-workflow` 是独立技能（[spz-ecosystem/git-workflow](https://github.com/spz-ecosystem/git-workflow)），
+加载器在技能侧。`paper-review` 与 `git-workflow` 都是**载体不在场即不登记**，不会留下指向缺件的登记项。
 
 ### 安全网与模板（概览与来历）
 
