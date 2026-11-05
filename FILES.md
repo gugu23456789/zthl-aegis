@@ -3,7 +3,7 @@
 > 生成器：`scripts/gk_repo_index.py --write`；漂移由 `gk_release_preflight.py` 的 `repo_index` 项守。
 > 用途：**移动端**（GitHub App 没有 “Go to file”）与抓取工具一次拿到全量路径；点路径直达文件。
 
-**共 824 个文件。**
+**共 827 个文件。**
 
 ## 索引生成物
 
@@ -159,6 +159,7 @@
 - [references/red-external-map.json](references/red-external-map.json) — JSON 数据
 - [references/red-intel-sources.json](references/red-intel-sources.json) — JSON 数据
 - [references/red-vectors.json](references/red-vectors.json) — JSON 数据
+- [references/repo-index-annotations.json](references/repo-index-annotations.json) — JSON 数据
 - [references/research-408.md](references/research-408.md) — Research 408 — 计算机 408 四轴优化分析
 - [references/resident-features.json](references/resident-features.json) — JSON 数据
 - [references/security-incident-response.md](references/security-incident-response.md) — 密钥泄露应急处置流程（BP.08.05 对照）
@@ -359,6 +360,7 @@
 - [scripts/gk_red_vectors.py](scripts/gk_red_vectors.py) — Python 模块
 - [scripts/gk_reflect.py](scripts/gk_reflect.py) — Python 模块
 - [scripts/gk_release_preflight.py](scripts/gk_release_preflight.py) — 发版预检（参数 / 产物 / 资产 / 路径 / 索引 契约）
+- [scripts/gk_repo_index.py](scripts/gk_repo_index.py) — Python 模块
 - [scripts/gk_req_body.py](scripts/gk_req_body.py) — Python 模块
 - [scripts/gk_review_nodes.py](scripts/gk_review_nodes.py) — Python 模块
 - [scripts/gk_review_pins.py](scripts/gk_review_pins.py) — Python 模块
@@ -738,6 +740,7 @@
 - [scripts/test_gk_reflect.py](scripts/test_gk_reflect.py) — test_gk_reflect.py -- Tests for gk_reflect.py
 - [scripts/test_gk_release_preflight.py](scripts/test_gk_release_preflight.py) — Python 模块
 - [scripts/test_gk_replay_report.py](scripts/test_gk_replay_report.py) — Python 模块
+- [scripts/test_gk_repo_index.py](scripts/test_gk_repo_index.py) — test_gk_repo_index.py — 仓库索引生成器（FILES.md / llms.txt）的机检臂。
 - [scripts/test_gk_report_evidence.py](scripts/test_gk_report_evidence.py) — Python 模块
 - [scripts/test_gk_req_body.py](scripts/test_gk_req_body.py) — test_gk_req_body.py — LLM 请求体构造测试（2026-08-26 批次 2 剩余）。
 - [scripts/test_gk_research_408.py](scripts/test_gk_research_408.py) — test_gk_research_408.py — 408 特化 research frame 接线（默认 auto，advisory 不阻塞）。

@@ -11,6 +11,8 @@ GitHub 移动端**没有** "Go to file"（桌面才有），目录树懒加载�
 纪律
 ====
 - **确定性**：无时间戳、按 posix 路径排序；同输入必同输出（`--check` 才有意义）。
+- **先 `git add` 新文件，再 `--write`**：文件集取自 `git ls-files`（只看已跟踪）；
+  未跟踪的新文件不会进索引 ⟹ 本地绿、CI 红（2026-11-05 实测）。导出树无 git，走目录遍历。
 - **只描述公开面**：私仓生成时经 `oss_scrub.is_excluded` 过滤；导出树没有该模块 ⟹ 全量文件
   本身就是公开面。两棵树各自自洽，导出时重生成（与 GK-FACTS 同款做法）。
 - **描述来源**：`references/repo-index-annotations.json` 手工注 → md 首个 H1 →
