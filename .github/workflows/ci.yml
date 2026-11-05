@@ -50,8 +50,15 @@ jobs:
         #   ① 基线冻结入库（docs/analysis/bomb-inventory-20261104.json）⟹ 只报 NEW，防「自证循环」；
         #   ② --max-payload 是硬棘轮：拆块后才许调低，禁止无对应拆解提交时调高。
         #   2026-11-05：cmd_monitor 两处 ECC 信封块下沉（validate/hmac，4.7 KB）⟹ 96 → 88。
+        #   2026-11-05 二修：基线文件在 `docs/`（导出排除面）⟹ 公开树**必然缺失**，
+        #     原无条件 `--assert-baseline` 使公开 CI 恒红；改为存在才比对，硬棘轮照常执行。
         run: |
-          python scripts/gk_bomb_inventory.py --assert-baseline docs/analysis/bomb-inventory-20261104.json
+          BASELINE=docs/analysis/bomb-inventory-20261104.json
+          if [ -f "$BASELINE" ]; then
+            python scripts/gk_bomb_inventory.py --assert-baseline "$BASELINE"
+          else
+            echo "(skip baseline assert: $BASELINE 不随公开包导出；硬上限仍由下一条守住)"
+          fi
           python scripts/gk_bomb_inventory.py --max-payload 88
 
   preflight:
