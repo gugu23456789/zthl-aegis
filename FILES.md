@@ -3,7 +3,7 @@
 > 生成器：`scripts/gk_repo_index.py --write`；漂移由 `gk_release_preflight.py` 的 `repo_index` 项守。
 > 用途：**移动端**（GitHub App 没有 “Go to file”）与抓取工具一次拿到全量路径；点路径直达文件。
 
-**共 827 个文件。**
+**共 828 个文件。**
 
 ## 索引生成物
 
@@ -461,6 +461,7 @@
 - [scripts/test_fifo_archive_readers.py](scripts/test_fifo_archive_readers.py) — Python 模块
 - [scripts/test_git_concurrency_check.py](scripts/test_git_concurrency_check.py) — Test gk_git_concurrency_check.py — git 并发抢锁检测（2026-08-15 追加交叉审查项）
 - [scripts/test_gk_accept_cli.py](scripts/test_gk_accept_cli.py) — Python 模块
+- [scripts/test_gk_accept_env_confusion.py](scripts/test_gk_accept_env_confusion.py) — test_gk_accept_env_confusion.py — 验收解释器解析的**环境混淆攻击**臂（2026-11-05）。
 - [scripts/test_gk_access_log.py](scripts/test_gk_access_log.py) — Python 模块
 - [scripts/test_gk_active_surface.py](scripts/test_gk_active_surface.py) — Python 模块
 - [scripts/test_gk_adjudicate.py](scripts/test_gk_adjudicate.py) — test_gk_adjudicate.py -- Tests for gk_adjudicate.py
