@@ -189,6 +189,22 @@ def state_lock_path(path) -> str:
     return str(path) + ".lock"
 
 
+def _env_lock_timeout(default: float = LOCK_TIMEOUT) -> float:
+    """`GK_STATE_LOCK_TIMEOUT`（秒）覆盖取锁预算。
+
+    非法 / 非正 / 空 ⟹ 回落 `default`：**不允许通过 env 关掉超时**（0 或负数会把
+    fail-loud 变成无界阻塞，等于给并发争用装了一块看不见的地毯）。
+    """
+    raw = os.environ.get("GK_STATE_LOCK_TIMEOUT", "")
+    if not raw:
+        return default
+    try:
+        val = float(raw)
+    except (TypeError, ValueError):
+        return default
+    return val if val > 0 else default
+
+
 def _flock_wait(fd: int, timeout: float) -> None:
     """带超时的排他 flock（LOCK_NB 轮询）；超时 → TimeoutError（fail-loud，不静默降级）。"""
     import time as _t
@@ -224,13 +240,18 @@ def _win_lock_wait(fd: int, timeout: float) -> None:
 
 
 @contextlib.contextmanager
-def state_lock(path, timeout: float = LOCK_TIMEOUT):
+def state_lock(path, timeout: float = None):
     """跨进程 state 排他锁（**可重入**）。唯一锁持有者 = python（选项 A，2026-09-25）。
 
     POSIX → `fcntl.flock`；Windows → `msvcrt.locking`（[ECC-CA93145A1E67]：原式在非 POSIX
     **退化为无锁** ⟹ 并发 `set-nested`/`append-list` 读-改-写丢写，Windows 实测 6 进程仅 3~4 落地）。
     仅当两者皆不可用（罕见平台）才无锁 —— 与升级前行为一致，不新增失败面。
+
+    `timeout=None` ⟹ 走 `GK_STATE_LOCK_TIMEOUT`（秒）覆盖，缺省 `LOCK_TIMEOUT`；显式传值优先。
+    （2026-11-05 bench-nightly 归因：32 写者 × 5s 在被挤占的 runner 上假红；超时本身仍判失败。）
     """
+    if timeout is None:
+        timeout = _env_lock_timeout()
     key = os.path.realpath(str(path))
     ent = _LOCKS.get(key)
     if ent is not None:                       # 本进程已持锁 ⟹ 只加深度（防自锁）
