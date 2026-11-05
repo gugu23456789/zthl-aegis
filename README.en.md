@@ -160,6 +160,12 @@ Failure semantics and applicability boundaries are listed in
 [`standard-maintenance-module.md` §0.2](references/standard-maintenance-module.md); what to do
 when a safety net itself fails is covered by §1–§2 of the same file.
 
+**Why model it explicitly**: bring the economic flows that run underwater onto the surface, and
+only then can they be priced, staged and restructured (化债); in systems terms this is
+**turning implicit state into a reconcilable explicit ledger** — the faster you move, the more you
+need it, or the debt you incur shows up only as silent failures and exhausted budgets (the
+off-balance-sheet ↔ implicit-state mapping is in [credit-economy.md §0](references/credit-economy.md)).
+
 ### Requirements
 
 `bash gatekeeper-cli.sh self-check` includes a `dependencies` check that reports the live status of

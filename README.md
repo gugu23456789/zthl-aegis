@@ -160,6 +160,11 @@ SPZ 工具链中的 `spz2glb`（3D 资产转换与 glTF/GLB 管线，含浏览�
 [`standard-maintenance-module.md` §0.2](references/standard-maintenance-module.md)；
 安全网自身失效时怎么发现、怎么修，见同一文件的 §1–§2。
 
+**为什么显式建模**：把水面下的经济流动搬到水面上，才能定价、分期、化债；在系统里就是
+**把隐式状态变成可对账的显式账本**——跑得越快越需要它，否则「跑出来的债」只会以静默失败和
+额度透支的形式出现（表外负债 ↔ 隐式状态 / 化债 ↔ 技术债的对账，见
+[credit-economy.md §0](references/credit-economy.md)）。
+
 ### 环境要求
 
 `bash gatekeeper-cli.sh self-check` 的 `dependencies` 检查会**实测**下列每一项（并给出确切的安装/平替命令），可直接从输出复制。
