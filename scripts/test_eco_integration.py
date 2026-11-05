@@ -26,7 +26,7 @@ SCRIPTS_DIR = SKILL_DIR / "scripts"
 # 2026-08-07 起（87d044c）Trae 全局根目录 ~/.trae-cn/hooks.json 为唯一生效入口（catch-all `*`），
 # 项目级 .trae/settings.json 已废弃并清理。
 # 2026-09-24（ECC-…，TestHookConfig 6 例修复）：**删除**本地硬编码候选表，改走产品侧单一事实源。
-# 原表三项里两项是 Windows 字面量 `C:\...`，而规范测试解释器是 **WSL**（/opt/spz-py312）：
+# 原表三项里两项是 Windows 字面量 `C:\...`，而规范测试解释器是 **WSL**（某台机器的 venv）：
 # POSIX 下 `Path(r"C:\...")` 退化为**相对路径** ⟹ `exists()` 恒 False ⟹ 本类 6 例全红
 # （红因 = **平台路径形态**，非 hook 缺失；`runtime-subplan §4.8.4` 已订正为「假失败」）。
 # 更坏的是 test_settings_json_has_runcommand 走同一张表 + `pytest.skip` ⟹ WSL 面**静默跳过**

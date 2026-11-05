@@ -88,19 +88,37 @@ def _venv_candidates() -> list:
     return out
 
 
+def _env_candidate(v: str) -> str:
+    """`ACCEPT_PY` 的可信形态：**绝对且存在**，或裸命令名（走 PATH）。
+
+    相对路径（`./x`、`..\\x`、`../x`）= **环境混淆面**（cwd 可被替换成攻击者目录）⟹
+    一律忽略，回落到 pin / 仓内 `.venv*` / PATH。裸命令名保留：与兜底同语义（PATH 查找），
+    不引入比现状更宽的能力。
+    """
+    v = (v or "").strip()
+    if not v:
+        return ""
+    if os.path.isabs(v):
+        return v if os.path.isfile(v) else ""
+    if "/" in v or "\\" in v or os.sep in v:
+        return ""
+    return shutil.which(v) or ""
+
+
 def resolve() -> str:
     """验收解释器解析（**顺序契约与 `scripts/py_resolve.sh` 一致**，禁各自发明优先级）。
 
-    env `ACCEPT_PY` → 本机 pin（按平台取行）→ 仓内 `.venv*`（含 worktree 的主树回落）
+    env `ACCEPT_PY`（绝对路径且存在，或裸命令名走 PATH；**相对路径一律忽略**）
+    → 本机 pin（按平台取行）→ 仓内 `.venv*`（含 worktree 的主树回落）
     → PATH 上的 `python3`/`python` → `python3`。
 
     ⚠ 为什么这里**不 spawn bash 去复用** `py_resolve.sh`（2026-11-02 实测）：
       Windows python 的 `subprocess(["bash"])` 在本机命中的是 `System32\bash.exe`（WSL），
-      其 `uname` 是 Linux ⟹ 自动探测会把**Windows 调用方**判成 wsl ⟹ 候选变成 `/opt/…`
-      （WSL 里存在、Windows 上不可执行）⟹ 返回一个本侧根本用不了的解释器。
+      其 `uname` 是 Linux ⟹ 自动探测会把**Windows 调用方**判成 wsl ⟹ 候选变成 WSL 侧固定
+      venv 路径（WSL 里存在、Windows 上不可执行）⟹ 返回一个本侧根本用不了的解释器。
       故：**平台由本进程的 `os.name` 权威判定**，两侧各自实现同一顺序契约（有回归臂对拍）。
     """
-    env = (os.environ.get("ACCEPT_PY") or "").strip()
+    env = _env_candidate((os.environ.get("ACCEPT_PY") or "").strip())
     if env:
         return env
     win = _plat_of_this_process() == "win"
@@ -111,7 +129,8 @@ def resolve() -> str:
         return os.access(p, os.X_OK) or win
 
     for c in _pin_candidates():
-        if _ok(c):
+        # 本机 pin 必须是**绝对路径**：相对值会按进程 cwd 解析 ⟹ 环境混淆面。
+        if os.path.isabs(c) and _ok(c):
             return c
     for c in _venv_candidates():
         if _ok(c):

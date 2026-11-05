@@ -51,7 +51,7 @@ def test_allow_redfirst():
 
 def test_allow_configured_interpreter():
     assert hook._pytest_wrong_interpreter(
-        "/opt/spz-py312/bin/python -m pytest scripts -q") is None
+        "/opt/venv/bin/python -m pytest scripts -q") is None
 
 
 def test_allow_quoted_literal():

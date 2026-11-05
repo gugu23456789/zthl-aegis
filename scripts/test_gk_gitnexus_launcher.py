@@ -307,6 +307,6 @@ def test_cli_run_blocks_on_arch_mismatch(tmp_path, monkeypatch, capsys):
 def test_arch_guard_source_has_no_machine_paths():
     """公开包安全：形态发现必须**发现式**（不得写死本机 node / gitnexus 路径）。"""
     src = (Path(__file__).parent / "gk_gitnexus.py").read_text(encoding="utf-8", errors="replace")
-    for bad in ("D:\\Program Files", "/usr/bin/node", "/opt/spz-py312",
+    for bad in ("D:\\Program Files", "/usr/bin/node", "/opt/venv/bin/python",
                 "<home>", "AppData\\Local\\Temp\\gk-gitnexus-identity"):
         assert bad not in src, "公开源码残留机器绝对路径: %s" % bad

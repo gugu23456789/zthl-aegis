@@ -51,7 +51,7 @@ v0.9.4 的发布物包含上述 Windows 解析缺陷，因此补丁版重打发�
 - 公开仓 CI：`smoke`、`security audit`、`platform smoke (ubuntu-24.04)`、
   `platform smoke (windows-latest)`、`package + hook integrity` 全部 success
   （run `41449509168`；`venv-gate` 随本版新增）。
-- 本地：Linux `/opt/spz-py312` 下 `test_py_resolve` 11 passed、
+- 本地：Linux 验收 venv 下 `test_py_resolve` 11 passed、
   `test_gk_package_integrity + test_gk_hook_manage` 31 passed；
   Windows（Git Bash）下 `test_py_resolve` 11 passed。
 - 导出：见 §5。

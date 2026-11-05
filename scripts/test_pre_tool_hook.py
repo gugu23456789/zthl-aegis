@@ -1352,7 +1352,7 @@ class TestWslFamilyStory:
         `json.dumps(..., ensure_ascii=False)` 一类），否则旧代码的 `count('"') > 2` 不成立、
         本臂会**假绿**（首版即踩：只写一对引号 ⟹ 修前也过）。
         """
-        cmd = ('wsl.exe -e bash -lc \'cd /x && /opt/spz-py312/bin/python -c "import json;'
+        cmd = ('wsl.exe -e bash -lc \'cd /x && /opt/venv/bin/python -c "import json;'
                'print(json.dumps({\\"a\\":1}, ensure_ascii=False))"\'')
         assert pre_tool_hook._blue_fat_fish_wsl_story(cmd) is None
 

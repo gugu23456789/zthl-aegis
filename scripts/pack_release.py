@@ -29,7 +29,14 @@ import zipfile
 from datetime import datetime, timezone
 
 EXCLUDE_DIRS = {".git", "__pycache__", ".pytest_cache", ".mypy_cache", ".zthl", ".keys",
-                "dist", "node_modules", ".venv", "venv", ".venv-accept", ".idea", ".vscode"}
+                "dist", "node_modules", ".venv", "venv", ".idea", ".vscode"}
+
+
+def _env_dir(name: str) -> bool:
+    """任意本地虚拟环境目录（`.venv` / `.venv-<name>` / `venv`）——不绑定某一台的目录名。"""
+    return name in EXCLUDE_DIRS or name.startswith(".venv") or name == "venv"
+
+
 # 运行期落盘（2026-11-02）：CI release 作业先跑 smoke ⟹ 仓库根出现 `.gatekeeper.*`
 #   （state / plan / session / write-claims 等）；`pack-report.json` 由 shell 重定向预建。
 #   二者都是**运行期产物**，进包即污染发布物（且 claims 属运行元数据）。
@@ -58,7 +65,7 @@ def _sha256_bytes(b: bytes) -> str:
 
 def _excluded(rel: str) -> bool:
     parts = rel.replace("\\", "/").split("/")
-    if any(p in EXCLUDE_DIRS for p in parts[:-1]):
+    if any(_env_dir(p) for p in parts[:-1]):
         return True
     name = parts[-1]
     if name in EXCLUDE_NAMES:
@@ -74,7 +81,7 @@ def walk(tree: str) -> list:
     """→ 排序后的相对路径列表（排除运行期产物与器身文件）。"""
     out = []
     for root, dirs, files in os.walk(tree):
-        dirs[:] = sorted(d for d in dirs if d not in EXCLUDE_DIRS)
+        dirs[:] = sorted(d for d in dirs if not _env_dir(d))
         for f in sorted(files):
             rel = os.path.relpath(os.path.join(root, f), tree).replace("\\", "/")
             if not _excluded(rel):

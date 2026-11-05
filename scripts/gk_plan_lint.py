@@ -223,7 +223,7 @@ def _read(path):
         return fh.read()
 
 
-# 2026-11-01：仓库内真实存在 `.venv-accept/`（5,603 个 .py / 81MB）—— 原白名单只挡**精确名**
+# 2026-11-01：仓库内真实存在 `.venv-*/`（5,603 个 .py / 81MB）—— 原白名单只挡**精确名**
 # `.venv` ⟹ `_build_def_index` 逐文件读 venv 源码；WSL `/mnt/c`（9p）实测单次 `plan-lint` 4m40s，
 # 使 `plan-refinement` 前置门看起来「静默无输出」。venv 不是被审查的仓内源码 ⟹ 一律跳过。
 _SKIP_DIRS = {"__pycache__", "node_modules", ".mypy_cache", "site-packages",

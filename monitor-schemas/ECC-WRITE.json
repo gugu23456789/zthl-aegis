@@ -48,7 +48,7 @@
     },
     {
       "check": "source_token_conformance",
-      "command": "/opt/spz-py312/bin/python -m pytest scripts/test_gk_ecc_source_spec.py -q",
+      "command": "python3 -m pytest scripts/test_gk_ecc_source_spec.py -q",
       "fail_if": "exit_code != 0",
       "note": "新写入 fail-loud（`register` 边界）+ 存量 WARN 分级（`check_ecc_form`）；见 §7 反例表"
     }

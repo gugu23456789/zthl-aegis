@@ -72,7 +72,7 @@ def test_code_fix_next_cmd_tools_equal_fix_tier_tools():
 
 
 def test_edit_tier_dispatch_prefers_wsl_python():
-    """2026-10-14（owner 裁定）— subagent **默认解释器** = 隔离 venv（原写死 WSL `/opt/spz-py312`）。
+    """2026-10-14（owner 裁定）— subagent **默认解释器** = 隔离 venv（原写死某台机器的 venv 绝对路径）。
 
     沿革：原（ECC-6C0742C3BC90，2026-09-23）只对 `--tools` 含 `edit` 优先 WSL（`edit_gk` 走
     `os.path.realpath()` 解析 worktree 路径，Windows 语义把 `/mnt/c/...` 解析成不存在路径 ⟹
@@ -83,7 +83,8 @@ def test_edit_tier_dispatch_prefers_wsl_python():
     """
     seg = _cmd_seg("cmd_monitor")
     assert "py_resolve.sh" in seg, "默认档须委托 scripts/py_resolve.sh（解释器单源）"
-    assert "/opt/spz-py312" not in seg, "解释器不得写死个人 venv 绝对路径（公开包会炸）"
+    assert not re.search(r"/opt/[A-Za-z0-9_.-]+/bin/python", seg), \
+        "解释器不得写死个人 venv 绝对路径（公开包会炸）"
 
 
 def test_coder_role_can_read_fix_landing_regions():

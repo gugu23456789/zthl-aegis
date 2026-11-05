@@ -1629,7 +1629,7 @@ class TestHostPathFormCloseout:
 
         Windows 宿主原实现拼畸形 `<home>/.local/...` ⟹ FileNotFoundError（本臂起源）。
 
-        2026-10-29（去存量跳过）：markitdown 不在规范解释器（`/opt/spz-py312`）里，且项目规则
+        2026-10-29（去存量跳过）：markitdown 不在规范解释器（隔离 venv）里，且项目规则
         禁装依赖 ⟹ 不再 `pytest.skip`；改为在 `PATH` **前置一个行为等价的最小入口**
         （`markitdown <file>` → 打印内容）。判的是**管道形态**（入口解析 + argv + 退出码 + 截断
         标注），不判第三方转换质量 —— 后者不是本臂的判据面。

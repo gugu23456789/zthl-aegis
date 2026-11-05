@@ -336,7 +336,7 @@ fi
 if [ "$SNAP" = "1" ]; then
   {
     echo "# gk-accept 回归基线 v1（勿手改；用 \`bash scripts/_accept_cli.sh --snapshot\` 重建）"
-    echo "# runner: $PY"
+    echo "# runner: <local interpreter>（本机路径不入库；指纹见 _accept_baseline.txt.stamp）"
     echo "# scope:  $([ "$MODE" = full ] && echo 'scripts/ 全量' || echo "$MODE")"
     echo "# totals: ${SUM:-<unknown>}"
     printf '%s\n' "$CUR"

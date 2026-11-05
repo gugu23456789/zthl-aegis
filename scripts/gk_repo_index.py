@@ -42,11 +42,18 @@ ROOT = Path(HERE).parent
 FILES_MD = "FILES.md"
 LLMS_TXT = "llms.txt"
 ANNOTATIONS = "references/repo-index-annotations.json"
-_SKIP_DIRS = {".git", "__pycache__", "dist", ".venv", ".venv-accept", "node_modules", ".pytest_cache"}
+_SKIP_DIRS = {".git", "__pycache__", "dist", "node_modules", ".pytest_cache"}
 _SKIP_EXT = {".pyc", ".pyo", ".zip"}
 _HIDDEN_SKIP = {".gitignore", ".gitattributes"}
 # 生成物自身不进「输入文件集」（否则首次写入后集合变化 ⟹ 自我漂移，`--check` 永不收敛）。
 _SELF = {FILES_MD, LLMS_TXT}
+
+
+def _skip_dir(name: str) -> bool:
+    """目录跳过规则：固定名 + **任意 `.venv*`**（不绑定某一台的目录名）。"""
+    return name in _SKIP_DIRS or name.startswith(".venv")
+
+
 _TITLE = "ZTHL Aegis (智御)"
 _TAGLINE = "面向 AI 辅助软件工程的确定性治理层：门禁 + 阶段推进 + 审计/红队 + 证据留痕。"
 
@@ -72,13 +79,13 @@ def iter_files(root: Path = ROOT) -> list:
         rels = []
     if not rels:                                    # 导出树 / 无 git
         for dirpath, dirnames, filenames in os.walk(root):
-            dirnames[:] = sorted(d for d in dirnames if d not in _SKIP_DIRS)
+            dirnames[:] = sorted(d for d in dirnames if not _skip_dir(d))
             for name in filenames:
                 p = Path(dirpath) / name
                 rels.append(p.relative_to(root).as_posix())
     keep = []
     for rel in rels:
-        if any(part in _SKIP_DIRS for part in rel.split("/")):
+        if any(part in _SKIP_DIRS or part.startswith(".venv") for part in rel.split("/")):
             continue
         if Path(rel).suffix.lower() in _SKIP_EXT:
             continue

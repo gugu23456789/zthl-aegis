@@ -28,8 +28,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import gk_doc_align as gda
 import gk_route_center as grc
 
-# XENV-FORM（2026-09-27，环境性 failed 清单）：字面 Windows 路径在规范 runner（WSL
-# `/opt/spz-py312`）下不可达 ⟹ `git clone`/`copytree` 必败（实测 clone exit 128，本文件
+# XENV-FORM（2026-09-27，环境性 failed 清单）：字面 Windows 路径在规范 runner（WSL 侧
+# 隔离 venv）下不可达 ⟹ `git clone`/`copytree` 必败（实测 clone exit 128，本文件
 # 11 臂红/错）。改为**宿主自适应**（真目录在 `/mnt/c/…`；Windows 宿主原样命中）。
 REAL = Path(r"c:\Users\HP\.trae\skills\spz-gatekeeper-r-sequence")
 if not REAL.is_dir():

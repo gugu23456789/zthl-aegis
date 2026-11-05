@@ -2,7 +2,7 @@
 """红先臂：解释器解析**单源** `scripts/py_resolve.sh`（2026-11-01）。
 
 背景：解释器是**机器属性**——本机 WSL 有隔离 venv、Windows 侧另有同级 venv，公开包在别人
-机器上两者都没有。原实现把 `/opt/spz-py312/bin/python` 写进 CLI / 沙箱 / W2A 脚本 ⟹ 开源即炸
+机器上两者都没有。原实现把**某台机器的隔离 venv 绝对路径**写进 CLI / 沙箱 / W2A 脚本 ⟹ 开源即炸
 （或静默退化成无 pytest 的 python3 ⟹ 自检 quick 档假绿成 SKIP）。
 
 判据：
@@ -11,9 +11,10 @@
      仓内 .venv、`GK_PY_GLOBS` 通配、PATH 依次尝试，谁在位用谁）；
   3. 需求不满足时**回落** any 解释器（让 check_tests 显式 SKIP 并给原因，不解析失败炸掉）；
   4. 公开面**零绝对硬编码**：CLI / suagent_sandbox.sh / run_w2a_web_pyramid.sh 不得再出现
-     `/opt/spz-py312` 之类个人 venv 路径。
+     `<绝对路径>/<venv>/bin/python` 之类个人 venv 路径。
 """
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -123,14 +124,14 @@ def _windows_path(p):
 
 
 def test_discovers_venv_variant_windows_layout(tmp_path):
-    """仓内 `.venv-accept/Scripts/python.exe`（Windows 布局）也必须被发现。"""
-    winbin = tmp_path / ".venv-accept" / "Scripts"
+    """仓内 `.venv-win/Scripts/python.exe`（Windows 布局）也必须被发现。"""
+    winbin = tmp_path / ".venv-win" / "Scripts"
     if os.name == "nt":
         # Windows 不能执行「改名成 .exe 的 shell 脚本」（CI 实测 exit 1），也不宜只复制
         # python.exe（副本目录缺 DLL）。直接建一个真 venv：Scripts/python.exe + pyvenv.cfg
         # 就是生产形态，且不依赖 PATH。
         subprocess.run([sys.executable, "-m", "venv", "--without-pip",
-                        str(tmp_path / ".venv-accept")],
+                        str(tmp_path / ".venv-win")],
                        check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         shim = winbin / "python.exe"
         rc, out = _run(tmp_path, "any", {})
@@ -148,7 +149,8 @@ def test_discovers_venv_variant_windows_layout(tmp_path):
                                  "scripts/run_w2a_web_pyramid.sh"])
 def test_no_personal_venv_path_in_shipped_scripts(rel):
     text = (ROOT / rel).read_text(encoding="utf-8", errors="replace")
-    assert "/opt/spz-py312" not in text, "%s 仍写死个人 venv 路径（公开包会炸）" % rel
+    assert not re.search(r"/opt/[A-Za-z0-9_.-]+/bin/python", text), \
+        "%s 仍写死个人 venv 绝对路径（公开包会炸）" % rel
 
 
 def test_cli_delegates_to_single_resolver():

@@ -9,6 +9,6 @@
   "forbidden_paths": ["docs/", "references/", ".gitignore", "scripts/test_main_repo_guard.py", "scripts/test_gk_edit_budget_accounting.py"],
   "narrow_task_template": "修 {anchor}。**唯一允许的落点 = `gatekeeper-cli.sh` 的 `_log_block()` 函数体（含其内联 python 直写段）**。只允许把该处的「直写 state」改为**调用既有单一写入口**（CLI 内已存在的 `_state_write`）；**禁止新造写入器**；**禁止改动 `_state_write` / `_state_checksum_write` / `scripts/gk_state.py` 的本体**（那是兄弟族 F3b 的邻域，改了会跨族打架）；**禁止改动 `pre_tool_check()` 的计费段**。不改判据语义、不改函数签名、不碰任何其它函数。若确需测试，只允许**新增**一个测试文件（不得改动既有测试）。⚠ **判据自检**：若你发现 `test_first` 判据存在**注释盲**（把注释文本当代码站点）或**前置未验证**（判据可能真空通过/假红），在报告里点出并附一行复现 —— 但**仍须先落刀**。⚠ **落点核对（落刀前先做）**：本族落点**只锁** `_log_block()`；若 finding 的病象涉及**其它** state 直写站点或属**多站点**计数类，**停手报人**（须**扩族/开新族**，勿改他处）—— 这是 `ECC-68A8EDFA4E40`「按错落点落刀」的直接教训。",
   "test_first": "scripts/test_gk_state_write_single_entry.py::test_log_block_write_recomputes_checksum",
-  "verify_cmd": "bash -c 'cd \"$PWD\" && /opt/spz-py312/bin/python -m pytest scripts/test_gk_state_write_single_entry.py -q'  # cwd=本工作树根（coder 的 worktree，**不再**写死家目录绝对路径：绝对家目录会触发 foreign_content_guard 白名单误判，见 ECC-8D46F2B1C0A4；原写死主树路径还导致「验证跑在主树而非自己的 worktree」）",
+  "verify_cmd": "bash -c 'cd \"$PWD\" && python3 -m pytest scripts/test_gk_state_write_single_entry.py -q'  # cwd=本工作树根（coder 的 worktree，**不再**写死家目录绝对路径：绝对家目录会触发 foreign_content_guard 白名单误判，见 ECC-8D46F2B1C0A4；原写死主树路径还导致「验证跑在主树而非自己的 worktree」）",
   "affected_tests": ["scripts/test_gk_state_write_single_entry.py"]
 }

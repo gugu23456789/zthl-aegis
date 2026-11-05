@@ -58,8 +58,8 @@ _add "${ACCEPT_PY:-}"
 if [ -f "$_root/scripts/_accept_py.local" ]; then
   # 2026-11-02（owner 裁定「Windows 也要能用」）：本机 pin 支持**按平台标记**，不再是单行裸路径。
   #   格式（一行一条，`#` 注释可留）：
-  #     win:  C:/…/.venv-accept/Scripts/python.exe     ← Windows（Git Bash / MSYS）
-  #     wsl:  /opt/spz-py312/bin/python                ← WSL / Linux
+  #     win:  <venv>/Scripts/python.exe     ← Windows（Git Bash / MSYS）
+  #     wsl:  <venv>/bin/python             ← WSL / Linux
   #     或一条**不带标记**的裸路径 = 通吃（向后兼容旧文件）
   #   为什么必须分平台：原来只有一行 `head -1` ⟹ Windows 上读到 WSL 路径直接返回 ⟹
   #   `_accept_cli.sh` 拿一个不存在的解释器跑 pytest（失败方向还伪装成"环境性红"）。
@@ -91,8 +91,8 @@ if [ -f "$_root/scripts/_accept_py.local" ]; then
     esac
   done < "$_root/scripts/_accept_py.local"
 fi
-# 仓内 venv 变体（`.venv` / `.venv-accept` / `.venv-*`）：POSIX `bin/` 与 Windows `Scripts/`
-#   两种布局都发现。2026-11-01：原只看 `.venv` ⟹ Windows 侧 `.venv-accept` 永不被选中，
+# 仓内 venv 变体（`.venv` / 任意 `.venv-*`）：POSIX `bin/` 与 Windows `Scripts/`
+#   两种布局都发现。2026-11-01：原只看 `.venv` ⟹ Windows 侧 venv 变体永不被选中，
 #   子代理只能落到 WSL 解释器（混血根源之一）。
 # 2026-11-02：**worktree 场景补主树回落**。`.venv*` 在 gitignore 里 ⟹ 不随 worktree 派生 ⟹
 #   在 worktree 里只看 `$_root` 会一个都找不到，直接掉到 PATH 的任意 python3（本机实测：

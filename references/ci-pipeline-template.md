@@ -387,6 +387,9 @@ security-audit:
   必须**存在**，或登记在 `references/ci-external-paths.json`（每条带 reason；glob 无引用判过期）。
   事故：公开 `ci.yml` 引用 `docs/analysis/bomb-inventory-*.json`，而 `docs/` 是导出排除面
   ⟹ 公开 CI 恒红，私仓 preflight 却永远绿。
+- **本机环境名不进公开包**（2026-11-05，`LOCAL_ENV_SUBS`）：导出副本把某台机器的
+  venv 绝对路径 / 目录名中性化为 `python3` / `<venv>` / `.venv`；私仓保留真路径（锚点可跑）。
+  守卫臂：`test_oss_scrub.py::test_public_surface_has_no_local_env_names`。
 - **导出树自动预检**（2026-11-05）：`oss_scrub.py export` 在导出产物上再跑一次
   `gk_release_preflight.py`（`PREFLIGHT OK / SKIP`，失败 fail-loud；`--skip-preflight` 仅预演），
   把「公开面独有的红」提前到本地，而不是等 tag 推上去。
