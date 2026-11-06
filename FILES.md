@@ -3,7 +3,7 @@
 > 生成器：`scripts/gk_repo_index.py --write`；漂移由 `gk_release_preflight.py` 的 `repo_index` 项守。
 > 用途：**移动端**（GitHub App 没有 “Go to file”）与抓取工具一次拿到全量路径；点路径直达文件。
 
-**共 823 个文件。**
+**共 842 个文件。**
 
 ## 索引生成物
 
@@ -12,12 +12,12 @@
 
 ## 根目录
 
-- [.gatekeeper.state.own_user](.gatekeeper.state.own_user) — 文件
 - [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) — 贡献者公约（Contributor Covenant v2.1 精简版）
 - [CONTRIBUTING.md](CONTRIBUTING.md) — Contributing / 参与贡献
 - [CONVENTIONS.md](CONVENTIONS.md) — SPZ Gatekeeper Skill — Git 管理规范
 - [LICENSE](LICENSE) — Mulan PSL v2 许可正本
 - [MAINTENANCE.md](MAINTENANCE.md) — Maintenance Status / 维护状态
+- [PROVENANCE.md](PROVENANCE.md) — 来源声明（Provenance）
 - [README.en.md](README.en.md) — 英文自述（English README）
 - [README.md](README.md) — 项目自述：门禁做什么、怎么装、插件与治理边界
 - [SECURITY.md](SECURITY.md) — 安全问题私下披露渠道
@@ -31,8 +31,10 @@
 
 - [.github/ISSUE_TEMPLATE/bug.yml](.github/ISSUE_TEMPLATE/bug.yml) — CI 配置
 - [.github/pull_request_template.md](.github/pull_request_template.md) — 文件
+- [.github/workflows/bench-nightly.yml](.github/workflows/bench-nightly.yml) — CI 配置
 - [.github/workflows/ci.yml](.github/workflows/ci.yml) — CI 配置
 - [.github/workflows/release.yml](.github/workflows/release.yml) — CI 配置
+- [.github/workflows/zenodo-archive.yml](.github/workflows/zenodo-archive.yml) — CI 配置
 
 ## RELEASE-NOTES/
 
@@ -40,6 +42,23 @@
 - [RELEASE-NOTES/RELEASE-NOTES-v0.9.4.2.md](RELEASE-NOTES/RELEASE-NOTES-v0.9.4.2.md) — ZTHL Aegis v0.9.4.2 — 发布说明
 - [RELEASE-NOTES/RELEASE-NOTES-v0.9.4.3.md](RELEASE-NOTES/RELEASE-NOTES-v0.9.4.3.md) — ZTHL Aegis v0.9.4.3 — 发布说明
 - [RELEASE-NOTES/RELEASE-NOTES-v0.9.4.md](RELEASE-NOTES/RELEASE-NOTES-v0.9.4.md) — ZTHL Aegis v0.9.4 — 发布说明
+- [RELEASE-NOTES/RELEASE-NOTES-v0.9.5.md](RELEASE-NOTES/RELEASE-NOTES-v0.9.5.md) — v0.9.5 发布说明
+- [RELEASE-NOTES/RELEASE-NOTES-v0.9.6.1.md](RELEASE-NOTES/RELEASE-NOTES-v0.9.6.1.md) — v0.9.6.1 发布说明
+- [RELEASE-NOTES/RELEASE-NOTES-v0.9.6.10.md](RELEASE-NOTES/RELEASE-NOTES-v0.9.6.10.md) — v0.9.6.10 发布说明
+- [RELEASE-NOTES/RELEASE-NOTES-v0.9.6.11.md](RELEASE-NOTES/RELEASE-NOTES-v0.9.6.11.md) — v0.9.6.11 发布说明
+- [RELEASE-NOTES/RELEASE-NOTES-v0.9.6.12.md](RELEASE-NOTES/RELEASE-NOTES-v0.9.6.12.md) — v0.9.6.12 发布说明
+- [RELEASE-NOTES/RELEASE-NOTES-v0.9.6.13.md](RELEASE-NOTES/RELEASE-NOTES-v0.9.6.13.md) — v0.9.6.13 发布说明
+- [RELEASE-NOTES/RELEASE-NOTES-v0.9.6.14.md](RELEASE-NOTES/RELEASE-NOTES-v0.9.6.14.md) — ZTHL Aegis v0.9.6.14
+- [RELEASE-NOTES/RELEASE-NOTES-v0.9.6.2.md](RELEASE-NOTES/RELEASE-NOTES-v0.9.6.2.md) — v0.9.6.2 发布说明
+- [RELEASE-NOTES/RELEASE-NOTES-v0.9.6.3.md](RELEASE-NOTES/RELEASE-NOTES-v0.9.6.3.md) — v0.9.6.3 发布说明
+- [RELEASE-NOTES/RELEASE-NOTES-v0.9.6.4.md](RELEASE-NOTES/RELEASE-NOTES-v0.9.6.4.md) — v0.9.6.4 发布说明
+- [RELEASE-NOTES/RELEASE-NOTES-v0.9.6.5.md](RELEASE-NOTES/RELEASE-NOTES-v0.9.6.5.md) — v0.9.6.5 发布说明
+- [RELEASE-NOTES/RELEASE-NOTES-v0.9.6.6.md](RELEASE-NOTES/RELEASE-NOTES-v0.9.6.6.md) — v0.9.6.6 发布说明
+- [RELEASE-NOTES/RELEASE-NOTES-v0.9.6.7.md](RELEASE-NOTES/RELEASE-NOTES-v0.9.6.7.md) — v0.9.6.7 发布说明
+- [RELEASE-NOTES/RELEASE-NOTES-v0.9.6.8.md](RELEASE-NOTES/RELEASE-NOTES-v0.9.6.8.md) — v0.9.6.8 发布说明
+- [RELEASE-NOTES/RELEASE-NOTES-v0.9.6.9.md](RELEASE-NOTES/RELEASE-NOTES-v0.9.6.9.md) — v0.9.6.9 发布说明
+- [RELEASE-NOTES/RELEASE-NOTES-v0.9.6.md](RELEASE-NOTES/RELEASE-NOTES-v0.9.6.md) — v0.9.6 发布说明
+- [RELEASE-NOTES/RELEASE-NOTES-v0.9.7.md](RELEASE-NOTES/RELEASE-NOTES-v0.9.7.md) — ZTHL Aegis v0.9.7
 
 ## THIRD_PARTY_LICENSES/
 

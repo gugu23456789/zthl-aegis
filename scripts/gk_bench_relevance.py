@@ -26,7 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import gk_moa_aggregate as M  # noqa: E402
 
 _FIELDS = {"conclusion": 1.0, "evidence": 1.5, "sources": 1.0}
-KNOWN_ECC = {"ECC-1E37E2BFCC8C"}   # 基准内"台账真实存在"的 id；伪造 id 不在此集合
+KNOWN_ECC = {"ECC-0123456789AB"}   # 基准内的示例 id（自包含；伪造 id 不在此集合）
 
 CORPUS = [
     {"conclusion": "S2 声称 red.keyleak 提供 ledger=False，但 scripts/gk_red_keyleak.py 全文无 ledger 形参。",
@@ -37,9 +37,9 @@ CORPUS = [
      "evidence": ["ci_smoke.sh 需新增 sdk-contract 行", "ci.yml 需加 job"],
      "sources": ["scripts/ci_smoke.sh:78", ".github/workflows/ci.yml:31"]},
     {"conclusion": "META worktree_needed=false 与 guard-edit 事实冲突；edit_budget 已用 35/24。",
-     "evidence": ["主树编辑被 guard-edit 拒绝"], "sources": ["docs/plans/2026-11-05-sdk-ification-plan.md:7"]},
+     "evidence": ["主树编辑被 guard-edit 拒绝"], "sources": ["docs/plans/example-plan.md:7"]},
     {"conclusion": "P0 六动词覆盖不足：analysis §5 的 12 候选只取一半，budget.get/audit.summary 未排除。",
-     "evidence": ["六动词只覆盖候选一半"], "sources": ["docs/analysis/2026-11-05-sdk-readiness-408.md:83"]},
+     "evidence": ["六动词只覆盖候选一半"], "sources": ["docs/analysis/example-analysis.md:83"]},
     {"conclusion": "evidence_id 由 gk_evidence.py:77 的 sha256 派生，生成零写；但与每响应可回查冲突。",
      "evidence": ["evidence_id 生成零写"], "sources": ["scripts/gk_evidence.py:77"]},
     {"conclusion": "plan.lint 只有 main()（argparse 绑定，rc=1 承载判据）；repo_index.check 依赖全树 files 计数。",
@@ -52,7 +52,7 @@ CASES = [
     ("normal_evidence", "evidence",
      "scripts/gk_red_keyleak.py:329 里没有 ledger 形参，S2 的 ledger=False 说法不成立", True),
     ("normal_cite", "evidence",
-     "docs/plans/2026-11-05-sdk-ification-plan.md:78 与 §5 回滚声明矛盾", True),
+     "docs/plans/example-plan.md:78 与 §5 回滚声明矛盾", True),
     ("normal_terms", "evidence",
      "S4 漂移门要改 ci_smoke.sh:78 与 ci.yml:31，回滚不是纯新增", True),
     ("normal_evidence_id", "evidence",
@@ -81,7 +81,7 @@ CASES = [
     ("meta_plm", "meta", "P/L/M 三条都认可，先修 L 再跑", False),
     ("meta_score", "meta", "这次六臂的一致度我打 0.7", False),
     # 合法人评：引用**真实存在**的 ECC id ⟹ 身份锚（不要求 token 重叠）
-    ("ecc_verdict", "meta+identity", "ECC-1E37E2BFCC8C 认可 P/L/M 建议，计划需拆分", True),
+    ("ecc_verdict", "meta+identity", "ECC-0123456789AB 认可 P/L/M 建议，计划需拆分", True),
     # ── 硬负例：共享 token、但无行号证据（NotInject 风格）──
     ("hard_praise", "hard_negative", "evidence_id 由 sha256 派生这点没问题", False),
     ("hard_question", "hard_negative", "S4 契约漂移门需要改 ci_smoke.sh 吗", False),
