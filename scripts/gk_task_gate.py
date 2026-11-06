@@ -950,6 +950,12 @@ def main(argv=None) -> int:
     c.add_argument("--state", default="",
                    help="state 文件：读入队上下文（r_phase / project_type）作相位绑定")
 
+    ns = sub.add_parser("narrow-status", help="窄任务就绪度（只读；preflight 可观测用）")
+    ns.add_argument("--state", default="")
+    ns.add_argument("--plan", default="", help="按该 plan 归属过滤 state 全局清单")
+    ns.add_argument("--narrow-tasks-file", default="")
+    ns.add_argument("--k", type=int, default=2, help="每组臂数 K（need = 3×K）")
+
     s = sub.add_parser("submit", help="追加 pending 记录（记录 JSON 自 stdin；调用方持锁）")
     s.add_argument("--state", required=True)
     s.add_argument("--count", type=int, default=1,
@@ -997,6 +1003,38 @@ def main(argv=None) -> int:
     args = p.parse_args(sys.argv[1:] if argv is None else argv)
 
     try:
+        if args.cmd == "narrow-status":
+            # 2026-11-05（可观测性）：只读就绪度 —— 让 `--check-only` 与 `--run` 都能提前显示
+            # 「派发门」状态（此前只在 submit 时 fail-closed，预检看起来全绿）。
+            # 2026-11-05 二修（用户指「408 research → 窄任务有断链」）：**数量够 ≠ 合格**。
+            #   原实现只比条数 ⟹ 6 条但组别写错时，预检仍报 READY，到 submit 才 narrow_groups_invalid。
+            #   现复用 `validate_group_constraints`（单源）同时给出 groups_ok + violations。
+            k = args.k if args.k and args.k >= 1 else 2
+            need = 3 * k
+            if args.narrow_tasks_file:
+                nt, _m = load_narrow_tasks_meta(args.narrow_tasks_file)
+                coverage = _m.get("coverage_target")
+                src = "sidecar"
+            else:
+                d = load_state(args.state) if args.state else {}
+                gd = (d.get("gate_data") or {})
+                nt = narrow_tasks_for_scope(gd.get("narrow_tasks") or [], args.plan)
+                coverage = gd.get("narrow_coverage_target")
+                src = "state_scoped" if args.plan else "state"
+            got = len(nt) if isinstance(nt, list) else 0
+            ready = got >= need
+            from gk_narrow_route import validate_group_constraints
+            cons = (validate_group_constraints(nt, coverage, None, min_k=k)
+                    if isinstance(nt, list) and nt else
+                    {"mode": "legacy", "ok": True, "violations": []})
+            groups_ok = bool(cons.get("ok"))
+            print(json.dumps({"ok": ready and groups_ok, "ready": ready,
+                              "groups_ok": groups_ok, "need": need, "got": got,
+                              "source": src, "k": k, "mode": cons.get("mode"),
+                              "violations": (cons.get("violations") or [])[:5],
+                              "fallback_allowed": os.environ.get("GK_ALLOW_GROUP_FALLBACK") == "1"},
+                             ensure_ascii=True))
+            return 0 if (ready and groups_ok) else (2 if ready else 1)
         if args.cmd == "check":
             out = check(args.task, args.target, args.source_docs, args.acknowledge)
             if args.emit_record and not out["blocked"]:

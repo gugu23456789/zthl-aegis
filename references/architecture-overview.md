@@ -17,7 +17,7 @@ updated: 2026-11-02
 <!-- GK-FACTS:START（由 scripts/gk_docgen_facts.py 生成，勿手改） -->
 | 事实 | 值 | 来源（可复算） |
 |:--|:--|:--|
-| CLI 行数 | 12391 | `wc -l gatekeeper-cli.sh` |
+| CLI 行数 | 12449 | `wc -l gatekeeper-cli.sh` |
 | CLI 命令数 | 52 | `^_CMD_REG[` 计数 |
 | 红队站点 | 16 | `gk_chain.py` 的 `Step("RED-*")` |
 | 自检检查函数 | 37 | `gk_self_check.py` 的 `def check_*` |

@@ -288,7 +288,8 @@ def main(argv=None) -> int:
     rp.add_argument("--only", action="append", default=[], metavar="NODE[,NODE...]")
     rp.add_argument("--from", dest="start", default="", metavar="NODE")
     rp.add_argument("--to", dest="end", default="", metavar="NODE")
-    rp.add_argument("--dry-run", action="store_true", help="advance --check（零 state 写）")
+    rp.add_argument("--dry-run", action="store_true",
+                    help="只打印计划、不执行（零 state 写；不追加 --check，见 build_argv 注）")
     rp.add_argument("--state", default="", help="STATE_FILE（缺省用环境变量/CLI 默认）")
     rp.add_argument("--json", action="store_true")
 

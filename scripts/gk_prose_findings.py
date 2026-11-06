@@ -44,7 +44,8 @@ def _severity(text: str) -> str:
 
 
 def convert(prose: str, *, plan: str = "", batch: str = "",
-            refs=None, min_score: float = 0.0) -> list[dict]:
+            refs=None, min_score: float = 0.0,
+            require_structural: bool = True, known_findings=None) -> list[dict]:
     """散文 → findings 列表。确定性：同输入同输出。
 
     `refs` 非空时启用**相关性闸**（锚定硬下限 + BM25；默认输入即污染）：每条须与批内
@@ -68,9 +69,13 @@ def convert(prose: str, *, plan: str = "", batch: str = "",
         rk = "prose:" + hashlib.sha256(_key_src.encode("utf-8")).hexdigest()[:16]
         facets = (["carrier:" + carrier] if carrier else []) + ["classification:" + cls]
         if refs is not None and relevance_judge is not None:
-            j = relevance_judge(title, refs, min_score=min_score)
+            j = relevance_judge(title, refs, min_score=min_score,
+                                require_structural=require_structural,
+                                known_findings=known_findings)
             facets += ["relevance:" + ("in" if j["in"] else "out"),
-                       "bm25:%s" % j["bm25"], "anchor:%d" % j["anchor"]]
+                       "bm25:%s" % j["bm25"], "anchor:%d" % j["anchor"],
+                       "evidence:" + ("strong" if (j.get("structural") or {}).get("ok")
+                                      else "weak")]
             if j.get("weak"):
                 facets.append("relevance:weak")
         # `source = "prose"`（`ECC-E844E67E64A5`，2026-10-16）：原硬编码 `review` 与 **MoA 聚合

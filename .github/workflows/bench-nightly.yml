@@ -7,7 +7,9 @@ name: bench-nightly
 #   · 基线**只新增版本/人工更新**，CI 不自动改基线（自动改写会让门禁变成自证）；
 #   · full 结果与对比 JSON 全量上传，供下一版本人工复核后 `--init-baseline` 滚动。
 on:
-  schedule: [{cron: "0 19 * * *"}]        # UTC 19:00 = Asia/Shanghai 03:00
+  # 2026-11-06（用户裁定）：full 基准改**本地跑**（`python scripts/gk_bench_*.py --full`）。
+  #   定时跑实测为假红来源（11-03 / 11-05 红、11-04 手动绿，期间仅文档提交）；
+  #   保留手动入口供发版前复核。
   workflow_dispatch:
 
 permissions:

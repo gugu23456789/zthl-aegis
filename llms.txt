@@ -8,7 +8,6 @@
 - [CONTRIBUTING.md](CONTRIBUTING.md): Contributing / 参与贡献
 - [CONVENTIONS.md](CONVENTIONS.md): SPZ Gatekeeper Skill — Git 管理规范
 - [MAINTENANCE.md](MAINTENANCE.md): Maintenance Status / 维护状态
-- [PROVENANCE.md](PROVENANCE.md): 来源声明（Provenance）
 - [README.en.md](README.en.md): 英文自述（English README）
 - [README.md](README.md): 项目自述：门禁做什么、怎么装、插件与治理边界
 - [SECURITY.md](SECURITY.md): 安全问题私下披露渠道

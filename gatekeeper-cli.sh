@@ -1790,6 +1790,16 @@ $1
 gd=json.dumps(d.get('gate_data',{}),sort_keys=True)
 d['_checksum']=hashlib.sha256(gd.encode()).hexdigest()[:16]
 dump_state(os.environ['GK_PY_STATE'], d)
+# 2026-11-06（用户令「加个校验」）：**写后回读校验**。本函数 stderr 被 2>/dev/null 吞掉，
+#   载荷一旦语法错（如双引号提前闭合 shell 串）会**静默不落盘**（实测 p_meta 冻结丢失）。
+#   回读 gate_data 与写前规范形比对；不一致 ⟹ 落旁挂 `<state>.write-error`（不被吞）+ rc=3。
+_back=json.load(open(os.environ['GK_PY_STATE'],encoding='utf-8'))
+if json.dumps(_back.get('gate_data',{}),sort_keys=True)!=gd:
+    with open(os.environ['GK_PY_STATE']+'.write-error','a',encoding='utf-8') as _ef:
+        import datetime as _dt
+        _ef.write(_dt.datetime.utcnow().isoformat()+'Z verify_failed\n')
+    _lk.__exit__(None, None, None)
+    sys.exit(3)
 _lk.__exit__(None, None, None)
 " 2>/dev/null
 }
@@ -9558,6 +9568,14 @@ print(json.dumps({"ok": bool(e and e.get("ok") and a and a.get("ok")), "run": Tr
   printf '%s\n' "$_env_out"
 }
 
+# 2026-11-05（可观测性，用户令「复杂长链必须每一步可观测」「触发了什么门就打印什么门」）：
+#   门禁/前置的**显式播报**。只写 stderr（不污染 stdout 的 JSON 契约），格式固定便于 grep/CI 断言：
+#     [gate] PW-SN        — PASS (findings=0)
+#     [gate] PW-NARROW    — NOT_READY (0/6, state_scoped)
+_gk_gate_note() {
+  printf '[gate] %-12s — %s%s\n' "${1:-?}" "${2:-?}" "${3:+ ($3)}" >&2
+}
+
 cmd_plan_refinement() {
   local target="" task="" source_docs="" check_only=false tier="" task_from_plan=false
   local adjudicate_id="" decision="" note="" list_pending=false acknowledge=""
@@ -10109,11 +10127,41 @@ except Exception:
     pl_skipped="true"
     echo "[plan-lint] skipped (GK_PLAN_LINT_GATE=0) plan=$plan_path" >> "$GK_DBG_LOG"
   fi
+  # 2026-11-05：PW-SN 的**结果**必须可见（此前只在阻断时打一行 JSON，通过/跳过全程静默）。
+  if [ "$pl_skipped" = "true" ]; then
+    _gk_gate_note "PW-SN" "SKIPPED" "GK_PLAN_LINT_GATE=0"
+  elif [ "$pl_rc" = "0" ]; then
+    _gk_gate_note "PW-SN" "PASS" "findings=0"
+  else
+    _gk_gate_note "PW-SN" "BLOCKED" "high/medium>0 rc=$pl_rc"
+  fi
+  # ── PW-NARROW（派发门）就绪度前移：此前只在 submit 时 fail-closed，`--check-only` 看起来全绿 ──
+  local narrow_json="{}" _nk="${arms_per_group:-${GK_PLAN_REFINE_ARMS_PER_GROUP:-2}}"
+  case "$_nk" in ''|*[!0-9]*) _nk=2 ;; esac
+  [ "$_nk" -lt 1 ] 2>/dev/null && _nk=1
+  if [ -n "$plan_path" ]; then
+    local -a _ns_args=(--state "$STATE_FILE" --plan "$plan_path" --k "$_nk")
+    [ -n "$_narrow_sidecar" ] && _ns_args+=(--narrow-tasks-file "$_narrow_sidecar")
+    narrow_json=$(python3 "$SKILL_DIR/scripts/gk_task_gate.py" narrow-status "${_ns_args[@]}" 2>>"$GK_DBG_LOG" || true)
+    [ -z "$narrow_json" ] && narrow_json="{}"
+  fi
+  case "$narrow_json" in
+    *'"groups_ok": false'*)
+      _gk_gate_note "PW-NARROW" "INVALID" "$(printf '%s' "$narrow_json" | sed -n 's/.*"violations": \[{"rule": "\([a-z_]*\)".*/\1/p')（6 条齐但组约束不过，见 preflight.narrow）" ;;
+    *'"ready": true'*)
+      _gk_gate_note "PW-NARROW" "READY" \
+        "$(printf '%s' "$narrow_json" | sed -n 's/.*"need": *\([0-9]*\).*"got": *\([0-9]*\).*/\2\/\1/p')" ;;
+    *'"got"'*)
+      _gk_gate_note "PW-NARROW" "NOT_READY" \
+        "$(printf '%s' "$narrow_json" | sed -n 's/.*"need": *\([0-9]*\).*"got": *\([0-9]*\).*/\2\/\1/p')$(printf '%s' "$narrow_json" | sed -n 's/.*"source": *"\([a-z_]*\)".*/, \1/p')" ;;
+    *) : ;;
+  esac
   local missing_json; missing_json=$(python3 -c "import json,sys;print(json.dumps(sys.argv[1].split(',') if sys.argv[1] else []))" "$missing_items" 2>/dev/null || echo "[]")
-  local preflight_json="{\"target\":\"$target\",\"plan_path\":\"$plan_path\",\"has_meta\":$has_meta,\"checkpoint\":\"$ckpt\",\"adjudicate_seal\":\"$adjudicate_seal\",\"missing\":$missing_json,\"warnings\":$pf_warn_json,\"plan_lint\":$pl_json,\"plan_lint_skipped\":$pl_skipped,\"hint\":\"$hint\"}"
+  local preflight_json="{\"target\":\"$target\",\"plan_path\":\"$plan_path\",\"has_meta\":$has_meta,\"checkpoint\":\"$ckpt\",\"adjudicate_seal\":\"$adjudicate_seal\",\"missing\":$missing_json,\"warnings\":$pf_warn_json,\"plan_lint\":$pl_json,\"plan_lint_skipped\":$pl_skipped,\"narrow\":$narrow_json,\"hint\":\"$hint\"}"
 
   # ── plan_doc / meta 缺失 → 阻塞（质询对象无效，禁止带缺开始）──
   if [ -z "$plan_path" ] || [ "$has_meta" != "true" ]; then
+    _gk_gate_note "PW-PLAN" "BLOCKED" "plan_doc/meta missing"
     echo "{\"ok\":false,\"error\":\"preflight blocked: plan_doc/meta missing\",\"preflight\":$preflight_json}"
     return 1
   fi
@@ -10283,6 +10331,13 @@ except Exception:
   fi
   _sub_out=$(printf '%s' "$_gate_out" | python3 "${SKILL_DIR}/scripts/gk_task_gate.py" submit "${_sub_args[@]}" 2>>"$GK_DBG_LOG") || _sub_rc=$?
   if [ "$_sub_rc" != "0" ] || [ -z "$_sub_out" ]; then
+    # 2026-11-05（可观测性）：派发门失败必须点名（此前只打 payload，用户看不出是哪道门）。
+    case "$_sub_out" in
+      *narrow_tasks_insufficient*|*narrow_tasks_file_insufficient*|*narrow_groups_invalid*)
+        _gk_gate_note "PW-NARROW" "BLOCKED" "narrow_*（明细见下方 payload）" ;;
+      "") _gk_gate_note "PW-TASKGATE" "FAILED" "rc=$_sub_rc 无输出" ;;
+      *)  _gk_gate_note "PW-TASKGATE" "FAILED" "rc=$_sub_rc" ;;
+    esac
     # T10：submit 越双墙时回 `pipeline_over_wall`+`over`轴+`hint`（rc≠0 且 stdout 非空）⟹
     #   透传该结构化原因（否则被通用文案吞掉，调用方看不到「pending 越墙」与出口指引）。
     if [ -n "$_sub_out" ]; then
@@ -12113,6 +12168,9 @@ if _e:
     cl=d.setdefault('gate_data',{}).setdefault('human_calibration_log',[])
     cl.append(_e)
     del cl[:-50]
+    _pm=_e.get('p_meta_freeze') or {}
+    if _pm.get('batch') and _pm.get('value') is not None:
+        d.setdefault('gate_data',{}).setdefault('kappa_p_meta',{}).setdefault(_pm['batch'], {'value': _pm['value'], 'ts': _e.get('timestamp')})
 " 2>/dev/null || true
   [ -f "$STATE_FILE" ] && _state_checksum_write
   printf '%s\n' "$_out"

@@ -29,6 +29,7 @@ Exit codes:
 import argparse
 import json
 import os
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -125,6 +126,30 @@ def _read_json_arg(inline: str, file_path: str):
     return _loads_tolerant(inline)
 
 
+def _p_meta_freeze(state_path: str, stage: str, div: float) -> dict:
+    """p_meta 冻结（2026-11-06）：把人评 divergence 绑到**该批**，供 κ 的 p_meta 通道读取。
+
+    批号从 `stage`（ECC fid）对应 finding 的 `batch:<12hex>` facet 解析；
+    解析不到 / 非 ECC stage / divergence 无效 ⟹ 返回 `{}`（**不猜、不冻结**）。
+    本函数只读 state（与 adjudicate 的 R17-R6 契约一致），落盘由 CLI `_state_write` 单点完成。
+    """
+    if not stage or not str(stage).startswith("ECC-") or div < 0:
+        return {}
+    try:
+        import gk_finding
+        for f in gk_finding.load_findings_union(state_path):
+            if str(f.get("id")) != str(stage):
+                continue
+            for x in (f.get("facets") or []):
+                s = str(x)
+                if s.startswith("batch:") and re.fullmatch(r"[0-9a-f]{12}", s[6:]):
+                    return {"batch": s[6:], "value": round(float(div), 4)}
+            return {}
+    except Exception:  # noqa: BLE001 — 解析失败不冻结（禁猜）
+        return {}
+    return {}
+
+
 def adjudicate(
     verdicts: dict,
     score: float,
@@ -218,6 +243,7 @@ def adjudicate(
         recorded_to = impact
 
     # Build calibration entry（**回传 CLI**；本文件不落盘 —— R17-R6）
+    _pm = _p_meta_freeze(state_path, stage, div)
     entry = {
         "timestamp": ts or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "stage": stage,
@@ -233,6 +259,7 @@ def adjudicate(
         "change_items": change_items,
         "constraint_level": constraint_level,
         "blind": blind,
+        "p_meta_freeze": _pm,
     }
 
     # 输出信封：**保留旧键**（值与内联等价）+ **新增键**（A13/R7 owner 裁定 2026-09-28）

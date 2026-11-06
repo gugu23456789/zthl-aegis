@@ -308,3 +308,61 @@ class TestNarrowTaskSourceBinding:
         assert '--narrow-tasks-file "$_narrow_sidecar"' in blk, "入队端未接 sidecar"
         assert "GK_NARROW_SIDECAR" in blk, "fan-out 端未接 sidecar"
         assert "--narrow-scope" in blk, "无 sidecar 时未按 plan 归属过滤"
+
+
+class TestNarrowStatusObservability:
+    """2026-11-05（用户令「不能静默 / 每一步可观测」）：派发门就绪度必须**提前**可见。
+
+    此前 `--check-only` 不评估窄任务门 ⟹ 预检全绿、`--run` 到 submit 才 fail-closed，
+    且错误面上没有「这是哪道门」的播报。
+    """
+
+    def _run(self, sidecar, k=2):
+        return subprocess.run(
+            [sys.executable, str(HERE / "gk_task_gate.py"), "narrow-status",
+             "--narrow-tasks-file", str(sidecar), "--k", str(k)],
+            capture_output=True, text=True)
+
+    def test_ready_from_sidecar(self, tmp_path):
+        side = tmp_path / "p.narrow.json"
+        side.write_text(json.dumps({"narrow_tasks": [
+            {"id": "t%d" % i, "task": "x", "plan": "p.md"} for i in range(6)]}),
+            encoding="utf-8")
+        r = self._run(side)
+        d = json.loads(r.stdout)
+        assert r.returncode == 0, r.stderr
+        assert d["ready"] is True and d["need"] == 6 and d["got"] == 6
+        assert d["source"] == "sidecar"
+
+    def test_not_ready_is_reported(self, tmp_path):
+        side = tmp_path / "p.narrow.json"
+        side.write_text(json.dumps({"narrow_tasks": [
+            {"id": "t0", "task": "x", "plan": "p.md"}]}), encoding="utf-8")
+        r = self._run(side)
+        d = json.loads(r.stdout)
+        assert r.returncode == 1
+        assert d["ready"] is False and d["got"] == 1 and d["need"] == 6
+
+    def test_groups_invalid_is_reported(self, tmp_path):
+        """数量够（6/6）但组别不合法 ⟹ ready=True / groups_ok=False / rc=2（不再假 READY）。"""
+        side = tmp_path / "p.narrow.json"
+        side.write_text(json.dumps({
+            "coverage_target": [1, 2],
+            "narrow_tasks": [
+                {"id": "q%d" % i, "group": "Q%d" % i, "covers": [1],
+                 "task": "verdict=可行 SOURCES: x", "plan": "p.md"} for i in range(6)]}),
+            encoding="utf-8")
+        r = self._run(side)
+        d = json.loads(r.stdout)
+        assert r.returncode == 2, r.stdout
+        assert d["ready"] is True and d["groups_ok"] is False
+        assert d["violations"], "组不合法必须给出 violations"
+        assert d["violations"][0]["rule"] in ("unknown_group", "mixed_group_mode")
+
+    def test_cli_emits_gate_notes(self):
+        """CLI 必须在 preflight 与 submit 失败处打印 `[gate] …`（stderr，不出现在 stdout JSON）。"""
+        src = CLI.read_text(encoding="utf-8")
+        assert "_gk_gate_note" in src
+        for name in ('"PW-SN"', '"PW-NARROW"', '"PW-PLAN"'):
+            assert name in src, name
+        assert "narrow-status" in src, "preflight 未接入窄任务就绪度"

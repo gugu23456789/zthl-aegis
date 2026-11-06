@@ -1185,7 +1185,11 @@ def _extend_unique(rec: dict, key: str, xs) -> None:
 _SCALAR_FACET_NS = ("classification", "carrier", "refs", "clusters", "weight", "class-tie",
                     # 2026-10-10（ECC-0BA041A4284E）：MoA 聚合 finding 的**身份 facet**
                     #   （batch/plan/cross-batch）同为标量 —— 同 root_key 重跑须后写覆盖，禁叠加。
-                    "batch", "plan", "cross-batch")
+                    "batch", "plan", "cross-batch",
+                    # 2026-11-06（p_meta 通道启用）：tilt / tilt-state / p_meta 同为批级标量 ⟹
+                    #   同 root_key 重跑后写覆盖。原缺失导致 `tilt:0.290` 与 `tilt:0.000` 并存，
+                    #   下游趋势读侧会取到陈旧值。
+                    "tilt", "tilt-state", "p_meta")
 
 
 def _merge_facets(rec: dict, xs) -> None:

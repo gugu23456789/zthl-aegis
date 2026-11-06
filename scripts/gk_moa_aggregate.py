@@ -1122,6 +1122,25 @@ def _refs_of(obj) -> list:
     return (obj.get("gate_data") or {}).get("subagent_history") or []
 
 
+def _p_meta_map(state_file) -> dict:
+    """人评 divergence 的**批级冻结**表（adjudicate 写入；只读，不猜）。"""
+    try:
+        s = json.loads(Path(state_file).read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001 — 读失败 ⟹ 无观测
+        return {}
+    m = (s.get("gate_data") or {}).get("kappa_p_meta") or {}
+    return m if isinstance(m, dict) else {}
+
+
+def _p_meta_for_discount(state_file):
+    """跨批平滑：<3 批 ⟹ `None`（只观测不扣分）；≥3 批取**中位数**参与 p_meta 折扣。"""
+    vals = sorted(float(v.get("value")) for v in _p_meta_map(state_file).values()
+                  if isinstance(v, dict) and isinstance(v.get("value"), (int, float)))
+    if len(vals) < 3:
+        return None
+    return vals[len(vals) // 2]
+
+
 def _latest_divergence(state_file):
     """本计划**最近一轮** `adjudicate` 的 divergence（双盲 `|agent−human|`）——P-meta 测量污染代理。
 
@@ -1260,21 +1279,53 @@ def bm25_relevance(query, docs: list, lens: list,
     return round(best, 4)
 
 
-def relevance_judge(query, refs: list, *, min_score: float = 0.0) -> dict:
-    """锚定闸（硬下限）+ BM25（分级）**与**判定 ⟹ `{"anchor","bm25","in"}`。
+# ── 结构锚（2026-11-06）：证据**形态**判据（区别于 token 重叠）────────────────
+# 依据：人评对抗基准（gk_bench_relevance）实测 —— 共享 4-gram 的"赞美/提问/反对"硬负例
+#   在 BM25/BM25F/BM25+ 下都无法与正例分开（无 τ 使 FP=0）⟹ 缺的不是打分函数，是
+#   「有没有可回查的证据形态」。故加结构锚：`path:line`（行号可回查）或 `SOURCES:` 段。
+#   只认**行号**不认裸文件名：`ci_smoke.sh 吗` 这类复述仍应隔离。
+_STRUCT_PATH_LINE = re.compile(
+    r"(?:[A-Za-z]:)?[A-Za-z0-9_./\\-]+\.(?:py|sh|md|json|jsonl|ya?ml|toml|cfg|ini|txt):\d+(?:-\d+)?")
+_STRUCT_SOURCES = re.compile(r"(?im)^\s*SOURCES\s*:")
+_STRUCT_ECC = re.compile(r"\bECC-[0-9A-Fa-f]{12}\b")
+
+
+def structural_anchor(text) -> dict:
+    """证据形态锚：`path:line` / `SOURCES:` / ECC id。返回 `{ok, paths, sources, findings}`。"""
+    s = str(text or "")
+    paths = _STRUCT_PATH_LINE.findall(s)[:5]
+    sources = bool(_STRUCT_SOURCES.search(s))
+    findings = list(dict.fromkeys(_STRUCT_ECC.findall(s)))[:5]
+    return {"ok": bool(paths) or sources or findings,
+            "paths": paths, "sources": sources, "findings": findings}
+
+
+def relevance_judge(query, refs: list, *, min_score: float = 0.0,
+                    require_structural: bool = False,
+                    known_findings=None) -> dict:
+    """锚定闸（硬下限）+ BM25（分级）**与**判定 ⟹ `{"anchor","bm25","structural","in"}`。
 
     - `anchor` = 与批内词表的共享 token 数（0 ⟹ 无论 BM25 多高都判 out，防公共词误放）；
     - `bm25`  = 最大 BM25 分（落 facet，供后续 τ 标定）；
-    - `in`    = `anchor > 0 and bm25 >= min_score`。
+    - `structural` = 证据形态（`path:line` / `SOURCES:` / ECC id）；
+    - `known_findings` = 台账内**真实存在**的 finding id 集（由调用方注入）⟹ ECC 引用可作
+      **身份锚**替代 token 重叠（2026-11-06：消灭"合法人评因无 path 而被误拒"）；未注入 ⟹
+      ECC 只算形态、不替代 anchor（保守，防伪造 id 混入）；
+    - `in` = 常规锚定通过，或引用了**已存在**的 ECC id。
     """
     docs, lens = _bm25_docs(refs)
     vocab = set().union(*docs) if docs else set()
     qt = _relevance_tokens(query)
     shared = len(qt & vocab)
     sc = bm25_relevance(query, docs, lens)
-    _in = bool(shared) and sc >= float(min_score)
-    return {"anchor": shared, "bm25": sc, "in": _in,
-            "weak": bool(_in) and (shared <= 1 or sc < 1.0)}
+    sa = structural_anchor(query)
+    _known = {str(x) for x in (known_findings or ())}
+    ident = [x for x in sa["findings"] if x in _known]
+    _in = ident or (bool(shared) and sc >= float(min_score)
+                    and (sa["ok"] or not require_structural))
+    return {"anchor": shared, "bm25": sc, "structural": sa, "identity": ident,
+            "in": bool(_in), "weak": bool(_in) and not ident
+            and (shared <= 1 or sc < 1.0)}
 
 
 _VERDICT_PREFIX = (
@@ -1795,13 +1846,11 @@ def aggregate(state_file: str, recent: int | None, role: str | None,
             # 接通三通道（2026-10-06，WS2）：p_in=投毒命中率（现场 refs）/ p_meta=**滞后**的双盲
             #   divergence（上一轮 adjudicate）/ p_art=缺陷产物率（findings⊕bomb）。缺观测的通道
             #   **不落值**（不冒充已覆盖）；ledger 通道与 live 按通道 merge（live 覆盖，防双计）。
-            _n_refs = len(refs)
-            _n_poison = sum(1 for r in refs if poison_labels(_ref_text(r)))
-            _poison_rate = (_n_poison / _n_refs) if _n_refs else None
-            _pt = _batch_tilt(str(batch),
-                              divergence=_latest_divergence(state_file),
-                              defect_rate=_latest_defect_rate(state_file, str(batch)),
-                              poison_rate=_poison_rate)
+            # 2026-11-06（用户裁定「p_meta 通道需要传」）：**冻结值 + 跨批平滑**。
+            #   人评有随机性 ⟹ 不读 `_latest_divergence`（会把单次人评回灌本批，越评越弃权），
+            #   只读 adjudicate 当时冻结的 `gate_data.kappa_p_meta[batch]`（batch_tilt 的
+            #   p_meta 通道）；且 **<3 批不参与折扣**（只观测），≥3 批取中位数。
+            _pt = _batch_tilt(str(batch), divergence=_p_meta_for_discount(state_file))
         except Exception:  # noqa: BLE001 — 边界：ledger 不可用 ⟹ 退化为无折扣（不阻断）
             _pt = None
     _cl = cluster_references(refs, pollution_tilt=_pt, strict_independence=strict_independence)
@@ -2105,6 +2154,9 @@ def emit_aggregate_finding(state_file: str, agg: dict, *, plan: str = "",
             _facets.append("tilt-state:observed")
         except (TypeError, ValueError):
             _facets.append("tilt-state:unobserved")
+    # p_meta 通道状态（2026-11-06）：该批是否已冻结人评 divergence；未冻结 ⟹ unverified（禁读 0）
+    _facets.append("p_meta:observed" if (_b and _b in _p_meta_map(state_file))
+                   else "p_meta:unverified")
     if _b:
         _facets.append("batch:" + _b)
     if _pk:
@@ -2390,7 +2442,7 @@ def chain_head(plan: str, *, state_file: str = "", task: str = "",
 def chain(state_file: str, *, plan: str = "", batch: str = "", role: str = "plan-refinement",
           task: str = "", cross_batch: bool = False, html_path: str = "",
           prose_file: str = "", no_html: bool = False, from_plan: str = "",
-          arms_per_group: int = 0, runner=None) -> dict:
+          arms_per_group: int = 0, out_file: str = "", runner=None) -> dict:
     """**T1 链骨架**：`批锚自解析 → 聚合 → 落 finding → P/L/M 分组 → 熔断判决(只读评估器) → 单一封套`。
 
     `--from-plan`（T15，2026-10-29）：链**头**从计划文本起跑 —— `plan-lint` 机检门 → 派臂
@@ -2457,6 +2509,16 @@ def chain(state_file: str, *, plan: str = "", batch: str = "", role: str = "plan
     if agg.get("error"):
         return {"mode": "moa_chain", "ok": False, "error": agg["error"],
                 "batch": b, "plan": plan, "steps": steps}
+    # 2026-11-05（用户令「修透传」）：`--out` 在 chain 形态下原被丢弃（签名无 out_file），
+    #   非链形态又受 emit_finding 保护锁拦截 ⟹ 链路**无法**产出 md。此处补：链内直接落
+    #   render_md(agg)；写盘失败不阻断链（HTML/finding 仍有效），以 steps.out 如实回报。
+    if out_file:
+        try:
+            Path(out_file).write_text(render_md(agg), encoding="utf-8")
+            steps["out"] = {"status": "written", "path": out_file}
+        except OSError as e:  # noqa: BLE001 — 落盘失败不阻断聚合链
+            steps["out"] = {"status": "error", "path": out_file,
+                            "error": type(e).__name__}
     tr = agg.get("trace", {}) or {}
     cons = agg.get("consensus", {}) or {}
     steps["aggregate"] = {"refs": tr.get("count"), "clusters": cons.get("n_clusters"),
@@ -2566,7 +2628,13 @@ def chain(state_file: str, *, plan: str = "", batch: str = "", role: str = "plan
             #   `relevance_judge`（锚定硬下限 + BM25）⟹ 落 `relevance:in|out` / `bm25:` / `anchor:`
             #   facet（单源 = `_refs_of(agg)`，**禁第二实现**）；判 out ⟹ 下游 score 隔离为
             #   unverified（**不冒充相关**）。无 refs ⟹ 全部 out（无证据锚 ⟹ 未验证，禁默认放行）。
-            _fs = _PF.convert(_text, plan=plan, batch=b, refs=_refs_of(agg))
+            # 2026-11-06：ECC 身份锚需**台账内真实存在**的 id 集（防伪造 id 混入）
+            try:
+                _known = {str(x.get("id")) for x in _F.load_findings_union(state_file)}
+            except Exception:  # noqa: BLE001 — 读失败 ⟹ 不启用身份锚（保守）
+                _known = set()
+            _fs = _PF.convert(_text, plan=plan, batch=b, refs=_refs_of(agg),
+                              known_findings=_known)
             _ids = []
             for _f in _fs:
                 _r = _F.register(state_file, _f["title"], _f["source"],
@@ -5095,7 +5163,8 @@ def main() -> int:
                         cross_batch=args.allow_cross_batch, html_path=args.html or "",
                         no_html=bool(args.no_html), prose_file=args.prose or "",
                         from_plan=args.from_plan or "",
-                        arms_per_group=int(args.arms_per_group or 0))
+                        arms_per_group=int(args.arms_per_group or 0),
+                        out_file=args.out or "")
         print(json.dumps(res, ensure_ascii=False))
         return 0 if res.get("ok") else 1
 

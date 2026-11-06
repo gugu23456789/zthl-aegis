@@ -122,7 +122,7 @@ def test_relevance_gate_facets_in_and_out():
     """相关性闸（锚定硬下限 + BM25）：切题 ⟹ relevance:in；无关 ⟹ relevance:out（供下游隔离）。"""
     prose = ("- (P) cmd_update_gate_data 未接载荷键检查，判据2a 须补。\n"
              "- (P) 首页配色与设计稿不一致，须统一改为品牌蓝。\n")
-    fs = P.convert(prose, refs=_REFS_REL)
+    fs = P.convert(prose, refs=_REFS_REL, require_structural=False)
     assert "relevance:in" in fs[0]["facets"], fs[0]
     assert "relevance:out" in fs[1]["facets"], fs[1]
     assert any(x.startswith("bm25:") for x in fs[0]["facets"]), "缺 BM25 分值 facet（τ 标定用）"
@@ -133,9 +133,21 @@ def test_relevance_weak_facet_for_single_anchor():
     """M2：弱锚定（仅 1 个共享 token）须显式标 relevance:weak，供下游 triage。"""
     refs = [{"task": "cmd_update_gate_data 未接载荷键检查",
              "conclusion": "判据2a 的写面单点假设不成立。"}]
-    fs = P.convert("- (P) cmd_update_gate_data 未接检查", refs=refs)
+    fs = P.convert("- (P) cmd_update_gate_data 未接检查", refs=refs,
+                   require_structural=False)
     assert "relevance:in" in fs[0]["facets"], fs[0]
     assert "relevance:weak" in fs[0]["facets"], fs[0]
+
+
+def test_structural_anchor_requires_path_line():
+    """2026-11-06：默认要求证据形态（path:line / SOURCES）；共享 token 但无行号 ⟹ out。"""
+    prose = ("- (P) scripts/gk_state_patch.py:166 未接载荷键检查\n"
+             "- (P) cmd_update_gate_data 未接载荷键检查\n")
+    fs = P.convert(prose, refs=_REFS_REL)
+    assert "relevance:in" in fs[0]["facets"], fs[0]
+    assert "evidence:strong" in fs[0]["facets"], fs[0]
+    assert "relevance:out" in fs[1]["facets"], fs[1]
+    assert "evidence:weak" in fs[1]["facets"], fs[1]
 
 
 def test_relevance_gate_off_without_context():
