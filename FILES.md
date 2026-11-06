@@ -3,7 +3,7 @@
 > 生成器：`scripts/gk_repo_index.py --write`；漂移由 `gk_release_preflight.py` 的 `repo_index` 项守。
 > 用途：**移动端**（GitHub App 没有 “Go to file”）与抓取工具一次拿到全量路径；点路径直达文件。
 
-**共 842 个文件。**
+**共 843 个文件。**
 
 ## 索引生成物
 
@@ -59,6 +59,7 @@
 - [RELEASE-NOTES/RELEASE-NOTES-v0.9.6.9.md](RELEASE-NOTES/RELEASE-NOTES-v0.9.6.9.md) — v0.9.6.9 发布说明
 - [RELEASE-NOTES/RELEASE-NOTES-v0.9.6.md](RELEASE-NOTES/RELEASE-NOTES-v0.9.6.md) — v0.9.6 发布说明
 - [RELEASE-NOTES/RELEASE-NOTES-v0.9.7.md](RELEASE-NOTES/RELEASE-NOTES-v0.9.7.md) — ZTHL Aegis v0.9.7
+- [RELEASE-NOTES/RELEASE-NOTES-v0.9.8.md](RELEASE-NOTES/RELEASE-NOTES-v0.9.8.md) — v0.9.8 — 人评结构锚 + p_meta 冻结 + MoA 链路修正 + 相关性基准
 
 ## THIRD_PARTY_LICENSES/
 
