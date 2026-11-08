@@ -142,6 +142,66 @@ def test_adaptive_workers_f_zero_keeps_legacy(monkeypatch):
     assert hs.adaptive_workers(100, subprocess_factor=-1) == 15   # 负值视同未启用
 
 
+def test_adaptive_workers_formula_honors_min_free_floor(monkeypatch):
+    """防爆：空闲内存低于 `min_free_mb` 时，公式分支也必须压到 1（与 legacy 同向）。"""
+    monkeypatch.setattr(hs, "visible_cpus", lambda: 16)
+    monkeypatch.setattr(hs, "free_avail_mb", lambda: 300)
+    assert hs.adaptive_workers(1000, subprocess_factor=2, min_free_mb=512) == 1
+    monkeypatch.setattr(hs, "free_avail_mb", lambda: 3000)
+    assert hs.adaptive_workers(1000, subprocess_factor=2, min_free_mb=512) >= 2
+
+
+# ── GPU 遥测 / 显存闸（2026-11-08，GPU 面最小接线） ──────────────────────
+def test_gpu_info_none_when_probe_unavailable(monkeypatch):
+    """探不到 GPU 必须 None（不得把「无读数」当「可用」）。"""
+    monkeypatch.setattr("shutil.which", lambda _n: None)
+    monkeypatch.setattr("os.path.isfile", lambda _p: False)
+    assert hs.gpu_info() is None
+
+
+def test_gpu_info_parses_smi_csv(monkeypatch):
+    monkeypatch.setattr("shutil.which", lambda _n: "/fake/nvidia-smi")
+
+    class _R:
+        returncode = 0
+        stdout = "NVIDIA GeForce RTX 4060 Laptop GPU, 8188, 100, 8088, 0\n"
+
+    monkeypatch.setattr("subprocess.run", lambda *a, **k: _R())
+    info = hs.gpu_info()
+    assert info["total_mb"] == 8188 and info["free_mb"] == 8088
+    assert info["util_pct"] == 0
+
+
+def test_gpu_admit_vram_floor(monkeypatch):
+    monkeypatch.setattr(hs, "gpu_info", lambda: {"name": "x", "total_mb": 8188,
+                                                 "used_mb": 7600, "free_mb": 588,
+                                                 "util_pct": 0})
+    r = hs.gpu_admit()
+    assert r["ok"] is False and r["reason"] == "low_vram"
+    assert hs.gpu_admit(min_vram_mb=0)["ok"] is True      # 0 ⟹ 关显存闸
+
+
+def test_gpu_admit_no_gpu_fail_closed(monkeypatch):
+    monkeypatch.setattr(hs, "gpu_info", lambda: None)
+    r = hs.gpu_admit()
+    assert r["ok"] is False and r["reason"] == "no_gpu"
+
+
+def test_min_free_vram_env_single_source(monkeypatch):
+    monkeypatch.setenv("GK_HUB_MIN_FREE_VRAM_MB", "2048")
+    assert hs.min_free_vram_mb() == 2048
+    monkeypatch.setenv("GK_HUB_MIN_FREE_VRAM_MB", "bad")
+    assert hs.min_free_vram_mb() == 1024
+
+
+def test_status_carries_gpu_telemetry(monkeypatch):
+    monkeypatch.setattr(hs, "gpu_info", lambda: {"name": "x", "total_mb": 1,
+                                                 "used_mb": 0, "free_mb": 1,
+                                                 "util_pct": 0})
+    s = hs.status()
+    assert s["gpu"]["name"] == "x" and s["min_free_vram_mb"] >= 0
+
+
 # ── 槽位限流（跨 fd / 跨线程） ─────────────────────────────────────────
 def test_slot_cap_enforced():
     root = hs.slots_root()

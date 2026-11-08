@@ -310,3 +310,47 @@ def test_arch_guard_source_has_no_machine_paths():
     for bad in ("D:\\Program Files", "/usr/bin/node", "/opt/venv/bin/python",
                 "<home>", "AppData\\Local\\Temp\\gk-gitnexus-identity"):
         assert bad not in src, "公开源码残留机器绝对路径: %s" % bad
+
+
+# ── GPU 设备策略（2026-11-08，最小接线 + 显存闸）──────────────────────────
+def test_analyze_gpu_request_falls_back_when_vram_low(monkeypatch):
+    import gk_hub_scheduler as hs
+
+    monkeypatch.setenv("GITNEXUS_EMBEDDING_DEVICE", "dml")
+    monkeypatch.setattr(hs, "gpu_admit", lambda *a, **k: {"ok": False, "reason": "low_vram"})
+    env = gx._build_env("analyze --embeddings")
+    assert env["GITNEXUS_EMBEDDING_DEVICE"] == "cpu", "显存不足必须回落 cpu（不静默 OOM）"
+    assert env["GK_GITNEXUS_GPU_FALLBACK"] == "low_vram"
+
+
+def test_analyze_gpu_request_kept_when_vram_ok(monkeypatch):
+    import gk_hub_scheduler as hs
+
+    monkeypatch.setenv("GITNEXUS_EMBEDDING_DEVICE", "dml")
+    monkeypatch.setattr(hs, "gpu_admit", lambda *a, **k: {"ok": True, "gpu": {"free_mb": 7000}})
+    env = gx._build_env("analyze --embeddings")
+    assert env["GITNEXUS_EMBEDDING_DEVICE"] == "dml"
+    assert "GK_GITNEXUS_GPU_FALLBACK" not in env
+
+
+def test_analyze_default_pins_cpu_without_probe(monkeypatch):
+    """默认 cpu 路径不得探 GPU（沙箱里驱动触碰会被判 restricted）。"""
+    import gk_hub_scheduler as hs
+
+    monkeypatch.delenv("GITNEXUS_EMBEDDING_DEVICE", raising=False)
+    called = {"n": 0}
+
+    def _spy(*a, **k):
+        called["n"] += 1
+        return {"ok": True}
+
+    monkeypatch.setattr(hs, "gpu_admit", _spy)
+    env = gx._build_env("analyze")
+    assert env["GITNEXUS_EMBEDDING_DEVICE"] == "cpu"
+    assert called["n"] == 0
+
+
+def test_non_analyze_subcommand_does_not_set_device(monkeypatch):
+    monkeypatch.delenv("GITNEXUS_EMBEDDING_DEVICE", raising=False)
+    env = gx._build_env("status")
+    assert "GITNEXUS_EMBEDDING_DEVICE" not in env

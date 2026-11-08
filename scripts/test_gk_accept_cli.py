@@ -289,3 +289,11 @@ def test_accept_cli_wires_subprocess_factor():
     assert "subprocess_factor=${_FACTOR}" in txt, "f 未传给 adaptive_workers（公式旁路）"
     assert "_DEF_JOBS=$(( _BASE_W * 2 ))" in txt, "f=0 旧口径须保留（紧急回退开关）"
 
+
+def test_accept_cli_has_explosion_guard():
+    """防爆硬闸（**机检臂**）：启动前空闲内存 <800MB 必须 fail-loud 拒绝，不静默串行。"""
+    txt = (SCRIPT_DIR / "_accept_cli.sh").read_text(encoding="utf-8")
+    assert "ACCEPT_MIN_FREE_MB:-800" in txt, "缺防爆硬闸默认值（800MB）"
+    assert "防爆硬闸" in txt and "free_avail_mb" in txt, "硬闸未接 gk_hub_scheduler.free_avail_mb"
+    assert "exit 2" in txt, "硬闸命中须 fail-loud（exit 2）"
+

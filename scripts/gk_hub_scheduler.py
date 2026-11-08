@@ -21,10 +21,11 @@
   · 与 state 锁**正交互补**：本闸管**并发度 / 内存准入**；`state_lock` 管**写互斥**。
 
 环境变量：`GK_HUB_MAX_CONCURRENCY`(64) / `GK_HUB_MIN_FREE_MB`(512) / `GK_HUB_SLOTS_ROOT` /
-`GK_HUB_ACQUIRE_TIMEOUT_S`(30) / `GK_HUB_WORKERS_RESERVE`(1) / `GK_HUB_WORKERS_CAP`(无)。
+`GK_HUB_ACQUIRE_TIMEOUT_S`(30) / `GK_HUB_WORKERS_RESERVE`(1) / `GK_HUB_WORKERS_CAP`(无) /
+`GK_HUB_MIN_FREE_VRAM_MB`(1024)。
 
 CLI：
-  status [--json]                              —— 打印上限 / 空闲内存 / 槽位占用
+  status [--json]                              —— 打印上限 / 空闲内存 / 槽位占用 / GPU 遥测
   workers [--n N] [--cap N]                    —— **s5.5** 自适应并发度（核数/内存→worker），供 bash/其它模块查询
   run [--max-concurrency N] [--min-free-mb M] [--timeout S] -- <cmd...>
                                                —— 取得槽位 + 过内存闸后执行 <cmd>；放行失败 → exit 75
@@ -114,6 +115,76 @@ def free_avail_mb():
     return None
 
 
+# ────────────────────────── GPU 遥测 / 显存准入（2026-11-08） ──────────────────────────
+def gpu_info(timeout_s: float = 3.0):
+    """NVIDIA GPU 只读遥测（`nvidia-smi`，stdlib only）。
+
+    无 GPU / 工具缺失 / 超时 / 非 NVIDIA ⟹ None（fail-safe：不把「探不到」当「GPU 可用」）。
+    返回 {"name", "total_mb", "used_mb", "free_mb", "util_pct"}。
+    """
+    try:
+        import shutil
+        import subprocess
+
+        exe = shutil.which("nvidia-smi")
+        if not exe:
+            # WSL 的 nvidia-smi 常不在 PATH（/usr/lib/wsl/lib）；按已知位置兜底一次。
+            for cand in ("/usr/lib/wsl/lib/nvidia-smi", "/usr/bin/nvidia-smi"):
+                if os.path.isfile(cand):
+                    exe = cand
+                    break
+        if not exe:
+            return None
+        r = subprocess.run(
+            [exe, "--query-gpu=name,memory.total,memory.used,memory.free,utilization.gpu",
+             "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=timeout_s)
+        if r.returncode != 0:
+            return None
+        lines = (r.stdout or "").strip().splitlines()
+        if not lines:
+            return None
+        parts = [p.strip() for p in lines[0].split(",")]
+        if len(parts) < 5:
+            return None
+        info = {"name": parts[0],
+                "total_mb": int(float(parts[1])),
+                "used_mb": int(float(parts[2])),
+                "free_mb": int(float(parts[3])),
+                "util_pct": None}
+        try:
+            info["util_pct"] = int(float(parts[4]))
+        except (TypeError, ValueError):
+            pass
+        return info
+    except Exception:  # noqa: BLE001 — 边界：探测失败即 None（不误伤）
+        return None
+
+
+def min_free_vram_mb() -> int:
+    """GPU 准入的空闲显存下限（MB，默认 1024；0 ⟹ 不设下限；非法 ⟹ 回落默认）。"""
+    try:
+        n = int(os.environ.get("GK_HUB_MIN_FREE_VRAM_MB", "1024"))
+    except (TypeError, ValueError):
+        return 1024
+    return n if n >= 0 else 1024
+
+
+def gpu_admit(min_vram_mb: int = None) -> dict:
+    """GPU 准入（显存闸）：无 GPU / 读数失败 / 空闲显存 < 阈值 ⟹ `ok:false`（GPU 任务 fail-closed）。
+
+    用途：ONNX embedding（gitnexus `analyze --embeddings`）等 GPU 任务在**设备切换前**过闸，
+    避免 8GB 卡被已有显存占用顶爆（GPU 版「防爆」）。
+    """
+    floor = min_free_vram_mb() if min_vram_mb is None else max(0, int(min_vram_mb))
+    info = gpu_info()
+    if info is None:
+        return {"ok": False, "reason": "no_gpu", "gpu": None, "min_free_vram_mb": floor}
+    if info["free_mb"] < floor:
+        return {"ok": False, "reason": "low_vram", "gpu": info, "min_free_vram_mb": floor}
+    return {"ok": True, "gpu": info, "min_free_vram_mb": floor}
+
+
 # ────────────────────────── 硬件自适应并发度（s5.5 全仓**单源**）──────────────────────────
 def _env_int(name: str, default: int) -> int:
     try:
@@ -168,7 +239,12 @@ def adaptive_workers(n: int, cap: int = None, reserve: int = None,
       两处修正：(a) 4 核 OS 保留是**宿主级**预留，WSL/cgroup 切片里再扣一次属双算 ⟹ 按 C//4
       缩放；(b) 第 1 个外部子进程通常阻塞在管道/文件 I/O，不占满 CPU ⟹ 核项除数用 max(1,f)
       （f≥2 才线性计入 CPU）。校正后本机 f=1 → 8、f=2 → 4、f=3 → 2（内存/进程项仍在收紧）；
-      16 核宿主 f=1..3 均被 8 令牌封顶。
+      16 核宿主在 **R≥4800MB** 时 f=1..3 均被 8 令牌封顶（R 更低时由内存项继续收紧）。
+
+    ⚠ **工程妥协（环境特定）**：本式全部系数（×2 超订、r=C//4、max(1,f)、8 令牌、80 进程预算、
+      180+60f 单 worker RSS）都取自**本机 WSL 5 核 / 5GB + 重活四文件**的实测与量纲推演，
+      属**特定系统环境配置下的工程妥协**，**不具有普遍性**；换核数/换 OS/换负载构成（例如
+      纯 CPU-bound、编译、GPU 推理）都必须重新取证后再用，不得当作跨环境定律引用。
     """
     if reserve is None:
         reserve = _env_int("GK_HUB_WORKERS_RESERVE", 1)
@@ -196,6 +272,9 @@ def adaptive_workers(n: int, cap: int = None, reserve: int = None,
         w = min(w, max(1, 80 // (1 + _f)))
         w = min(w, todo)
         w = min(w, 8 if cap is None else max(1, int(cap)))
+        # 防爆：内存已低于 min_free_mb 时压到 1（与 legacy 路径同向；公式内存项只管比例不管硬下限）
+        if min_free_mb and int(min_free_mb) > 0 and fm is not None and fm < int(min_free_mb):
+            w = 1
         return max(1, w)
     w = max(1, ncpu - max(0, int(reserve)))
     w = min(w, todo)
@@ -306,7 +385,8 @@ def status(root: str = None) -> dict:
                 occupied += 1
                 os.close(fd)
     return {"max_concurrency": n, "min_free_mb": min_free_mb(),
-            "free_mb": free_avail_mb(), "occupied": occupied, "slots_root": root}
+            "free_mb": free_avail_mb(), "occupied": occupied, "slots_root": root,
+            "gpu": gpu_info(), "min_free_vram_mb": min_free_vram_mb()}
 
 
 # ────────────────────────── CLI ──────────────────────────

@@ -406,6 +406,19 @@ def _build_env(command: str) -> dict:
     # F-REV-88：与 bash `_run_gitnexus_raw` 同策 —— 仅 `analyze*` 钉 cpu
     # （gitnexus `parseDevice` 对空串抛错，故其余子命令**不设**）。
     if command.strip().startswith("analyze"):
+        # 2026-11-08（GPU 面最小接线）：默认仍钉 `cpu`（沙箱里探 GPU 驱动会被判 restricted）；
+        #   显式请求 dml/cuda/gpu 时先过**显存闸**（`gpu_admit`，默认空闲 ≥1024MB），不满足即
+        #   回落 cpu 并留痕 `GK_GITNEXUS_GPU_FALLBACK=<reason>`（GPU 任务 fail-closed，不静默 OOM）。
+        _dev = str(env.get("GITNEXUS_EMBEDDING_DEVICE") or "cpu").strip().lower()
+        if _dev in ("dml", "cuda", "gpu", "webgpu"):
+            try:
+                import gk_hub_scheduler as _hs
+                _ga = _hs.gpu_admit()
+            except Exception:  # noqa: BLE001 — 边界：探测失败 ⟹ 回落 cpu（fail-closed）
+                _ga = {"ok": False, "reason": "probe_error"}
+            if not _ga.get("ok"):
+                env["GITNEXUS_EMBEDDING_DEVICE"] = "cpu"
+                env["GK_GITNEXUS_GPU_FALLBACK"] = str(_ga.get("reason") or "unavailable")
         env.setdefault("GITNEXUS_EMBEDDING_DEVICE", "cpu")
         # 2026-10-30（实测根因）：analyze 的 clearParsedFileStore 会一次性删除
         #   `.gitnexus/parsedfile-store` 下 100+ 个缓存文件，被 WorkBuddy 注入的

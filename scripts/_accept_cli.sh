@@ -18,6 +18,8 @@
 #   bash scripts/_accept_cli.sh --baseline <f>   # 改用指定基线文件（自测用）
 # Env: ACCEPT_PY（缺省见 `gk_accept_py.py` 单源：env → scripts/_accept_py.local → python3）、
 #      ACCEPT_JOBS（默认 auto；设 0 关并行）、ACCEPT_BASELINE、
+#      ACCEPT_SUBPROC_FACTOR（每用例峰值外部子进程数 f，默认 1；0 ⟹ 退回旧口径 nproc×2）、
+#      ACCEPT_MIN_FREE_MB（启动前防爆硬闸，默认 800；0 ⟹ 关闭）、
 #      ACCEPT_LOCK_FILE（--full 跨会话互斥锁，默认 /tmp/gk-accept-full.lock）、ACCEPT_LOCK_WAIT（默认 600s）、
 #      ACCEPT_REUSE_TTL（复用新鲜全量结果的 TTL，默认 1800s；设 0 关复用）——见 ECC-34EEC2BC12D2
 #
@@ -72,9 +74,12 @@ PY="${ACCEPT_PY:-$(python3 "$SKILL_DIR/scripts/gk_accept_py.py" 2>/dev/null || e
 #   `docs/plans/2026-10-29-accept-throughput-forensics-plan.md`）。
 #   `ACCEPT_JOBS=0` 仍可显式关并行；传具体数字即覆盖。
 _BASE_W=""
-# 2026-11-08（408 公式）：子进程因子 f 缺省 1（混合面）——W=min((核-4)/(1+f), 0.6R/(180+60f),
-#   80/(1+f), 8)；f>0 时**不再 ×2**（公式已含安全垫）。f=0 显式退回旧口径（nproc×2 上限 12）。
+# 2026-11-08（408 校正式）：子进程因子 f 缺省 1（混合面）——
+#   W=min(2·max(1,核-min(4,max(1,核//4)))/max(1,f), 0.6R/(180+60f), 80/(1+f), 8, todo)；
+#   f>0 时**不再 ×2**（公式已含 I/O 超订与安全垫）。f=0 显式退回旧口径（nproc×2 上限 12）。
 _FACTOR="${ACCEPT_SUBPROC_FACTOR:-1}"
+# 非法值（含负数）⟹ 归一为公式缺省 1（fail-safe：不得静默退回无公式的旧口径）。
+case "$_FACTOR" in ''|*[!0-9]*) _FACTOR=1 ;; esac
 if [ -z "${ACCEPT_JOBS:-}" ]; then
   if [ "$_FACTOR" -gt 0 ] 2>/dev/null; then
     _BASE_W="$(PYTHONPATH="$SKILL_DIR/scripts" python3 -c "import gk_hub_scheduler as H; print(H.adaptive_workers(1000, subprocess_factor=${_FACTOR}))" 2>/dev/null || true)"
@@ -90,6 +95,18 @@ else
 fi
 [ "$_DEF_JOBS" -gt 12 ] && _DEF_JOBS=12; [ "$_DEF_JOBS" -lt 1 ] && _DEF_JOBS=1
 JOBS="${ACCEPT_JOBS:-$_DEF_JOBS}"
+# 防爆硬闸（2026-11-08）：空闲内存已低于硬阈值时**拒绝启动**（fail-loud，不静默串行）。
+#   408 事故复盘：24 worker + WSL+openssl 曾把宿主压到换页/蓝屏；启动前补这一道。
+#   `ACCEPT_MIN_FREE_MB=0` 显式关闭（逃生舱）；读数失败/0 不拦（fail-safe，宁可放行）。
+_ACCEPT_MIN_FREE_MB="${ACCEPT_MIN_FREE_MB:-800}"
+if [ "${ACCEPT_MIN_FREE_MB:-800}" -gt 0 ] 2>/dev/null; then
+  _FREE_MB="$(PYTHONPATH="$SKILL_DIR/scripts" python3 -c 'import gk_hub_scheduler as H; print(H.free_avail_mb() or 0)' 2>/dev/null || echo 0)"
+  case "$_FREE_MB" in ''|*[!0-9]*) _FREE_MB=0 ;; esac
+  if [ "$_FREE_MB" -gt 0 ] && [ "$_FREE_MB" -lt "${_ACCEPT_MIN_FREE_MB:-800}" ]; then
+    echo "[accept] FATAL: 空闲内存 ${_FREE_MB}MB < 防爆硬闸 ${_ACCEPT_MIN_FREE_MB}MB —— 拒绝启动；释放内存或 ACCEPT_MIN_FREE_MB=0 显式关闭" >&2
+    exit 2
+  fi
+fi
 # I/O 卫生（2026-09-24；**诚实标注：未单独 A/B**）：pytest 进程自身的 `.pyc` 落 CIFS（本仓在
 #   /mnt/c）会在每次冷 import 时付出跨 fs 写代价；改投 /tmp（ext4）。属低成本卫生面，非提速主项。
 export PYTHONPYCACHEPREFIX="${PYTHONPYCACHEPREFIX:-/tmp/gk-pycache}"
