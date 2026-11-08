@@ -2,6 +2,11 @@
   "schema": "gk-bench-baseline/v1",
   "created_at": "2026-11-03T13:01:12.109962+00:00",
   "git_head": "0f735627a3b388bda167c6dc4c64ee8e8669b859",
+  "stale_after_commits": 150,
+  "pending_checks": [
+    {"trigger": "gk-sdk/1 复评收敛并进入实施", "add": ["sdk.read/evaluate 端到端延迟", "in-process 与 CLI 字段等价对拍（test_gk_sdk_parity）"], "reason": "SDK 目前只有门级对齐；未进入实施，无对外性能契约"},
+    {"trigger": "性能优化计划（WAL 后续批次）落地", "add": ["state 批量写吞吐", "satellite 侧车合并开销"], "reason": "S3 侧车已改写入路径；旧基线为 11-03 口径"}
+  ],
   "environment": {
     "os": "Windows-10-10.0.26100-SP0",
     "python": "3.11.5",

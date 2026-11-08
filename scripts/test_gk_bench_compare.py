@@ -43,6 +43,73 @@ def test_within_tolerance_passes():
     assert r["ok"] and not r["violations"], r
 
 
+# ── 2026-11-08：回归归因三分类 + 基线过时 ────────────────────────────────────
+def _dg_res():
+    """造一条 write_amp 超阈的 compare 结果。"""
+    return C.compare(_base(amp=1.0), _cur(amp=4.0), tolerance=1.25)
+
+
+def test_diagnose_probe_mismatch_when_amp_schema_differs():
+    """口径不匹配：一侧有 `amp_per_state`、另一侧没有 ⟹ 不判回归。"""
+    base = _base()
+    cur = {"state": {"scenarios": [{"scenario": "s", "write_amp": 4.0, "p99_ms": 10.0,
+                                    "amp_per_state": 0.03,
+                                    "success_ops": 10, "total_ops": 10}],
+                     "crash": [{"trial": 1, "checksum_ok": True, "tmp_left": 0}], "ok": True}}
+    dg = C.diagnose(_dg_res(), base, cur, repo="/nonexistent")
+    assert dg["probe_mismatch"] is True
+    kinds = {it["kind"] for it in dg["items"]}
+    assert kinds == {"probe_mismatch"}, dg
+
+
+def test_diagnose_mechanism_change_uses_changed_modules():
+    """基线以来机制模块有改动 ⟹ mechanism_change（先确认有意，再谈回归）。"""
+    base = _base()
+    base["git_head"] = "deadbeef"
+    cur = {"state": {"scenarios": [{"scenario": "s", "write_amp": 4.0, "p99_ms": 10.0,
+                                    "success_ops": 10, "total_ops": 10}],
+                     "crash": [{"trial": 1, "checksum_ok": True, "tmp_left": 0}], "ok": True}}
+    orig = C._changed_since
+    try:
+        C._changed_since = lambda h, repo=".": ["scripts/gk_json_utils.py", "README.md"]
+        dg = C.diagnose(_dg_res(), base, cur, repo=".")
+    finally:
+        C._changed_since = orig
+    assert dg["changed_modules"] == ["scripts/gk_json_utils.py"], dg
+    assert {it["kind"] for it in dg["items"]} == {"mechanism_change"}, dg
+
+
+def test_diagnose_regression_when_nothing_changed():
+    """机制未变 + 口径一致 + 仍超阈 ⟹ regression（唯一判红分支）。"""
+    base = _base()
+    base["git_head"] = "deadbeef"
+    cur = {"state": {"scenarios": [{"scenario": "s", "write_amp": 4.0, "p99_ms": 10.0,
+                                    "success_ops": 10, "total_ops": 10}],
+                     "crash": [{"trial": 1, "checksum_ok": True, "tmp_left": 0}], "ok": True}}
+    orig = C._changed_since
+    try:
+        C._changed_since = lambda h, repo=".": []
+        dg = C.diagnose(_dg_res(), base, cur, repo=".")
+    finally:
+        C._changed_since = orig
+    assert {it["kind"] for it in dg["items"]} == {"regression"}, dg
+
+
+def test_stale_baseline_warns():
+    """基线落后超阈值 ⟹ WARN（不阻断），提示重采。"""
+    base = _base()
+    base["git_head"] = "deadbeef"
+    base["stale_after_commits"] = 5
+    orig = C._commits_since
+    try:
+        C._commits_since = lambda h, repo=".": 42
+        r = C.compare(base, _cur(), tolerance=1.25)
+    finally:
+        C._commits_since = orig
+    assert r["ok"], "基线过时不应阻断"
+    assert any(w["metric"] == "baseline.stale" for w in r["warnings"]), r
+
+
 def test_over_tolerance_is_violation():
     r = C.compare(_base(), _cur(amp=1.5), tolerance=1.25)
     assert not r["ok"]

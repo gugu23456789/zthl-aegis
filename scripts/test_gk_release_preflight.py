@@ -145,3 +145,44 @@ def test_vendor_artifact_hash_mismatch(tmp_path, monkeypatch):
     monkeypatch.setattr(PF, "_VENDOR", d)
     r = PF.vendor_artifact()
     assert r["status"] == "FAIL" and "SHA256" in r["detail"]
+
+
+# ── 2026-11-08：发布前性能门（第 9 项）────────────────────────────────────────
+def test_bench_gate_skips_without_git(tmp_path, monkeypatch):
+    """导出树（无 .git）⟹ SKIP（基线不可定位），不误判红。"""
+    monkeypatch.setattr(PF, "ROOT", tmp_path)
+    r = PF.bench_regression()
+    assert r["status"] == "SKIP" and ".git" in r["detail"], r
+
+
+def test_bench_gate_skips_on_opt_out(monkeypatch):
+    monkeypatch.setenv("GK_PREFLIGHT_BENCH", "0")
+    assert PF.bench_regression()["status"] == "SKIP"
+
+
+def test_bench_gate_fails_on_true_regression(tmp_path, monkeypatch):
+    """真回归（机制未变 + 口径一致 + 超阈）⟹ FAIL（唯一判红分支）。"""
+    (tmp_path / ".git").mkdir()
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "references").mkdir()
+    (tmp_path / "references" / "bench-baseline.json").write_text(json.dumps({
+        "schema": "gk-bench-baseline/v1", "git_head": "deadbeef",
+        "benchmarks": {"state": {
+            "scenarios": [{"scenario": "s", "write_amp": 1.0, "p99_ms": 10.0,
+                           "success_ops": 10, "total_ops": 10}],
+            "crash": [{"trial": 1, "checksum_ok": True, "tmp_left": 0}], "ok": True}}}),
+        encoding="utf-8")
+    (tmp_path / "scripts" / "gk_bench_state.py").write_text(
+        "import json;print(json.dumps({'ok': True, 'scenarios': ["
+        "{'scenario': 's', 'write_amp': 9.0, 'p99_ms': 90.0, 'success_ops': 10,"
+        " 'total_ops': 10}], 'crash': [{'trial': 1, 'checksum_ok': True, 'tmp_left': 0}]}))\n",
+        encoding="utf-8")
+    monkeypatch.setattr(PF, "ROOT", tmp_path)
+    import gk_bench_compare as BC
+    orig = BC._changed_since
+    try:
+        BC._changed_since = lambda h, repo=".": []
+        r = PF.bench_regression()
+    finally:
+        BC._changed_since = orig
+    assert r["status"] == "FAIL" and "真回归" in r["detail"], r

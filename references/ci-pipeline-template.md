@@ -397,6 +397,21 @@ security-audit:
   （37 项 + 全量测试；quick 只覆盖 22 个测试文件）；② `python scripts/gk_release_preflight.py`；
   ③ `python scripts/oss_scrub.py export --out <dir>`（导出树内自动重跑 ②）。
   三步全绿再打 tag。反例（v0.9.6.14）：陈旧断言（①没跑）与导出面缺路径（③没跑）各红一次。
+- **性能门已并入 ②**（2026-11-08）：`preflight` 第 9 项 `bench_regression` 会跑
+  `gk_bench_state --quick` 并与 `references/bench-baseline.json` 比对。超阈项经
+  `gk_bench_compare.diagnose` 归因后只有**真回归**判红：
+  · `probe_mismatch`（两侧口径字段不同，如 `amp_per_state` 仅一侧）⟹ 先统一口径，不判红；
+  · `mechanism_change`（基线以来 `gk_json_utils/gk_state/gk_satellite/gk_state_patch/
+    gk_write_claims/gatekeeper-cli.sh` 有改动）⟹ 确认有意后**重采基线**，不判红；
+  · `regression`（机制未变 + 口径一致 + 仍超阈）⟹ 判红，须定位到写路径。
+  硬失败（失败写 / 崩溃 checksum / `.tmp` 残留 / 场景 `ok=false`）恒红。
+  跳过：`GK_PREFLIGHT_BENCH=0` 或导出树（无 `.git`）。
+- **基线的两条生命周期规则**（2026-11-08）：
+  · **过时评估**：`bench-baseline.json` 的 `stale_after_commits`（缺省 150）—— 基线 `git_head`
+    到 HEAD 的提交数超限 ⟹ 对比只出 WARN 并提示重采；隔几个版本就该重采一次，否则对比失去意义。
+  · **待补检查**：`pending_checks[]` 登记「某个计划落地后必须新增的 bench 项」（如 SDK 进入实施后
+    补端到端延迟与 `test_gk_sdk_parity`、性能计划下一批补批量写与侧车合并开销）。
+    计划状态变化时按该清单补测，补完从数组移除。
 - **移动端 / 抓取索引**（2026-11-05）：`scripts/gk_repo_index.py` 生成 `FILES.md`（公开面全量
   路径 + 一句说明 + 直达链接）与 `llms.txt`（llmstxt.org 约定：标题 + 链接 + 摘要）。GitHub
   移动端没有 “Go to file”、目录树懒加载 ⟹ 这两个文件是**一次请求就拿到全貌**的入口。

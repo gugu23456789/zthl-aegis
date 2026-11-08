@@ -24,6 +24,9 @@ v0.9.6.8–v0.9.6.10 连续三版在 `pack` 步 argparse 退出 2（workflow 传
                      移动端/抓取入口，手写必漂移 ⟹ 与 GK-FACTS 同款「生成器 + 漂移门」；
 8. `vendor_artifact` 随包 wheel 三件套自洽：`PROVENANCE.json` ↔ `SHA256SUMS` ↔ 实际文件哈希
                      必须一致（版本/文件名/哈希）。发新版 wheel 时忘了同步 ⟹ 这里直接红。
+9. `bench_regression` 发布前性能门（2026-11-08，owner 裁定）：跑 `gk_bench_state --quick` 并与
+                     `references/bench-baseline.json` 比对。**仅真回归判红**；口径不匹配 /
+                     机制变化 / 基线过时只提示（不阻断）。`GK_PREFLIGHT_BENCH=0` 可跳过。
 
 用法：`python scripts/gk_release_preflight.py [--json]`；退出码 0 = 全绿，1 = 有失败。
 `oss_scrub.py export` 会在**导出树**内自动再跑一次（`--skip-preflight` 可显式跳过）。
@@ -167,7 +170,8 @@ def release_assets(workflow: str) -> dict:
     if missing:
         return {"id": "release_assets", "status": "FAIL",
                 "detail": "发布资产缺项: %s" % ", ".join(missing)}
-    return {"id": "release_assets", "status": "PASS", "detail": "7 个资产已挂载"}
+    return {"id": "release_assets", "status": "PASS",
+            "detail": "7 个上传件已挂载（网页另显示 2 个自动源码包 zip/tar.gz ⟹ 共见 9 项）"}
 
 
 # ── workflow 引用的仓库路径（导出面一致性）────────────────────────────────────
@@ -308,6 +312,75 @@ def vendor_artifact() -> dict:
             "detail": "%s / %s…" % (ver or w.name, actual[:12])}
 
 
+def bench_regression() -> dict:
+    """发布前性能门（2026-11-08，owner 裁定）：跑 quick bench 并与基线比对 + 归因。
+
+    判红**仅限**：硬失败（失败写 / 崩溃 checksum / tmp 残留 / 场景 ok=false）与
+    `diagnose` 归类为 `regression`（机制模块未变 + 口径一致 + 超阈）。
+    口径不匹配 / 机制变化 / 基线过时 ⟹ **PASS + 提示**（避免「新机制与旧基线」误判成回归）。
+    跳过条件：`GK_PREFLIGHT_BENCH=0`、无 `.git`（导出树）、无基线、无 bench 脚本。
+    """
+    if os.environ.get("GK_PREFLIGHT_BENCH", "1") == "0":
+        return {"id": "bench_regression", "status": "SKIP",
+                "detail": "GK_PREFLIGHT_BENCH=0（显式跳过）"}
+    if not (ROOT / ".git").exists():
+        return {"id": "bench_regression", "status": "SKIP",
+                "detail": "无 .git（导出树）⟹ 基线不可定位，跳过性能门"}
+    baseline_p = ROOT / "references" / "bench-baseline.json"
+    bench = ROOT / "scripts" / "gk_bench_state.py"
+    if not baseline_p.is_file() or not bench.is_file():
+        return {"id": "bench_regression", "status": "SKIP",
+                "detail": "缺 bench-baseline.json 或 gk_bench_state.py"}
+    try:
+        p = subprocess.run([sys.executable, str(bench), "--quick", "--json"],
+                           cwd=str(ROOT), capture_output=True, text=True, timeout=600)
+        cur = json.loads(p.stdout)
+    except (OSError, subprocess.SubprocessError, ValueError) as e:
+        return {"id": "bench_regression", "status": "FAIL",
+                "detail": "quick bench 执行失败：%s" % e}
+    try:
+        sys.path.insert(0, str(ROOT / "scripts"))
+        import gk_bench_compare as BC
+        baseline = json.loads(baseline_p.read_text(encoding="utf-8"))
+        # 只比**当前档位存在的场景**（基线可能是 full 12 场景、本门跑 quick 4 场景）；
+        # 否则「当前结果缺该场景」会被误判成 violation。裁剪只影响对比面，不改基线文件。
+        names = {s.get("scenario") for s in (cur.get("scenarios") or [])}
+        bstate = ((baseline.get("benchmarks") or {}).get("state") or {})
+        bstate = dict(bstate, scenarios=[s for s in (bstate.get("scenarios") or [])
+                                         if s.get("scenario") in names])
+        baseline = dict(baseline, benchmarks={"state": bstate})
+        res = BC.compare(baseline, {"state": cur}, tolerance=1.25, only=["state"])
+        dg = BC.diagnose(res, baseline, {"state": cur}, repo=str(ROOT))
+    except Exception as e:  # noqa: BLE001 — 边界：对比器自身异常按红（不静默放行）
+        return {"id": "bench_regression", "status": "FAIL",
+                "detail": "对比/归因失败：%s: %s" % (type(e).__name__, e)}
+
+    hard = [v for v in res.get("violations", [])
+            if str(v.get("metric", "")).startswith(("state.failed", "state.crash", "state.ok"))]
+    regress = [it for it in dg.get("items", []) if it.get("kind") == "regression"]
+    if hard or regress:
+        bits = ["硬失败 %d" % len(hard) if hard else "",
+                "真回归 %d" % len(regress) if regress else ""]
+        detail = "；".join(x for x in bits if x)
+        sample = [it.get("metric") for it in (hard + regress)[:3]]
+        return {"id": "bench_regression", "status": "FAIL",
+                "detail": "%s（%s）" % (detail, ", ".join(str(s) for s in sample))}
+    notes = []
+    if dg.get("probe_mismatch"):
+        notes.append("口径不匹配（amp_per_state 仅一侧）⟹ 建议重采基线")
+    if dg.get("changed_modules"):
+        notes.append("机制模块有改动（%s）⟹ 确认有意后重采基线"
+                     % ",".join(os.path.basename(x) for x in dg["changed_modules"]))
+    stale = [w for w in res.get("warnings", []) if w.get("metric") == "baseline.stale"]
+    if stale:
+        notes.append(stale[0].get("detail", "")[:120])
+    ops = [s.get("ops_s") for s in (cur.get("scenarios") or []) if s.get("ops_s")]
+    base = ("%d 场景 / 吞吐 %s ops/s" % (len(cur.get("scenarios") or []),
+                                         ("%.1f–%.1f" % (min(ops), max(ops))) if ops else "n/a"))
+    return {"id": "bench_regression", "status": "PASS",
+            "detail": base + (("；" + "；".join(notes)) if notes else "")}
+
+
 def run_all() -> dict:
     try:
         wf = WORKFLOW.read_text(encoding="utf-8")
@@ -316,8 +389,10 @@ def run_all() -> dict:
                                          "detail": "读不到 %s: %s" % (WORKFLOW, e)}]}
     checks = [pack_contract(wf), pack_fixture(), docgen_check(),
               doc_features_check(), release_assets(wf), workflow_paths(),
-              repo_index_check(), vendor_artifact()]
-    return {"ok": all(c["status"] == "PASS" for c in checks), "checks": checks}
+              repo_index_check(), vendor_artifact(), bench_regression()]
+    # 2026-11-08：允许 SKIP（性能门在导出树/显式关闭时跳过）。既有 8 项从不返回 SKIP ⟹
+    #   本行对它们等价于原 `== "PASS"`；FAIL 仍判红（fail-closed 不变）。
+    return {"ok": all(c["status"] in ("PASS", "SKIP") for c in checks), "checks": checks}
 
 
 def main(argv=None) -> int:
