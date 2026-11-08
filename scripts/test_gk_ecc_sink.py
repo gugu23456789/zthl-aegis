@@ -24,6 +24,21 @@ def _mkstate(tmp_path):
     return str(st)
 
 
+def _sidecar_entries(st):
+    """索引侧车条目（`<state>.satellite-index.jsonl`）。
+
+    2026-11-08（既有债，合并 perf 后暴露）：`gk_satellite` 的 **S3 写侧**已停写内联热索引
+    （`append` 返回 `inline_skipped: true`，reason「写侧只落片 + 侧车」）⟹
+    `gate_data.satellite_index` 不再是落点，索引唯一落点 = 侧车 jsonl（读面由 `gk_satellite`
+    合并侧车兜住）。原断言查内联键 ⟹ 恒 `KeyError`（`test_gk_satellite` 早已按 S3 更新，
+    本文件漏改）。断言强度不降：仍验证「索引真实落盘 + per-arm 不覆盖」。
+    """
+    p = Path(str(st) + ".satellite-index.jsonl")
+    if not p.is_file():
+        return []
+    return [json.loads(ln) for ln in p.read_text(encoding="utf-8").splitlines() if ln.strip()]
+
+
 def _ecc(**kw):
     d = {
         "mode": "subagent", "subagent_id": "sub-audit-1", "nonce": "n1",
@@ -60,8 +75,8 @@ def test_persist_writes_file_shard_and_index(tmp_path):
     assert rec["output_file"] == str(f)
     # findings 回填口径（与 CLI 落库段一致）：三键全空 → kept/challenges 回填
     assert rec["findings"] == {"worked": ["k1"], "failed": ["c1"], "not_tried": []}
-    leaf = json.loads(Path(st).read_text(encoding="utf-8"))[
-        "gate_data"]["satellite_index"]["audit-AUDIT-20261031-abc"]["report"]
+    leaf = [e["leaf"] for e in _sidecar_entries(st)
+            if e.get("batch_id") == "audit-AUDIT-20261031-abc" and e.get("arm") == "report"][-1]
     assert leaf["kind"] == "history" and leaf["records"] == 1
 
 
@@ -113,9 +128,8 @@ def test_two_arms_same_batch_do_not_clobber(tmp_path):
         r = SINK.persist(st, json.dumps(_ecc(subagent_id="sub-" + arm)),
                          domain="audit", batch_id="B9", arm=arm, root=str(tmp_path))
         assert r.get("ok"), r
-    idx = json.loads(Path(st).read_text(encoding="utf-8"))[
-        "gate_data"]["satellite_index"]["audit-B9"]
-    assert set(idx) == {"crossr", "report"}, idx
+    arms = {e["arm"] for e in _sidecar_entries(st) if e.get("batch_id") == "audit-B9"}
+    assert arms == {"crossr", "report"}, arms
     shard = Path(str(st) + ".history-archive.jsonl").read_text(encoding="utf-8")
     assert len([l for l in shard.splitlines() if l.strip()]) == 2
 
