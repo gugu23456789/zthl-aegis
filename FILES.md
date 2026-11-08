@@ -3,7 +3,7 @@
 > 生成器：`scripts/gk_repo_index.py --write`；漂移由 `gk_release_preflight.py` 的 `repo_index` 项守。
 > 用途：**移动端**（GitHub App 没有 “Go to file”）与抓取工具一次拿到全量路径；点路径直达文件。
 
-**共 868 个文件。**
+**共 870 个文件。**
 
 ## 索引生成物
 
@@ -66,6 +66,7 @@
 - [RELEASE-NOTES/RELEASE-NOTES-v0.9.8.2.md](RELEASE-NOTES/RELEASE-NOTES-v0.9.8.2.md) — ZTHL Aegis v0.9.8.2 — 发布说明
 - [RELEASE-NOTES/RELEASE-NOTES-v0.9.8.3.md](RELEASE-NOTES/RELEASE-NOTES-v0.9.8.3.md) — ZTHL Aegis v0.9.8.3 — 发布说明
 - [RELEASE-NOTES/RELEASE-NOTES-v0.9.8.4.md](RELEASE-NOTES/RELEASE-NOTES-v0.9.8.4.md) — ZTHL Aegis v0.9.8.4 — 发布说明
+- [RELEASE-NOTES/RELEASE-NOTES-v0.9.8.5.md](RELEASE-NOTES/RELEASE-NOTES-v0.9.8.5.md) — ZTHL Aegis v0.9.8.5 — 发布说明
 - [RELEASE-NOTES/RELEASE-NOTES-v0.9.8.md](RELEASE-NOTES/RELEASE-NOTES-v0.9.8.md) — v0.9.8 — 人评结构锚 + p_meta 冻结 + MoA 链路修正 + 相关性基准
 
 ## THIRD_PARTY_LICENSES/
@@ -174,6 +175,7 @@
 - [references/repo-index-annotations.json](references/repo-index-annotations.json) — JSON 数据
 - [references/research-408.md](references/research-408.md) — Research 408 — 计算机 408 四轴优化分析
 - [references/resident-features.json](references/resident-features.json) — JSON 数据
+- [references/sdk-loop-layering.md](references/sdk-loop-layering.md) — Agent Loop 分层条款（两层 loop · 暗依赖红线 · DSH 对齐）
 - [references/security-incident-response.md](references/security-incident-response.md) — 密钥泄露应急处置流程（BP.08.05 对照）
 - [references/sequence-node-safety-net-template.md](references/sequence-node-safety-net-template.md) — 序列节点安全网模板（Sequence-Node Safety Net Template）
 - [references/stages.md](references/stages.md) — Stage Guide (0–5)

@@ -30,6 +30,7 @@
 - [references/plugin-loading-test-framework.md](references/plugin-loading-test-framework.md): 插件加载安全网协议 + 插件导入测试安全网框架
 - [references/prm-monitor-methodology.md](references/prm-monitor-methodology.md): PRM Monitor：方法论与交叉审查
 - [references/research-408.md](references/research-408.md): Research 408 — 计算机 408 四轴优化分析
+- [references/sdk-loop-layering.md](references/sdk-loop-layering.md): Agent Loop 分层条款（两层 loop · 暗依赖红线 · DSH 对齐）
 - [references/security-incident-response.md](references/security-incident-response.md): 密钥泄露应急处置流程（BP.08.05 对照）
 - [references/sequence-node-safety-net-template.md](references/sequence-node-safety-net-template.md): 序列节点安全网模板（Sequence-Node Safety Net Template）
 - [references/stages.md](references/stages.md): Stage Guide (0–5)
