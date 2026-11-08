@@ -1891,8 +1891,36 @@ class TestTargetPathScope:
         deep = tmp_path / "a" / "b"
         deep.mkdir(parents=True)
         near = tmp_path / "a" / ".gatekeeper.state"
-        near.write_text("{}", encoding="utf-8")
+        near.write_text(json.dumps({"stage": "ECO-EDIT"}), encoding="utf-8")
         assert pre_tool_hook._resolve_state_by_target_path(str(deep / "f.py")) == near
+
+    def test_resolve_by_target_stageless_state_not_claimed(self, tmp_path, monkeypatch):
+        """B2（2026-11-06）：缺 `stage` 的 state（`gk_finding` 首次写入的副产物）不得被认领。
+
+        实测现场：`<home>\\.gatekeeper.state` 只有 `gate_data` + `_checksum`
+        ⟹ 就近上溯认领 ⟹ `stage.get("stage","IDLE")` = IDLE ⟹ home 下所有目标（含
+        兄弟技能 `git-workflow/**`）被误拦。判据：缺 stage ⟹ 继续上溯 / 无果返回 None。
+        """
+        self._env(tmp_path, monkeypatch)
+        root = tmp_path / "home"
+        deep = root / "app" / "deep"
+        deep.mkdir(parents=True)
+        (root / ".gatekeeper.state").write_text(
+            json.dumps({"gate_data": {}, "_checksum": "deadbeef"}), encoding="utf-8")
+        assert pre_tool_hook._resolve_state_by_target_path(str(deep / "f.py")) is None
+
+    def test_resolve_by_target_skips_stageless_to_valid_ancestor(self, tmp_path, monkeypatch):
+        """负臂②：跳过缺 stage 的就近 state 后，**有效**祖先 state 仍可被认领（不是一刀切放行）。"""
+        self._env(tmp_path, monkeypatch)
+        root = tmp_path / "home"
+        mid = root / "a"
+        deep = mid / "b"
+        deep.mkdir(parents=True)
+        (deep / ".gatekeeper.state").write_text(
+            json.dumps({"gate_data": {}}), encoding="utf-8")
+        valid = mid / ".gatekeeper.state"
+        valid.write_text(json.dumps({"stage": "ECO-EDIT"}), encoding="utf-8")
+        assert pre_tool_hook._resolve_state_by_target_path(str(deep / "f.py")) == valid
 
     def test_resolve_by_target_none_when_unrelated(self, tmp_path, monkeypatch):
         self._env(tmp_path, monkeypatch)
@@ -3500,6 +3528,26 @@ class TestWorktreeRouteGate:
 
     def test_inline_escape(self):
         assert pre_tool_hook._wt_route_gate("GK_ALLOW_WT_ADD=1 git worktree add /x HEAD") is None
+
+    # ── 2026-11-08（owner：拦截裸 git 生命周期通道；回收侧此前漏网）──────────────
+    def test_git_worktree_remove_blocked(self):
+        assert pre_tool_hook._wt_route_gate(
+            "git worktree remove <home>/.trae/worktrees/r/x") is not None
+
+    def test_git_worktree_prune_blocked(self):
+        assert pre_tool_hook._wt_route_gate("git worktree prune") is not None
+
+    def test_git_branch_delete_blocked(self):
+        """`-d` 与 `-D` 都必须拦：回收归口 = apply-worktree --reclaim --branches。"""
+        assert pre_tool_hook._wt_route_gate("git branch -d feature/x") is not None
+        assert pre_tool_hook._wt_route_gate("git branch -D feature/x") is not None
+        # 带选项的形态（`git -C <repo> branch -d`）同样拦
+        assert pre_tool_hook._wt_route_gate('git -C "/mnt/c/repo" branch -d feature/x') is not None
+
+    def test_reclaim_entry_allowed(self):
+        """反臂：走 apply-worktree 回收链（含 --branches/--apply）不得被拦。"""
+        assert pre_tool_hook._wt_route_gate(
+            "bash gatekeeper-cli.sh apply-worktree --reclaim --path /x --branches --apply") is None
 
 
 

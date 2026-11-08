@@ -349,9 +349,9 @@ def evaluate(state_file):
     mu_tgt = _env_int("GK_CONV_MU_TGT", MU_TGT_DEFAULT)
     out = {"ok": False, "delta": delta, "tau": tau, "mu_tgt": mu_tgt}
     ts = load_t_star(state_file)
-    if not ts:
-        out.update({"error": ERR_NOT_FROZEN, "hint": "T 未冻结：先 t-star-freeze（§1-C3 前提门）"})
-        return out
+    # 正本 §4（2026-11-06 规格对齐）：`T*` 未冻属 **warn（只 WARN、不阻断）**，不是 error。
+    #   仍拒出 `N*`（`n_star*` = null），但 `r̂`/μ 序列照常可算 ⟹ 跨轮评估不被前提门整段掐死。
+    t_frozen = bool(ts)
     data = gk_state._read_state(state_file)
     if "error" in data:
         out.update({"error": "STATE_UNREADABLE", "hint": str(data.get("error"))[:200]})
@@ -414,7 +414,7 @@ def evaluate(state_file):
         n_lo_reason = "not_emitted"
     ci = r_interval(r_hat, mus[0], mus[-1], rt["rounds"])
     out.update({
-        "ok": True, "t_star_sha": ts.get("sha256"), "t_star_frozen_at": ts.get("frozen_at"),
+        "ok": True, "t_star_sha": (ts or {}).get("sha256"), "t_star_frozen_at": (ts or {}).get("frozen_at"),
         "rates": rt, "a_bar": rt["a_bar"], "b_bar": rt["b_bar"], "r_hat": r_hat,
         "r_hat_basis": f"stock_geometric_mean({rt['rounds']} rounds)",
         "mu_series": mus, "mu0": mu0, "n_star": n, "n_star_reason": n_reason,
@@ -428,6 +428,14 @@ def evaluate(state_file):
         "self_locked": r_hat >= 1.0,
         "verdict": "pass" if verdict == "emit" else verdict,
     })
+    if not t_frozen:
+        out.update({"gate": "warn", "warn": ERR_NOT_FROZEN,
+                    "n_star": None, "n_star_hi": None, "n_star_lo": None,
+                    "n_star_reason": ERR_NOT_FROZEN,
+                    "n_star_lo_reason": "not_emitted_T_NOT_FROZEN",
+                    "infinite": True})
+    else:
+        out.setdefault("gate", "pass")
     return out
 
 
@@ -531,10 +539,15 @@ def gate(state_file):
            "tier_recommendation": _tier_rec(ev, max_rounds, state_file)}
     if not ev.get("ok"):
         err = ev.get("error")
-        if err == ERR_NOT_FROZEN:
+        # A′ 判序：T 未冻是**第一前提**，优先于降级原因（detail 仍保留真实降级错误）。
+        if err == ERR_NOT_FROZEN or (err and not load_t_star(state_file)):
             res.update({"action": "warn", "warning": GATE_WARN_NO_FREEZE, "error": ERR_NOT_FROZEN})
         else:
             res.update({"action": "warn", "warning": GATE_WARN_UNAVAILABLE, "error": err or GATE_WARN_UNAVAILABLE})
+        return res
+    if ev.get("warn") == ERR_NOT_FROZEN:
+        # A′：T 未冻 = warn（不阻断）；stdout 契约仍须报 NO_FREEZE，不得退化成 UNAVAILABLE。
+        res.update({"action": "warn", "warning": GATE_WARN_NO_FREEZE, "error": ERR_NOT_FROZEN})
         return res
     if ev.get("abstain"):
         # margin band：只 WARN，不 block（既不发射视界，也不宣称自锁）。

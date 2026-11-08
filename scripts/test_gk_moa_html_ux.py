@@ -29,15 +29,40 @@ def _agg(tmp_path):
 
 # ── A：系统默认打开 ──────────────────────────────────────────────
 def test_open_candidates_system_default_no_explorer():
-    """候选链只用系统默认处理器（cmd start / xdg-open），**不得再有 explorer.exe 兜底**。"""
+    """WSL 只走 Windows 默认处理器，**不得回退 Linux 浏览器 / explorer.exe 兜底**。"""
     c = M._open_candidates("<home>/a.html")
-    assert c == [["cmd.exe", "/c", "start", "", "<home>\\a.html"],
-                 ["xdg-open", "<home>/a.html"]], c
+    assert c == [["cmd.exe", "/c", "start", "", "<home>\\a.html"]], c
     assert all("explorer.exe" not in cmd for cmd in c), "explorer 兜底须删（可能落到非默认处理器）"
 
 
-def test_open_candidates_non_wsl_only_xdg_open():
-    assert M._open_candidates("/home/u/a.html") == [["xdg-open", "/home/u/a.html"]]
+def test_open_candidates_linux_xdg_then_gio(monkeypatch):
+    monkeypatch.setattr(M.sys, "platform", "linux")
+    assert M._open_candidates("/home/u/a.html") == [
+        ["xdg-open", "/home/u/a.html"], ["gio", "open", "/home/u/a.html"]]
+
+
+def test_open_candidates_darwin_uses_open(monkeypatch):
+    monkeypatch.setattr(M.sys, "platform", "darwin")
+    assert M._open_candidates("/Users/u/a.html") == [["open", "/Users/u/a.html"]]
+
+
+def test_open_candidates_host_override(monkeypatch):
+    """宿主任一平台可注入内置页/内部预览打开器，不绑定具体浏览器。"""
+    monkeypatch.setenv("GK_MOA_OPEN_CMD", "my-preview --flag")
+    assert M._open_candidates("/x/a.html") == [["my-preview", "--flag", "/x/a.html"]]
+
+
+def test_open_in_browser_headless_linux_is_noop(monkeypatch, tmp_path):
+    """无图形会话（非 WSL）⟹ 不假装打开；即便文件存在也零发起。"""
+    monkeypatch.setattr(M.sys, "platform", "linux")
+    for k in ("DISPLAY", "WAYLAND_DISPLAY", "WSL_DISTRO_NAME", "GK_MOA_OPEN_CMD"):
+        monkeypatch.delenv(k, raising=False)
+    calls = []
+    monkeypatch.setattr("subprocess.Popen", lambda *a, **k: calls.append(a))
+    f = tmp_path / "a.html"
+    f.write_text("<html></html>", encoding="utf-8")
+    assert M._open_in_browser(f) is False
+    assert calls == [], "headless 下不得发起打开"
 
 
 def test_open_in_browser_missing_target_is_noop(monkeypatch, tmp_path):

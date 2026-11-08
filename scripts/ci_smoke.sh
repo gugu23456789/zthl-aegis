@@ -65,6 +65,9 @@ echo "== 5/5 fast pytest =="
   scripts/test_gk_subagent_model_chain.py \
   scripts/test_opcap_evidence_alias.py \
   scripts/test_pack_release.py \
-  scripts/test_gk_bomb_inventory.py
+  scripts/test_gk_bomb_inventory.py \
+  scripts/test_gk_paper_review_loader.py \
+  scripts/test_gk_gate_entropy.py \
+  scripts/test_subagent_role_tools.py
 
 echo "ci_smoke: OK"

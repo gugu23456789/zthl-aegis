@@ -59,6 +59,37 @@ d13fe45 feat: initial SPZ Gatekeeper R-Phase Pipeline v3.x
 - 跨会话切换前（减少对方 rebase 成本）
 - 不需要 commit 的：测试输出、IDE 配置、临时调试脚本（已加 .gitignore）
 
+## 文档与复评产物落点（硬约定，2026-11-08）
+
+依据：`docs/analysis/subagent/sub-1794105259-46-12184.md`（408 帧调研）与 `docs/analysis/` 两份 408 先例。
+目标：产物**自包含、可追溯、只有一份**；不把运行期数据当仓库资产，也不让未跟踪文件挡住 ff 合并。
+
+| 产物 | 落点 | 入库 | 说明 |
+|:--|:--|:--|:--|
+| 分析报告 | `docs/analysis/YYYY-MM-DD-<topic>.md` | 是 | 自包含：结论 + 证据 + 可证伪实验 |
+| 408 分析报告 | `docs/analysis/YYYY-MM-DD-<topic>-408.md` | 是 | 头部注明 `GK_RESEARCH_FRAME=408` |
+| 臂报告 | `docs/analysis/subagent/sub-<id>.md` | 是 | `.gitignore` 只再包含 `*.md` |
+| 臂原始 JSON | `docs/analysis/subagent/sub-<id>.json` | 否 | 已忽略；**不得**作为唯一证据锚 |
+| MoA 聚合快照 | `docs/analysis/YYYY-MM-DD-<topic>-rN.md` | 是 | 内嵌各臂结论，自包含 |
+| 同日聚合页快照 | 同名 `-rN.html` | 是 | 与 `2026-11-06-sdk-moa-v12.html` 先例一致 |
+| chain 运行期页 | `moa-chain-*.html` | 否 | 每次 chain 重写，含本地批指纹/路径 |
+| 报告类 bulk | — | — | **不进** state 卫星（`KIND_SUFFIX` 无 report 类） |
+
+**流程约束**
+
+1. 主树落盘后**立即** `git add` 入库；worktree 只作中间稿——纯 `--ff-only` 不携带未跟踪文件。
+2. 同一路径只允许一份：跨 worktree 同名不同 sha 视为缺陷，须合并为单份。
+3. 禁止把 gitignored 的 `*.json` 当唯一证据锚；必须引用时，相邻给出重跑命令。
+4. 收尾时 `git status --short docs/analysis` 必须为空，且 `self-check` 的
+   `docs_analysis_untracked` 不得为 `WARN`。
+
+```bash
+# 收尾三查
+git status --short docs/analysis
+git ls-files docs/analysis | grep -E 'subagent/.*\.json$'   # 期望空
+git check-ignore -v docs/analysis/subagent/x.json            # 期望命中 .gitignore
+```
+
 ## 测试解释器（硬约定，2026-10-27 起由 Gate R0.16 机检）
 
 本仓测试**必须**跑在「配好的解释器」上；基线（`scripts/_accept_baseline.txt`）绑定解释器，换解释器结果不可比。

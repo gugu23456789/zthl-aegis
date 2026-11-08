@@ -160,6 +160,15 @@ def run_scenario(state_bytes, payload_bytes, writers, ops):
     else:
         amp = None
         amp_src = "none"
+    # 2026-11-06（口径修正）：`write_amp` 原定义 = 写字节 / 逻辑 payload，当 payload ≪ state 时
+    #   会得到数百倍，语义上其实是 `state_size / payload`。拆成两个可解释的指标：
+    #   · amp_per_payload：写字节 / 逻辑 payload（保留旧口径，`write_amp` 作兼容别名）
+    #   · amp_per_state  ：写字节 /（逻辑写次数 × state 字节）≈ 每次全量重写的倍数（期望 ~1–2）
+    _sb = int(st.get("bytes") or state_bytes or 0)
+    if io_ok and success > 0 and _sb > 0:
+        amp_per_state = io_total / float(success * _sb)
+    else:
+        amp_per_state = None
     ok = (not errors and st.get("ok") and success == expected
           and st.get("seq") == expected)
     return {
@@ -171,7 +180,10 @@ def run_scenario(state_bytes, payload_bytes, writers, ops):
         "wall_s": round(wall, 4),
         "ops_s": round(success / wall, 2) if wall > 0 else None,
         "latency": C.percentiles(lat),
-        "write_amp": _fmt_amp(amp),
+        "amp_per_payload": _fmt_amp(amp),
+        "amp_per_state": _fmt_amp(amp_per_state),
+        "amp_src": amp_src,
+        "write_amp": _fmt_amp(amp),          # 兼容别名（旧 baseline 读此键）
         "write_amp_src": amp_src,
         "io_write_bytes": io_total,
         "logical_payload_bytes": logical,
@@ -226,13 +238,14 @@ def _markdown(result):
         rows.append([
             s["scenario"], s["writers"], s["ops_per_worker"], s["success_ops"],
             s["wall_s"], s["ops_s"], lat.get("p50_ms"), lat.get("p95_ms"),
-            lat.get("p99_ms"), s["write_amp"], s["write_amp_src"],
+            lat.get("p99_ms"), s.get("amp_per_payload"), s.get("amp_per_state"), s["amp_src"],
             round((s["state_bytes"] or 0) / 1024, 1), s["final_seq"], s["ok"],
         ])
     md = ["# gk_bench_state — %s" % result["mode"], "",
-          "真实 `state_lock` + `update_state`；写放大 = 进程级写字节 / 逻辑 payload。", "",
+          "真实 `state_lock` + `update_state`；amp/payload = 写字节 / 逻辑 payload，"
+          "amp/state = 写字节 /（写次数 × state 字节，期望 ~1–2）。", "",
           C.md_table(["scenario", "writers", "ops", "success", "wall_s", "ops_s",
-                      "p50_ms", "p95_ms", "p99_ms", "write_amp", "amp_src",
+                      "p50_ms", "p95_ms", "p99_ms", "amp/payload", "amp/state", "amp_src",
                       "state_kb", "final_seq", "ok"], rows)]
     if result.get("crash"):
         crows = [[c["trial"], c["seq_before_kill"], c["final_seq"], c["checksum_ok"],
@@ -253,6 +266,8 @@ def main(argv=None):
     p.add_argument("--full", action="store_true")
     p.add_argument("--smoke", action="store_true")
     p.add_argument("--no-crash", action="store_true")
+    p.add_argument("--crashes", type=int, default=None,
+                   help="崩溃注入次数（覆盖挡位默认值；full 默认 20，quick 3）")
     p.add_argument("--out-dir", default="")
     p.add_argument("--json", action="store_true")
     a = p.parse_args(argv)
@@ -262,13 +277,15 @@ def main(argv=None):
     elif a.full:
         mode = "full"
         state_sizes, payloads, writers, ops, crash_trials = (
-            [128 * 1024, 512 * 1024], [1024, 65536], [1, 8, 32], 30, 10)
+            [128 * 1024, 512 * 1024], [1024, 65536], [1, 8, 32], 30, 20)
     else:
         mode = "quick"
         state_sizes, payloads, writers, ops, crash_trials = (
             [128 * 1024], [1024, 16384], [1, 4], 20, 3)
     if a.no_crash:
         crash_trials = 0
+    if a.crashes is not None:
+        crash_trials = max(0, int(a.crashes))
     scenarios = []
     for sb in state_sizes:
         for pb in payloads:
@@ -279,7 +296,9 @@ def main(argv=None):
     crash = []
     for i in range(crash_trials):
         print("[bench-state] crash trial %d" % (i + 1), file=sys.stderr)
-        crash.append(run_crash_trial(i + 1))
+        # 2026-11-06（覆盖缺口修正）：崩溃注入不再固定 128 KB，按 state_sizes 轮转，
+        #   full 模式因此会覆盖 512 KB 场景。
+        crash.append(run_crash_trial(i + 1, state_bytes=state_sizes[i % len(state_sizes)]))
     result = {
         "ok": all(s["ok"] for s in scenarios) and all(c["ok"] for c in crash),
         "mode": mode,

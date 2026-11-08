@@ -26,6 +26,7 @@ import json
 import math
 import os
 import re
+import shlex
 import signal
 import subprocess
 import sys
@@ -1461,6 +1462,7 @@ _N_EFF_MIN = 2.0
 def cluster_references(refs: list[dict], tau: float = _CLUSTER_TAU,
                        min_agreement: float = _CLUSTER_MIN_AGREE,
                        pollution_tilt: float = None,
+                       provenance: dict | None = None,
                        strict_independence: bool = False) -> dict:
     """按**结构化字段签名**对 references 聚类；返回 `{clusters, consensus}`。
 
@@ -1481,6 +1483,11 @@ def cluster_references(refs: list[dict], tau: float = _CLUSTER_TAU,
     实时 `divergence`（`gate_data.human_calibration_log`）**派生**、`p_art` 待调用方供
     `defect_rate`（后验）。⟹ 有 divergence 时实效 = **P-in ⊕ P-meta**；无则退化为 P-in。
     仍**不冒充**：观测缺失的通道不落值（不按 0 计入，只跳过）。
+
+    2026-11-03：`provenance`（可选）标注折扣来源。`consensus.adjusted` = 是否应用了折扣；
+    `adjustment_verified` = 是否带完整 provenance（fingerprint/S/N/batch_id/measured_at）。
+    公开引用时，`adjustment_verified=false` 一律按 **unadjusted** 处理（见
+    `references/oss-moa-phase-provenance.md`）。
     """
     items = list(refs or [])
     n = len(items)
@@ -1560,6 +1567,13 @@ def cluster_references(refs: list[dict], tau: float = _CLUSTER_TAU,
     #   （见 aggregate 调用点），`p_art` 待调用方 `defect_rate` ⟹ 有 divergence 时实效 = P-in ⊕ P-meta。
     #   `pollution_tilt is None` ⟹ 无折扣（逐字零回归；κ_tilt=0 亦同）。
     _pt = 0.0 if pollution_tilt is None else max(0.0, min(1.0, float(pollution_tilt)))
+    # 2026-11-03：污染折扣的**来源验证**（公开面口径）。`adjusted` = 是否应用了折扣；
+    #   `adjustment_verified` = 折扣是否带完整 provenance（fingerprint/S/N/batch_id/measured_at）。
+    #   无 provenance 时仍保留既有折扣行为（零回归），但**公开引用必须按 unadjusted 处理**
+    #   （见 `references/oss-moa-phase-provenance.md`）。
+    _PROV_KEYS = ("fingerprint", "S", "N", "batch_id", "measured_at")
+    _prov = provenance if isinstance(provenance, dict) else None
+    _prov_ok = bool(_prov and all(_prov.get(k) not in (None, "") for k in _PROV_KEYS))
     agreement_eff = round(agreement * (1.0 - _pt), 4)
     # A8-①（P-2，`ECC-715E4C8DD7C2`）：臂数轴**有效样本量**（Kish）n_eff = n²/Σsize² —— 从**已算**的
     #   簇大小复算（§9.5 AP2「禁重复规划」：复用既有聚类，不另起估计器）。折叠越多 ⟹ n_eff 越小。
@@ -1594,6 +1608,9 @@ def cluster_references(refs: list[dict], tau: float = _CLUSTER_TAU,
         "agreement": agreement,
         "agreement_eff": agreement_eff,
         "pollution_tilt": _pt,
+        "adjusted": bool(_pt > 0.0),
+        "adjustment_verified": bool(_pt > 0.0 and _prov_ok),
+        "pollution_provenance": _prov if (_pt > 0.0 and _prov_ok) else None,
         "min_agreement": round(min_agreement, 4),
         # A8-①（P-2）：臂数轴 Kish 有效样本量 + 独立度门（**只暴露**，不并入 abstain；见 `_N_EFF_MIN` 注）。
         # 题面异构 ⟹ `n_eff`/`independence_ok` 记 None（未测量，禁冒充），原始值留 `n_eff_raw`。
@@ -2593,6 +2610,24 @@ def chain(state_file: str, *, plan: str = "", batch: str = "", role: str = "plan
     except Exception as e:  # noqa: BLE001 — 评估器不可用 ⟹ 具名 UNKNOWN（**禁**当成熔断）
         steps["early_stop"] = {"verdict": "UNKNOWN", "error": type(e).__name__,
                                "source": "gk_convergence_evaluator.no_convergence_finding"}
+    # 2026-11-06（owner 令：信号可见性 + M 空）：
+    #   (1) `switch_to=M` 时 P/L/M 的 M 不得为空；空则补一条确定性机制项（取自早停判决），
+    #       否则「让你转 M 却不给机制项」= 自相矛盾。
+    #   (2) 停止信号必须打到 stderr，不能只埋在 JSON / state 台账里。
+    _esv = steps.get("early_stop") or {}
+    if _esv.get("switch_to") == "M" and not (steps["plm"].get("M") or []):
+        steps["plm"]["M"] = [{
+            "action": "按 switch_to=M 落机制修复：停止重复评审，修门禁/机检机制",
+            "evidence": "early_stop=%s r_hat=%s rounds=%s finding=%s" % (
+                _esv.get("verdict"), _esv.get("r_hat"),
+                _esv.get("rounds"), _esv.get("finding")),
+        }]
+    if _esv.get("verdict") == "NO_CONVERGENCE":
+        sys.stderr.write(
+            "[STOP] NO_CONVERGENCE — 已停止复评（r̂=%s, rounds=%s, switch_to=%s, finding=%s）；"
+            "下一步=机制修复，不要重跑同类评审\n" % (
+                _esv.get("r_hat"), _esv.get("rounds"),
+                _esv.get("switch_to"), _esv.get("finding")))
     # T4（2026-10-15，C 计划 §3-T4）：链尾**缺省**导出 HTML（`--no-html` opt-out）；路径规则化。
     #   原实现收 `html_path` 却只标 `pending(T4)` = **收参不干活**（假状态）—— 现真写盘；
     #   写盘失败**如实报 `error`**（禁静默标 written）。
@@ -2605,7 +2640,7 @@ def chain(state_file: str, *, plan: str = "", batch: str = "", role: str = "plan
             # §3 G2（2026-10-26）：链尾 HTML 原**未传 trend** ⟹ 缺省导出的页面没有跨轮趋势图
             #   （只有 `--html` 走 `_emit_html` 才带）。趋势源与 `_emit_html` 同源（只读 state）。
             Path(_hp).write_text(
-                render_html(agg, {"plan": plan, "batch": b},
+                render_html(agg, {"plan": plan, "batch": b, "stop": steps.get("early_stop")},
                             trend=_trend_from_state(state_file, plan=plan)),
                 encoding="utf-8")
             steps["html"] = {"requested": True, "status": "written", "path": _hp}
@@ -4396,6 +4431,14 @@ def render_html(agg: dict, meta: dict | None = None, trend: list | None = None) 
         if not trace:
             trace = rep.get("trace") or {}
     key = str((trace.get("attribution") or {}).get("anchor") or agg.get("mode") or "agg")[:24]
+    _stop = meta.get("stop") or {}
+    _stop_banner = ""
+    if isinstance(_stop, dict) and _stop.get("verdict") == "NO_CONVERGENCE":
+        _stop_banner = ('<div class="banner-warn"><b>已停止复评（NO_CONVERGENCE）</b>：r̂='
+                        + esc(str(_stop.get("r_hat"))) + ' · rounds=' + esc(str(_stop.get("rounds")))
+                        + ' · switch_to=' + esc(str(_stop.get("switch_to")))
+                        + ' · finding <code>' + esc(str(_stop.get("finding") or "")) + '</code>'
+                        + '。本页结论仅作参考，下一步是机制修复，不要重跑同类评审。</div>')
 
     o = ['<!DOCTYPE html>', '<html lang="zh-CN"><head><meta charset="utf-8">',
          '<meta name="viewport" content="width=device-width,initial-scale=1">',
@@ -4410,6 +4453,7 @@ def render_html(agg: dict, meta: dict | None = None, trend: list | None = None) 
          + _abbr("divergence") + ' 与 ' + _abbr("HUMAN_OVERSCORE") + ' / ' + _abbr("HUMAN_UNDERSCORE")
          + ' 由 CLI 侧 <code>' + _abbr("adjudicate") + '</code> 事后计算。'
          '本页纯只读：不写 state，出口只有「导出散文 <code>prose.txt</code> + 复制三步命令链」。</div>',
+         _stop_banner,
          _kpi_band(agg, refs, trend),
          _html_pollution(agg),
          '<div class="nav"><a href="#sec-mat" data-i18n="nav-mat">一 · 聚合材料</a>'
@@ -4641,7 +4685,7 @@ def render_html(agg: dict, meta: dict | None = None, trend: list | None = None) 
           '<b>整行忽略</b>，⟹ 产出 0 条 finding ⟹ 全 PASS 放行）；载体标记 '
           '<code>(P)</code>计划 / <code>(L)</code>机检 / <code>(M)</code>机制。</div>'
           '<textarea id="prose" style="min-height:220px" '
-          'placeholder="例：- (P) T3 范围界定模糊，须收窄到原定模块。  - (M) 预算耗尽截停无告警，须补看门狗。"></textarea>'
+          'placeholder="每条以 - 或 1. 开头；按载体加 (P)/(L)/(M) 前缀；建议带 file:line 或 ECC id"></textarea>'
           '<div id="prose-warn" class="banner-warn" style="display:none"></div>'
           '<div class="axis" style="grid-template-columns:190px 130px 1fr;margin-top:8px">'
           '<div>JSON 落盘目录</div><div class="meta">供命令引用</div>'
@@ -4677,15 +4721,22 @@ def render_html(agg: dict, meta: dict | None = None, trend: list | None = None) 
 def _open_candidates(s: str) -> list:
     """**系统默认程序**打开候选（单路优先，**无 explorer 兜底**）。
 
-    WSL(`/mnt/<d>/...`) → `cmd.exe start`；其余 → `xdg-open`（native Windows 走 `os.startfile`，不经此表）。
+    优先级：
+      ① `GK_MOA_OPEN_CMD`（宿主注入：内置页/内部预览；不绑定具体浏览器）；
+      ② WSL(`/mnt/<d>/...`) → `cmd.exe start`（只走 Windows 默认处理器，不回退 Linux 浏览器）；
+      ③ macOS → `open`；Linux → `xdg-open` → `gio open`。
+    native Windows 走 `os.startfile`（ShellExecute），不经此表。
     """
-    out = []
+    custom = (os.environ.get("GK_MOA_OPEN_CMD") or "").strip()
+    if custom:
+        return [shlex.split(custom) + [s]]
     m = re.match(r"^/mnt/([a-zA-Z])/(.*)$", s)
     if m:
         win = m.group(1).upper() + ":\\" + m.group(2).replace("/", "\\")
-        out.append(["cmd.exe", "/c", "start", "", win])
-    out.append(["xdg-open", s])
-    return out
+        return [["cmd.exe", "/c", "start", "", win]]
+    if sys.platform == "darwin":
+        return [["open", s]]
+    return [["xdg-open", s], ["gio", "open", s]]
 
 
 def _open_in_browser(target) -> bool:
@@ -4694,7 +4745,9 @@ def _open_in_browser(target) -> bool:
     2026-10-09（owner 裁定「去修系统默认，大概有 bug」）：
       · **存在护栏**：文件目标不存在 ⟹ 直接返回 False（防 `start`/浏览器把坏路径当 URL/搜索页打开
         —— 即「莫名其妙的谷歌」）；
-      · **单路**：native Windows → `os.startfile`；WSL → `cmd.exe start`；其余 → `xdg-open`；
+      · **单路**：native Windows → `os.startfile`；WSL → `cmd.exe start`；
+        macOS → `open`；Linux → `xdg-open` → `gio open`；宿主任一平台可经
+        `GK_MOA_OPEN_CMD` 注入内置页打开器；**无图形会话且非 WSL ⟹ 直接 False**；
         **删 `explorer.exe` 兜底**（它可能落到非默认处理器）。
     纪律：**best-effort，永不因打开失败而让命令失败**（页面已写盘，打开只是便利面）；
     返回是否至少发起了一次调用（供 envelope 记 `opened`，可机检）。
@@ -4710,6 +4763,11 @@ def _open_in_browser(target) -> bool:
             s = str(p.resolve())
         except OSError:
             return False
+    _is_wsl = ("WSL_DISTRO_NAME" in os.environ) or bool(re.match(r"^/mnt/[a-zA-Z]/", s))
+    if (not os.environ.get("GK_MOA_OPEN_CMD") and sys.platform.startswith("linux")
+            and not _is_wsl
+            and not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))):
+        return False                    # 无图形会话：不假装打开
     if hasattr(os, "startfile"):        # native Windows：ShellExecute = 系统默认处理器
         try:
             os.startfile(s)             # type: ignore[attr-defined]

@@ -161,7 +161,62 @@ def write_json_file(path: str | os.PathLike, data: dict, mode: int = 0o600,
 #   Linux flock 对**同文件不同 fd**互斥 ⟹ 二次 fcntl.flock 会**自锁**。故按 realpath 记深度，
 #   同进程重复进入只加计数、不重复 flock（跨进程仍严格互斥）。
 _LOCKS: dict = {}                 # realpath -> [fd, depth]
+_LOCK_FDS: dict = {}              # lock 文件 realpath -> 常驻 fd（跨 acquire 复用）
+_LOCK_FD_CACHE_MAX = 64           # 常驻 fd 上限（防「每个 tmp state 一个 fd」的无界泄漏）
 LOCK_TIMEOUT = 5.0
+# 2026-11-03（M1）：`realpath` / `makedirs` 是 Windows 上取锁的主要固定开销（实测 ~2ms）。
+# 路径在进程生命周期内稳定 ⟹ 缓存结果；目录被外部删除时 `os.open` 失败会重建（见下）。
+_REALPATH_CACHE: dict = {}
+_READY_DIRS: set = set()
+
+
+def _lock_key(path) -> str:
+    s = str(path)
+    k = _REALPATH_CACHE.get(s)
+    if k is None:
+        k = os.path.realpath(s)
+        _REALPATH_CACHE[s] = k
+    return k
+
+
+def _lock_fd(key) -> int:
+    """锁文件的常驻 fd（2026-11-03 M1：Windows 上 open/close 各 ~0.3ms，压在临界区外沿）。
+
+    2026-11-03 收尾：加**上限 + 逐出**。首版无界缓存 ⟹ pytest 每 worker 累积 100+ 个
+    `.lock` fd（全量压测实测），长跑会撞 `EMFILE`。逐出跳过**当前仍持有**的 fd（`_LOCKS`）。
+    """
+    p = state_lock_path(key)
+    fd = _LOCK_FDS.get(p)
+    if fd is not None:
+        return fd
+    fd = os.open(p, os.O_CREAT | os.O_RDWR, 0o644)
+    _LOCK_FDS[p] = fd
+    if len(_LOCK_FDS) > _LOCK_FD_CACHE_MAX:
+        held = {v[0] for v in _LOCKS.values()}
+        for _p, _fd in list(_LOCK_FDS.items()):
+            if _p == p or _fd in held:        # 不逐出刚建的 / 正在持有的
+                continue
+            try:
+                os.close(_fd)
+            except OSError:
+                pass
+            _LOCK_FDS.pop(_p, None)
+            if len(_LOCK_FDS) <= _LOCK_FD_CACHE_MAX:
+                break
+    return fd
+
+
+def _unlock_fd(fd) -> None:
+    """显式释放（fd 常驻 ⟹ 不能靠 close 释放）。失败不抛（fd 复用不改变互斥语义）。"""
+    try:
+        if fcntl is not None:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        elif msvcrt is not None:
+            os.lseek(fd, 0, os.SEEK_SET)
+            msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+    except OSError:
+        pass
+
 # ── 锁观测（A2，2026-10-28）──────────────────────────────────────────────────
 # A2 裁定明写：「state lock timeout=0 命中**不可**当无瓶颈证据（BLOCK 路径吞异常）」。
 # 原实现里超时只抛 `TimeoutError`，谁 try/except 吞掉谁就看不见 —— 于是「0 次超时」既可能
@@ -189,22 +244,6 @@ def state_lock_path(path) -> str:
     return str(path) + ".lock"
 
 
-def _env_lock_timeout(default: float = LOCK_TIMEOUT) -> float:
-    """`GK_STATE_LOCK_TIMEOUT`（秒）覆盖取锁预算。
-
-    非法 / 非正 / 空 ⟹ 回落 `default`：**不允许通过 env 关掉超时**（0 或负数会把
-    fail-loud 变成无界阻塞，等于给并发争用装了一块看不见的地毯）。
-    """
-    raw = os.environ.get("GK_STATE_LOCK_TIMEOUT", "")
-    if not raw:
-        return default
-    try:
-        val = float(raw)
-    except (TypeError, ValueError):
-        return default
-    return val if val > 0 else default
-
-
 def _flock_wait(fd: int, timeout: float) -> None:
     """带超时的排他 flock（LOCK_NB 轮询）；超时 → TimeoutError（fail-loud，不静默降级）。"""
     import time as _t
@@ -216,7 +255,9 @@ def _flock_wait(fd: int, timeout: float) -> None:
         except OSError:
             if _t.monotonic() >= deadline:
                 raise TimeoutError("state lock timeout (%.1fs): %s" % (timeout, fd))
-            _t.sleep(0.02)
+            # 2026-11-03（M1）：20ms → 2ms。32 writers 压测下 20ms 的轮询粒度把 p99 抬到
+            # 1.2s（锁本身只持有几 ms）；2ms 让等待-唤醒延迟与临界区同量级。
+            _t.sleep(0.002)
 
 
 def _win_lock_wait(fd: int, timeout: float) -> None:
@@ -236,25 +277,18 @@ def _win_lock_wait(fd: int, timeout: float) -> None:
         except OSError:
             if _t.monotonic() >= deadline:
                 raise TimeoutError("state lock timeout (%.1fs): %s" % (timeout, fd))
-            _t.sleep(0.02)
+            _t.sleep(0.002)
 
 
 @contextlib.contextmanager
-def state_lock(path, timeout: float = None):
+def state_lock(path, timeout: float = LOCK_TIMEOUT):
     """跨进程 state 排他锁（**可重入**）。唯一锁持有者 = python（选项 A，2026-09-25）。
 
     POSIX → `fcntl.flock`；Windows → `msvcrt.locking`（[ECC-CA93145A1E67]：原式在非 POSIX
     **退化为无锁** ⟹ 并发 `set-nested`/`append-list` 读-改-写丢写，Windows 实测 6 进程仅 3~4 落地）。
     仅当两者皆不可用（罕见平台）才无锁 —— 与升级前行为一致，不新增失败面。
-
-    `timeout=None` ⟹ 走 `GK_STATE_LOCK_TIMEOUT`（秒）覆盖，缺省 `LOCK_TIMEOUT`。
-    为什么要有这个口：基准/CI 的 32 写者场景在被挤占的 runner 上会因 5s 预算假红
-    （2026-11-05 bench-nightly 归因），而超时本身仍必须是失败（fail-loud 语义不变）。
-    显式传值（含 `timeout=0` 的试探调用）优先于 env。
     """
-    if timeout is None:
-        timeout = _env_lock_timeout()
-    key = os.path.realpath(str(path))
+    key = _lock_key(path)
     ent = _LOCKS.get(key)
     if ent is not None:                       # 本进程已持锁 ⟹ 只加深度（防自锁）
         ent[1] += 1
@@ -265,9 +299,17 @@ def state_lock(path, timeout: float = None):
             ent[1] -= 1
         return
     d = os.path.dirname(key)
-    if d:
+    if d and d not in _READY_DIRS:
         os.makedirs(d, exist_ok=True)
-    fd = os.open(state_lock_path(key), os.O_CREAT | os.O_RDWR, 0o644)
+        _READY_DIRS.add(d)
+    try:
+        fd = _lock_fd(key)
+    except OSError:
+        if not d:                             # 目录被外部删除 ⟹ 重建一次（不缓存失败）
+            raise
+        os.makedirs(d, exist_ok=True)
+        _READY_DIRS.add(d)
+        fd = _lock_fd(key)
     try:
         try:
             if fcntl is not None:
@@ -287,7 +329,7 @@ def state_lock(path, timeout: float = None):
         finally:
             _LOCKS.pop(key, None)
     finally:
-        os.close(fd)                          # close 即释放 flock（异常路径也安全）
+        _unlock_fd(fd)                        # fd 常驻 ⟹ 显式 LOCK_UN（异常路径也安全）
 
 
 def _state_checksum(d: dict) -> str:
@@ -307,27 +349,34 @@ def update_state(path, mutator) -> dict:
     返回 `{"ok": True, "data": d}`；读失败 → `{"error": ...}`（不写盘，fail-closed）。
     **python 侧并发安全的唯一 RMW 形态** —— 调用方不得再「先 read 后 dump」（有丢更新窗口）。
     落盘前重算 `_checksum`（state canonical，单源）⟹ 迁移来的调用点不会留 TAMPERED 假阳。
+
+    2026-11-03（M1）：写路径改为 WAL 追加（`gk_state_wal.update_state`），不再每次整份重写；
+    读侧 = checkpoint state + WAL replay（等价语义：`data` 仍是完整 state dict）。
     """
-    with state_lock(path):
-        d = read_json_file(path)
-        if "error" in d:
-            return d
-        out = mutator(d)
-        if out is not None:
-            d = out
-        d["_checksum"] = _state_checksum(d)
-        if not dump_state(path, d):
-            return {"error": "write_failed: %s" % path}
-        return {"ok": True, "data": d}
+    import gk_state_wal as W                    # 惰性：避免 gk_state_wal → 本模块的导入环
+    return W.update_state(path, mutator, _state_checksum)
 
 
-def _wall_guard(path, data) -> None:
+def read_state_file(path) -> dict:
+    """**state 专用**容错读（WAL-aware）：checkpoint state + `<path>.wal` replay。
+
+    与 `read_json_file` 的区别：后者是通用 JSON 读，**不**知道 WAL；读 state 必须走本函数，
+    否则会读到 checkpoint 之前的旧快照。返回契约与 `read_json_file` 相同（不抛）。
+    """
+    import gk_state_wal as W                    # 惰性：同上
+    return W.read_state(path)
+
+
+def _wall_guard(path, data, old_data=None) -> None:
     """**95% 水位写拦截**（2026-11-01 owner 裁定）：整墙占用 ≥`WALL_BLOCK_PCT` ⟹ 拒写。
 
     三条纪律：
       ① **收缩写放行** —— 新体积 < 磁盘现有体积 ⟹ 是改善（裁剪/清理正在生效），不得自锁；
       ② 逃生舱 `GK_STATE_WALL_BLOCK=0`（运维显式放行，**留 stderr 痕迹**，不静默）；
       ③ 判据口径 = `canon_bytes`（`dump_state` 同参），与 `state_size_report` **同源**。
+
+    `old_data`（2026-11-03 M1）：WAL 写路径的旧体积来自**重放后的内存快照**（磁盘上的
+    checkpoint 可能落后于 WAL）⟹ 由 `update_state` 显式传入，避免把「已增长」误判成收缩写。
     """
     if str(os.environ.get("GK_STATE_WALL_BLOCK", "1")).strip() == "0":
         return
@@ -337,7 +386,9 @@ def _wall_guard(path, data) -> None:
         return
     old = 0
     try:
-        if os.path.isfile(path):
+        if old_data is not None:
+            old = canon_bytes(old_data)
+        elif os.path.isfile(path):
             old = canon_bytes(read_json_file(path))
     except Exception:  # noqa: BLE001 — 边界：读不到旧体积 ⇒ 按「非收缩」处理（保守拦截）
         old = 0
@@ -644,7 +695,7 @@ def two_legs_report(path, reserve: int = STATE_SIZE_RESERVE) -> dict:
     p = Path(path)
     if not p.is_file():
         return {"ok": False, "error": "no such state: %s" % p}
-    d = read_json_file(p)
+    d = read_state_file(p)
     if "error" in d:
         return {"ok": False, "error": d["error"]}
     gd = d.get("gate_data", {}) or {}
@@ -676,7 +727,7 @@ def ecc_cap_report(path) -> dict:
     p = Path(path)
     if not p.is_file():
         return {"ok": False, "error": "no such state: %s" % p}
-    d = read_json_file(p)
+    d = read_state_file(p)
     if "error" in d:
         return {"ok": False, "error": d["error"]}
     gd = d.get("gate_data") if isinstance(d.get("gate_data"), dict) else {}

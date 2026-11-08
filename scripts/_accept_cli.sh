@@ -30,6 +30,20 @@
 set -uo pipefail
 
 SKILL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# 2026-11-03（M1 收尾）：全量复用戳加**工作树指纹**。
+#   原戳 = HEAD + 基线指纹 ⟹ 脏树改了 `scripts/*.py` 仍命中旧戳，把旧结果当新结果（危险）。
+#   指纹 = tracked diff 全文 + untracked 文件的名字/大小/mtime；`dist/` 与已忽略件不计。
+_tree_fp() {
+  { git -C "$SKILL_DIR" diff --binary HEAD 2>/dev/null
+    while IFS= read -r _f; do
+      [ -n "$_f" ] || continue
+      case "$_f" in dist/*|*.lock|*.stamp) continue ;; esac
+      stat -c '%n:%s:%Y' "$SKILL_DIR/$_f" 2>/dev/null
+    done < <(git -C "$SKILL_DIR" ls-files --others --exclude-standard 2>/dev/null)
+  } | sha1sum | cut -c1-16
+}
+
 PY="${ACCEPT_PY:-$(python3 "$SKILL_DIR/scripts/gk_accept_py.py" 2>/dev/null || echo python3)}"
 # 并行度默认 = **nproc×2（上限 12）**（2026-09-24 实测，t4「进一步提高并行能力」）：
 #   全量 `-n auto`(=nproc=5) 250s / `-n 8` 211s / `-n 10` 209s / `-n 12` 206s / `-n 15` 211s
@@ -146,10 +160,11 @@ if [ "$MODE" = "full" ]; then
   if [ "$_ttl" != "0" ] && [ -f "$STAMP" ]; then
     _head="$(git -C "$SKILL_DIR" rev-parse HEAD 2>/dev/null || echo '')"
     _bh="$(sha1sum "$BASE" 2>/dev/null | cut -c1-16)"
+    _tf="$(_tree_fp)"
     _sfp="$(sed -n '1p' "$STAMP" 2>/dev/null)"
     _sts="$(sed -n '2p' "$STAMP" 2>/dev/null)"
     _now="$(date +%s)"
-    if [ "$_sfp" = "${_head}:${_bh}" ] && [ -n "$_sts" ] && [ "$(( _now - _sts ))" -lt "$_ttl" ]; then
+    if [ "$_sfp" = "${_head}:${_bh}:${_tf}" ] && [ -n "$_sts" ] && [ "$(( _now - _sts ))" -lt "$_ttl" ]; then
       SUM="$(sed -n '3p' "$STAMP" 2>/dev/null)"
       CUR="$(sed -n '4,$p' "$STAMP" 2>/dev/null)"
       _REUSED=1
@@ -330,7 +345,8 @@ fi
 if [ "$MODE" = "full" ] && [ "$_REUSED" = "0" ] && [ -n "$SUM" ]; then
   _head="$(git -C "$SKILL_DIR" rev-parse HEAD 2>/dev/null || echo '')"
   _bh="$(sha1sum "$BASE" 2>/dev/null | cut -c1-16)"
-  { printf '%s\n' "${_head}:${_bh}" "$(date +%s)" "$SUM"; printf '%s\n' "$CUR"; } > "$STAMP" 2>/dev/null || true
+  _tf="$(_tree_fp)"
+  { printf '%s\n' "${_head}:${_bh}:${_tf}" "$(date +%s)" "$SUM"; printf '%s\n' "$CUR"; } > "$STAMP" 2>/dev/null || true
 fi
 
 if [ "$SNAP" = "1" ]; then

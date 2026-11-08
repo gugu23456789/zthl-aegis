@@ -7,6 +7,7 @@ raw_decode 只在 startswith("{") 时启用导致漏检 → non_json_output 误�
 修复后无条件从首个 '{' 尝试 raw_decode，本测试覆盖前缀/后缀/代码块/无 JSON 四类形态。
 """
 import json
+import re
 import sys
 import types
 from pathlib import Path
@@ -1226,14 +1227,28 @@ class TestCliMonitorRoleWiring:
     def _text(self):
         return self.CLI.read_text(encoding="utf-8", errors="replace")
 
-    def test_role_whitelist_matches_runner(self):
-        """bash 白名单必须与 subagent_runner.ROLE_ALLOWED_REGIONS 同集（防第二事实源漂移）。"""
-        import re
-        m = re.search(r"^\s*(default\|plan-refinement\|[a-z|\-]+\)\s*;;)", self._text(), re.M)
-        assert m, "cmd_monitor --role 白名单 case 行未找到"
-        roles = set(m.group(1).split(")")[0].split("|"))
-        assert roles == set(sr.ROLE_ALLOWED_REGIONS), \
-            f"角色白名单漂移: {roles ^ set(sr.ROLE_ALLOWED_REGIONS)}"
+    def test_role_whitelist_reads_runner_single_source(self):
+        """2026-11-08（去双源）：CLI 不得再持有字面角色清单 —— 必须运行时读
+        `subagent_runner.ROLE_ALLOWED_REGIONS`（角色表唯一事实源在 runner 侧）。"""
+        txt = self._text()
+        assert "ROLE_ALLOWED_REGIONS" in txt, "CLI 未从 runner 单源读取角色表"
+        # 旧形态（字面 case 清单）必须已删除，防「留着旧名单 + 新逻辑」双跑
+        assert not re.search(r"^\s*default\|plan-refinement\|[a-z|\-]+\)\s*;;", txt, re.M), \
+            "CLI 仍保留字面角色白名单（第二事实源未清除）"
+
+    def test_web_flag_parsed_and_forwarded(self):
+        """2026-11-08：`--web` 必须解析、校验并在派发行转发给 runner。"""
+        txt = self._text()
+        assert '--web) web_flag=' in txt, "cmd_monitor 未解析 --web"
+        assert '--web "$web_flag"' in txt, "--web 未转发到 subagent_runner"
+        assert 'bad --web' in txt, "--web 非法值未 fail-loud"
+
+    def test_research_408_uses_frame_single_source(self):
+        """2026-11-08：research-408 准入必须复用 408 帧判定单源（禁第二套关键词表）。"""
+        txt = self._text()
+        assert "classify_research_frame" in txt, "research-408 未接 408 帧判定单源"
+        assert "FRAME_MISMATCH" in txt, "非 408 帧未 fail-loud（会静默按 generic 跑）"
+        assert "GK_RESEARCH_FRAME=408" in txt, "缺少显式覆盖提示"
 
     def test_role_flag_parsed(self):
         # 2026-09-24（flag 缺值族修复 `ECC-AAD612CC8270`）：`$2` 全仓加缺省引用

@@ -85,6 +85,15 @@ def compute_entropy_from_dict(d: dict, stage: str, state_file: str = "") -> floa
     if stage.startswith("ECO-"):
         # ECO phases: entropy from human_calibration_log verdicts (plan quality)
         cl = gd.get("human_calibration_log") or []
+        # B3（2026-11-06）：本车门**只统计 ECO 域**。原实现取 `cl[-5:]` 却不按 `stage` 过滤，
+        #   `ECC-*`（评审/裁决的增量校准）与 `ECO-*`（阶段校准）共用同一窗口 ⟹ 无关车道把熵
+        #   抬到 0.60、`advance` 被 R4 硬阻断（本机实测：5 条里 4 条属 `ECC-1E37E2BFCC8C`）。
+        #   保留 `stage==""`：`gk_adjudicate` 恒写 stage，空值只出现在引入该字段前的旧数据 ⟹
+        #   与 `gk_advance.py` 的旧数据口径一致，避免历史状态熵被误清零。
+        cl = [e for e in cl
+              if isinstance(e, dict)
+              and (str(e.get("stage") or "") == ""
+                   or str(e.get("stage") or "").startswith("ECO-"))]
         # S-02: Sliding window — use last 5 entries instead of just last 1
         window = cl[-5:]
         rates = []

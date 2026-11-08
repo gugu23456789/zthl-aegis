@@ -1,0 +1,34 @@
+{
+  "schema": "gk-sdk/1",
+  "notes": "R14/R16：动词 ↔ _CMD_REG 门级/副作用白名单；无注册条目者必须声明 sdk-readonly 审计面。",
+  "verbs": {
+    "state.get": {
+      "tier": "read",
+      "x-source": "scripts/gk_state_query.py:96 main",
+      "x-cli": "state",
+      "x-audit": "registry",
+      "x-side-effects": "none"
+    },
+    "finding.list": {
+      "tier": "read",
+      "x-source": "scripts/gk_finding.py:593 load_findings_union",
+      "x-cli": "finding",
+      "x-audit": "registry-readonly-subcommand",
+      "x-side-effects": "none"
+    },
+    "plan.lint": {
+      "tier": "evaluate",
+      "x-source": "scripts/gk_plan_lint.py:1295 lint",
+      "x-cli": "plan-lint",
+      "x-audit": "registry",
+      "x-side-effects": "none"
+    },
+    "repo_index.check": {
+      "tier": "evaluate",
+      "x-source": "scripts/gk_release_preflight.py:263 repo_index_check",
+      "x-cli": null,
+      "x-audit": "sdk-readonly",
+      "x-side-effects": "none"
+    }
+  }
+}

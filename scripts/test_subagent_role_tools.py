@@ -56,7 +56,7 @@ def _callees(fn_node):
 @pytest.fixture
 def boot(monkeypatch):
     """按 (tier, tools, role_env) 启一次 `_bootstrap`，返回 `sr.tool_names`；teardown 精确清理。"""
-    def _run(tier=None, tools=None, role=None, extra_env=None):
+    def _run(tier=None, tools=None, role=None, extra_env=None, extra_argv=None):
         before = set(vars(sr))
         monkeypatch.setattr(sr, "_CFG", None)
         for k in ("SUBAGENT_TOOLS", "SUAGENT_TOOLS", "SUBAGENT_ROLE", "SUBAGENT_ROLE_TOOLS"):
@@ -70,6 +70,7 @@ def boot(monkeypatch):
             argv += ["--tier", str(tier)]
         if tools is not None:
             argv += ["--tools", tools]
+        argv += list(extra_argv or [])
         try:
             sr._bootstrap(argv)
             return list(sr.tool_names)
@@ -357,6 +358,44 @@ class TestRoleInstructions:
 # 实测 C 组 3 个探测全被拒并留 4 条 access_violations。原理由 `…not in effective_regions` 看不出
 # 「**该指定哪个角色**」⟹ 摩擦。**修法 = 理由里按同一张角色表反查候选角色**（不是第二份名单）；
 # ⚠ **不是**把 gate 加进 default —— 那是扩大击面（由守护臂钉住）。
+
+# ─── research-408（2026-11-08）：408 分析帧研究报告角色 + 联网显式开关 ──────────────
+# 裁定口径：报告角色不得复用 coder（coder 的指令把「只交报告」判为任务失败）；
+# 联网只表达「能力上限」，实际出网必须逐次 `--web 1` 授权（缺省 `--web 0` 移除）。
+
+class TestResearch408Role:
+    def test_role_registered_with_web_ceiling_and_no_write_tools(self):
+        """角色必须在两张表里同批登记；能力面 = 只读 + 受治联网，**无** edit/state/audit。"""
+        assert "research-408" in sr.ROLE_TOOLS
+        assert "research-408" in sr.ROLE_ALLOWED_REGIONS
+        tools = set(sr.ROLE_TOOLS["research-408"])
+        assert {"web_search", "web_fetch"} <= tools, "缺受治联网能力位（--web 1 将无处可加）"
+        assert not {"edit", "state", "audit", "advance", "guard-edit"} & tools, (
+            f"报告角色被授予写/门禁面：{sorted({'edit','state','audit'} & tools)}")
+
+    def test_web_off_by_default_strips_web_tools(self, boot):
+        """缺省 `--web 0`：即使角色清单含联网工具，生效面也必须**移除**它们。"""
+        got = set(boot(tier=3, role="research-408"))
+        assert not {"web_search", "web_fetch"} & got, f"联网未被缺省关闭：{sorted(got)}"
+        assert {"read", "code_search"} <= got, "缺省关闭不应削弱本地读面"
+
+    def test_web_on_grants_web_tools(self, boot):
+        """`--web 1` 显式授权后，联网工具进入生效清单。"""
+        got = set(boot(tier=3, role="research-408", extra_argv=["--web", "1"]))
+        assert {"web_search", "web_fetch"} <= got, f"--web 1 未授予联网：{sorted(got)}"
+
+    def test_web_switch_also_applies_to_explicit_tools(self, boot):
+        """开关对显式 `--tools` 同样收口（防「显式清单绕过联网闸」）。"""
+        off = set(boot(tier=2, tools="read,web_search,web_fetch", role="default"))
+        assert not {"web_search", "web_fetch"} & off, f"显式清单绕过 --web 0：{sorted(off)}"
+
+    def test_instruction_declares_report_deliverable(self):
+        """指令必须写清交付物 = 报告（不是落刀），并给出 408 / 证据 / 证伪实验口径。"""
+        block = sr.role_instructions("research-408")
+        assert block, "research-408 缺角色指令"
+        for kw in ("报告", "408", "证伪", "推断"):
+            assert kw in block, f"research-408 指令缺关键词 {kw!r}"
+
 
 def test_scope_denied_reason_is_actionable():
     """拒绝理由必须写出「该指定哪个角色」，且候选角色由 `ROLE_ALLOWED_REGIONS` **反查**得出。"""

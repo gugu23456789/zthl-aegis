@@ -202,6 +202,9 @@ bash uninstall.sh    # 只删 install.sh 记在 .spz-manifest 里的内容
 非破坏合并进用户级 `hooks.json`、写前备份、原子替换、回读校验、目标 JSON 不可解析时
 fail-closed。只增删指向本技能 wrapper 的条目，你自己的钩子条目原样保留。
 
+完整契约（输入/退出码/门禁清单/「蓝色大肥鱼」跨平台门禁族/安装回滚/业界对照）见
+[`references/oss-hooks.md`](references/oss-hooks.md)。
+
 ```bash
 bash install.sh --no-hooks                       # 只复制，不动 hooks.json
 bash install.sh --hook-profile full              # 匹配全部工具（默认 safe = 写/执行类）

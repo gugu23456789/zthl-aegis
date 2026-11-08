@@ -20,6 +20,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 from gk_budget_ledger import _seal_with_chain, verify_seal_at  # noqa: E402
+from gk_json_utils import read_state_file  # noqa: E402
 
 SCHEMA = "gk-audit-registry/v1"
 SUFFIX = ".audit-registry.jsonl"
@@ -43,11 +44,9 @@ def _digest(obj) -> str:
 
 
 def _read_state(state_file: str) -> dict:
-    try:
-        d = json.loads(Path(state_file).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {}
-    return d if isinstance(d, dict) else {}
+    # 2026-11-03（M1）：走 WAL-aware 读（checkpoint + `<state>.wal` replay）。
+    d = read_state_file(state_file)
+    return d if "error" not in d and isinstance(d, dict) else {}
 
 
 def read_entries(state_file: str) -> tuple:

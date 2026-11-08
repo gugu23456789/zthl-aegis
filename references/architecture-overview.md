@@ -17,13 +17,13 @@ updated: 2026-11-02
 <!-- GK-FACTS:START（由 scripts/gk_docgen_facts.py 生成，勿手改） -->
 | 事实 | 值 | 来源（可复算） |
 |:--|:--|:--|
-| CLI 行数 | 12449 | `wc -l gatekeeper-cli.sh` |
+| CLI 行数 | 12543 | `wc -l gatekeeper-cli.sh` |
 | CLI 命令数 | 52 | `^_CMD_REG[` 计数 |
 | 红队站点 | 16 | `gk_chain.py` 的 `Step("RED-*")` |
-| 自检检查函数 | 37 | `gk_self_check.py` 的 `def check_*` |
+| 自检检查函数 | 39 | `gk_self_check.py` 的 `def check_*` |
 | references 入库 md | 25 | `git ls-files references/*.md`（顶层） |
-| 子代理角色 | 8 | `subagent_runner.ROLE_TOOLS` |
-| hook R0 门禁 | Gate R0.1–R0.20（19 个） | `pre_tool_hook.py` 的 `Gate R0.N` |
+| 子代理角色 | 9 | `subagent_runner.ROLE_TOOLS` |
+| hook R0 门禁 | Gate R0.1–R0.20（20 个） | `pre_tool_hook.py` 的 `Gate R0.N` |
 | 红队向量 | 156 | `references/red-vectors.json` |
 | 情报源 | 24 | `references/red-intel-sources.json` |
 | 解释器解析 | `scripts/py_resolve.sh`（发现式，无绝对路径） | `scripts/py_resolve.sh` |

@@ -753,8 +753,73 @@ def _is_merged_clean(baseline: str, wt: str, branch: str) -> bool:
     return (not st.get("entries")) and not st.get("truncated")
 
 
+def _local_branches(repo: str) -> list:
+    """本地分支短名（`refs/heads`）。git 失败 ⟹ 空（调用方据此零动作）。"""
+    rc, out, _ = _git(repo, "for-each-ref", "--format=%(refname:short)", "refs/heads")
+    return [ln.strip() for ln in out.splitlines() if ln.strip()] if rc == 0 else []
+
+
+def _checked_out_branches(repo: str) -> set:
+    """任一 worktree（含主树）当前检出的分支 —— 删除面必须排除（在用面 + git 亦拒删）。"""
+    rc, out, _ = _git(repo, "worktree", "list", "--porcelain")
+    res = set()
+    if rc == 0:
+        for ln in out.splitlines():
+            if ln.startswith("branch refs/heads/"):
+                res.add(ln[len("branch refs/heads/"):].strip())
+    return res
+
+
+def _patch_equivalent(baseline: str, branch: str) -> bool:
+    """`git cherry` 全 `-` ⟹ 该分支**每个提交的改动**都已以等价补丁进入 baseline。
+
+    用途（`backup/b9b-pre-rebase-*` 类）：历史因 rebase 不同源、tip 不是 HEAD 祖先，
+    但内容确已入主线。空输出 = 无独有提交（本身即祖先）⟹ 同样安全。
+    fail-closed：git 失败 / 有任一 `+` ⟹ False。
+    """
+    rc, out, _ = _git(baseline, "cherry", "HEAD", branch)
+    if rc != 0:
+        return False
+    lines = [ln for ln in out.splitlines() if ln.strip()]
+    return all(ln.startswith("-") for ln in lines)
+
+
+def sweep_loose_branches(main_repo: str, baseline: str, apply: bool = False,
+                         exclude=None) -> dict:
+    """**游离分支**回收（不属于任何 worktree 的本地分支）。
+
+    判据（fail-closed）：已并入 baseline HEAD（`merge-base --is-ancestor`）**或**全部提交
+    patch 等价（`git cherry`）。任一不满足 ⟹ `guarded`（保留并留痕，绝不误删）。
+    检出中的分支（主树 / 任一 worktree）与 `exclude`（如 `master`/`main`）永不删。
+    `apply=False` = 只报告（零写）。删分支不丢提交对象（reflog/对象库仍在），故无归档步。
+    """
+    exclude_set = set(exclude or []) | {"master", "main"}
+    checked = _checked_out_branches(main_repo)
+    result = {"would_remove": [], "removed": [], "guarded": [], "checked_out": []}
+    for br in _local_branches(main_repo):
+        if br in exclude_set:
+            result["checked_out"].append(br)
+            continue
+        if br in checked:
+            result["checked_out"].append(br)
+            continue
+        merged = _git(baseline, "merge-base", "--is-ancestor", br, "HEAD")[0] == 0
+        if not merged and not _patch_equivalent(baseline, br):
+            result["guarded"].append(br)
+            continue
+        if not apply:
+            result["would_remove"].append(br)
+            continue
+        if _git(baseline, "branch", "-D", br)[0] == 0:
+            result["removed"].append(br)
+        else:
+            result["guarded"].append(br)
+    return result
+
+
 def reclaim(main_repo: str, root: str, apply: bool = False, trash: str = "",
-            state: str = "", only=None, branch_reclaim: bool = False) -> dict:
+            state: str = "", only=None, branch_reclaim: bool = False,
+            all_branches: bool = False) -> dict:
     """回收链主流程：**先归档 → 归档确认 → 才删**。返回报告 dict。
 
     `apply=False`（默认）= dry-run：只扫描与报告，**零写操作**。
@@ -855,6 +920,11 @@ def reclaim(main_repo: str, root: str, apply: bool = False, trash: str = "",
     #   **同处初始化**（两键恒在，消费方无须 `.get` 兜底）。HEAD 无此步 ⟹ 红先必红。
     report["branch_removed"] = []
     report["branch_guarded"] = []
+    # 游离分支面（`--all-branches`）：与 worktree 面**分键**留痕，消费方无须猜语义。
+    report["loose_branch_would_remove"] = []
+    report["loose_branch_removed"] = []
+    report["loose_branch_guarded"] = []
+    report["loose_branch_checked_out"] = []
     for w in wts:
         wt = w["path"]
         # 路径白名单（并发会话保护）：非指定路径 ⟹ 显式 skip（不静默、不报 held）
@@ -1039,6 +1109,16 @@ def reclaim(main_repo: str, root: str, apply: bool = False, trash: str = "",
         else:
             item["action"] = "WOULD-REMOVE"
         report["items"].append(item)
+    # ── 游离分支面（2026-11-08，owner 裁定「合并回收所有工作区分支」）────────────────────
+    #   动机：worktree 面只会回收**其挂载分支**，而长期迭代残留的分支（已并入/patch 等价）
+    #   无任何回收通路；同时门禁 R0.17 已拦裸 `git branch -d|-D` ⟹ 标准通道必须覆盖此面，
+    #   否则「通道存在但干不了活」= 变相把用户逼回裸 git。判据与留痕全在 sweep_loose_branches。
+    if all_branches:
+        _loose = sweep_loose_branches(main_repo, baseline, apply=apply)
+        report["loose_branch_would_remove"] = _loose["would_remove"]
+        report["loose_branch_removed"] = _loose["removed"]
+        report["loose_branch_guarded"] = _loose["guarded"]
+        report["loose_branch_checked_out"] = _loose["checked_out"]
     # ── RC6：目录层残留（`git worktree list` 看不到的那一层）—— dry-run 只报，`--apply` 才清 ──
     #    与 worktree 面**同一纪律**：归档前置（孤儿 state 先归档再删；空壳无内容可归档）·
     #    fail-loud（归档/删除失败进 held 且 `ok=false`）· 默认 dry-run（`--apply` 才落刀）。
@@ -1146,6 +1226,7 @@ def main(argv: list) -> int:
     state = ""
     only = []
     branch_rc = False
+    all_br = False
     i = 0
     while i < len(argv):
         a = argv[i]
@@ -1161,10 +1242,13 @@ def main(argv: list) -> int:
             apply_ = True; i += 1
         elif a == "--branches":                    # B-2：回收 worktree 后按其判据回收分支（opt-in）
             branch_rc = True; i += 1
+        elif a == "--all-branches":                # 游离分支面：已并入/patch 等价 ⟹ 回收（opt-in）
+            all_br = True; i += 1
         else:
             print(json.dumps({"ok": False, "error": "unknown arg: " + a,
                               "usage": "gk_worktree_reclaim.py [--repo R] [--root W] "
-                                       "[--state S] [--path P]... [--apply] [--branches]"},
+                                       "[--state S] [--path P]... [--apply] [--branches] "
+                                       "[--all-branches]"},
                              ensure_ascii=False))
             return 2
     if not repo or not os.path.isdir(repo):
@@ -1180,7 +1264,7 @@ def main(argv: list) -> int:
         except Exception:  # noqa: BLE001 — 边界：拿不到根就只扫 git 注册面
             root = ""
     print(json.dumps(reclaim(repo, root, apply=apply_, state=state, only=only,
-                             branch_reclaim=branch_rc),
+                             branch_reclaim=branch_rc, all_branches=all_br),
                      ensure_ascii=False))
     return 0
 

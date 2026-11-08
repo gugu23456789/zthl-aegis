@@ -33,7 +33,7 @@ def test_module_and_single_source_suffix(tmp_path):
 
 
 def test_append_lands_shard_and_registers_per_arm_leaf(tmp_path):
-    """首生产者：append ⟹ ①落片（append-only）②登记 per-arm 索引叶子。"""
+    """首生产者：append ⟹ ①落片（append-only）②登记 per-arm 索引叶子（S3 后落侧车冷索引）。"""
     import gk_satellite as SAT
     st = _mkstate(tmp_path)
     r = SAT.append(st, "pipeline", [{"id": 1}, {"id": 2}], batch_id="b1", arm="A")
@@ -42,8 +42,7 @@ def test_append_lands_shard_and_registers_per_arm_leaf(tmp_path):
     assert os.path.isfile(shard), "片未落盘"
     lines = [l for l in open(shard, encoding="utf-8").read().splitlines() if l.strip()]
     assert len(lines) == 2, "片未落 2 行"
-    data = json.load(open(st, encoding="utf-8"))
-    leaf = data["gate_data"]["satellite_index"]["b1"]["A"]
+    leaf = SAT.index_entries(st, "b1")["A"]
     assert leaf["kind"] == "pipeline" and leaf["records"] == 2, leaf
 
 
@@ -53,8 +52,7 @@ def test_c5_two_arms_same_batch_no_clobber(tmp_path):
     st = _mkstate(tmp_path)
     SAT.append(st, "pipeline", [{"a": 1}], batch_id="b2", arm="A")
     SAT.append(st, "pipeline", [{"b": 1}, {"b": 2}], batch_id="b2", arm="B")
-    data = json.load(open(st, encoding="utf-8"))
-    arms = data["gate_data"]["satellite_index"]["b2"]
+    arms = SAT.index_entries(st, "b2")
     assert set(arms.keys()) == {"A", "B"}, "两臂同 batch 未各占一叶子（片数 != 臂数）"
     shard = SAT.shard_path(st, "pipeline")
     lines = [l for l in open(shard, encoding="utf-8").read().splitlines() if l.strip()]
@@ -64,6 +62,7 @@ def test_c5_two_arms_same_batch_no_clobber(tmp_path):
 def test_c5_concurrent_two_processes_same_batch(tmp_path):
     """c5 **真并发**：两**进程**同 `batch_id` 同时 append ⟹ 两臂各占一叶子 + 行数零丢失。"""
     import subprocess
+    import gk_satellite as SAT
     scripts_dir = os.path.dirname(os.path.abspath(__file__))
     st = _mkstate(tmp_path)
     prog = (
@@ -83,9 +82,10 @@ def test_c5_concurrent_two_processes_same_batch(tmp_path):
         assert p.returncode == 0 and out.strip().startswith("True"), \
             "并发臂 append 失败：out=%r err=%r" % (out, err)
     data = json.load(open(st, encoding="utf-8"))
-    arms = data["gate_data"]["satellite_index"]["bc"]
+    arms = SAT.index_entries(st, "bc")
     assert set(arms.keys()) == {"A", "B"}, "并发两臂未各占一叶子（片数 != 臂数）"
     assert arms["A"]["records"] == 20 and arms["B"]["records"] == 20, arms
+    assert not (data.get("gate_data") or {}).get("satellite_index"), "并发写仍落内联"
     shard = st + ".task-pipeline-archive.jsonl"
     lines = [l for l in open(shard, encoding="utf-8").read().splitlines() if l.strip()]
     assert len(lines) == 40, "并发追加丢行（应 20+20=40，得 %d）" % len(lines)
@@ -132,17 +132,16 @@ def test_append_in_tx_does_not_write_state(tmp_path):
     assert len(SAT._read_sidecar(st)) == 1, "in-tx append 未落冷索引侧车"
 
 
-def test_inline_index_capped_and_spilled_to_sidecar(tmp_path):
-    """主 state 内联索引按 kind 只留最近 `INLINE_LEAVES_MAX_PER_KIND` 叶，旧叶进侧车。"""
+def test_append_keeps_state_inline_free(tmp_path):
+    """S3：连续 append 不再在主 state 堆积内联叶；索引全部在侧车（读面并集可回）。"""
     import gk_satellite as SAT
     st = _mkstate(tmp_path)
     for i in range(8):
         r = SAT.append(st, "pipeline", [{"i": i}], batch_id="b", arm="A%d" % i,
                        ts="2026-11-02T00:00:%02d+00:00" % i)
-        assert r.get("ok"), r
-    inline = json.load(open(st, encoding="utf-8"))["gate_data"]["satellite_index"]["b"]
-    assert len(inline) == SAT.INLINE_LEAVES_MAX_PER_KIND, inline
-    assert set(inline) == {"A2", "A3", "A4", "A5", "A6", "A7"}, "未按最旧优先溢出"
+        assert r.get("ok") and r.get("inline_skipped"), r
+    raw = json.load(open(st, encoding="utf-8"))
+    assert not (raw.get("gate_data") or {}).get("satellite_index"), "内联索引仍在增长"
     assert len(SAT._read_sidecar(st)) == 8
     assert set(SAT.index_entries(st, "b")) == {"A%d" % i for i in range(8)}
 
@@ -185,18 +184,18 @@ def test_reclaim_sidecar_only_leaf_does_not_recreate_inline(tmp_path):
     assert SAT.index_entries(st, "b")["A"].get("reclaimed_ts")
 
 
-def test_append_skips_inline_on_wall_block(tmp_path, monkeypatch):
-    """>95% 水位：热索引写被拦 ⟹ 侧车已落 ⟹ `ok:true` + inline_skipped（不阻断修复写）。"""
+def test_append_skips_inline_even_near_wall(tmp_path, monkeypatch):
+    """贴近 95% 水位也不写内联（写侧已停内联）⟹ `ok:true` + inline_skipped；侧车兜住读面。"""
     import gk_satellite as SAT
     import gk_json_utils as JU
     st = _mkstate(tmp_path)
     d = json.load(open(st, encoding="utf-8"))
     d["gate_data"]["pad"] = "x" * 2000
     open(st, "w", encoding="utf-8").write(json.dumps(d, ensure_ascii=False))
-    monkeypatch.setattr(JU, "STATE_SIZE_WALL", 1000)   # 95% = 950 B，必拦
+    monkeypatch.setattr(JU, "STATE_SIZE_WALL", 1000)   # 95% = 950 B，撞墙
     r = SAT.append(st, "pipeline", [{"x": 1}], batch_id="b", arm="A")
     assert r.get("ok") and r.get("inline_skipped"), r
-    assert "STATE_WALL_BLOCK" in r.get("leaf_error", "")
+    assert "S3" in r.get("inline_skip_reason", "")
     assert set(SAT.index_entries(st, "b")) == {"A"}, "侧车未兜住热索引跳过"
 
 
@@ -208,6 +207,32 @@ def test_sidecar_ignores_torn_line(tmp_path):
     with open(SAT.sidecar_path(st), "a", encoding="utf-8") as f:
         f.write("{broken\n")
     assert set(SAT.index_entries(st, "b")) == {"A"}
+
+
+# ── S3（M2）：停内联热索引写 ─────────────────────────────────────────────────
+def test_append_standalone_stops_inline_index_write(tmp_path):
+    """写侧只落片 + 侧车；主 state 不再出现 `satellite_index` 叶子（O(S) 写消除）。"""
+    import gk_satellite as SAT
+    st = _mkstate(tmp_path)
+    r = SAT.append(st, "pipeline", [{"x": 1}], batch_id="b3", arm="A")
+    assert r.get("ok") and r.get("inline_skipped") is True, r
+    raw = json.load(open(st, encoding="utf-8"))
+    assert not (raw.get("gate_data") or {}).get("satellite_index"), \
+        "写侧仍在更新内联热索引（逐条 append 仍 O(S) 重写）"
+    assert set(SAT.index_entries(st, "b3")) == {"A"}, "侧车未兜住读面"
+
+
+def test_read_union_keeps_legacy_inline_leaf(tmp_path):
+    """旧内联叶（历史 state）仍可读；新写入的叶只进侧车，两者并集不丢。"""
+    import gk_satellite as SAT
+    st = _mkstate(tmp_path)
+    d = json.load(open(st, encoding="utf-8"))
+    d["gate_data"]["satellite_index"] = {"old": {"A": {"kind": "pipeline", "arm": "A",
+                                                        "records": 1}}}
+    open(st, "w", encoding="utf-8").write(json.dumps(d, ensure_ascii=False))
+    assert SAT.append(st, "pipeline", [{"x": 2}], batch_id="new", arm="B").get("ok")
+    assert set(SAT.index_entries(st, "old")) == {"A"}
+    assert set(SAT.index_entries(st, "new")) == {"B"}
 
 
 def test_converge_cli_history_segment_calls_center():

@@ -3662,7 +3662,7 @@ pre_tool_check() {
 try: print((json.load(sys.stdin) or {}).get("path","") or "")
 except Exception: print("")' 2>/dev/null)
       fi
-      if [ -z "$RG" ] || echo "$real_path" | "$RG" -qi "$_MAIN_REPO_WIN_RE" || echo "$real_path" | "$RG" -qi "$_MAIN_REPO_WSL_RE"; then  # 2026-09-24 XENV-FORM ECC-9D6B0291E793：追加 WSL 形态臂（path 为 /mnt/c/… 形态时 WIN_RE 不命中；引号规则与同行既有臂一致，保留 [ -z $RG ] fail-closed 判缺臂）
+      if _main_repo_hit "$real_path"; then  # 2026-11-06 B1：判据单源 = _main_repo_hit（空模式不得 match-all；RG 缺位仍 fail-closed）
         echo "BLOCK: Main worktree is read-only. Use feature worktree."
         return 1
       fi
@@ -4146,7 +4146,7 @@ cmd_guard_edit() {
     return 1
   fi
   # MAIN_WORKTREE guard（2026-09-20 C3：正则改引用派生变量、并补 rg 缺位判缺臂 —— 与 pre_tool_check 同形，原缺该臂处为无遮蔽的独立 fail-open）
-  if [ -z "$RG" ] || echo "$path" | "$RG" -qi "$_MAIN_REPO_WIN_RE" || echo "$path" | "$RG" -qi "$_MAIN_REPO_WSL_RE"; then  # 2026-09-24 XENV-FORM ECC-9D6B0291E793：追加 WSL 形态臂（同上，引号规则一致）
+  if _main_repo_hit "$path"; then  # 2026-11-06 B1：判据单源 = _main_repo_hit（空模式不得 match-all；RG 缺位仍 fail-closed）
     local feature_path; feature_path=$(json_val "$STATE_FILE" worktree "")
     echo "{\"allowed\":false,\"reason\":\"MAIN_WORKTREE\",\"fix\":\"Convert to: ${feature_path}/<rest-of-path>\"}"; return 1
   fi
@@ -4396,7 +4396,7 @@ _subagent_model_chain() {
 # ----------
 
 cmd_monitor() {
-  local mode="--local" stage="" api_key="${API_KEY}" user_tools="" crossrev_flag=false role_override=""
+  local mode="--local" stage="" api_key="${API_KEY}" user_tools="" crossrev_flag=false role_override="" web_flag="0"
   local task_file=""
   # G1（2026-10-03）：批身份派发侧接线（§18.1 判据三要素由**派发侧**显式给，非时间桶近似）。
   local batch_plan="" batch_narrow="" batch_epoch="" arm_group="" arm_delta=""
@@ -4421,6 +4421,8 @@ cmd_monitor() {
       --crossrev) crossrev_flag=true; shift ;;  # C (2026-09-04): 交叉审查 L2 显式通道 → 节点绑定 + A/B/D 前置
       --role) role_override="${2:-}"; shift 2 2>/dev/null || shift ;;  # F-REV-11 C2 (2026-09-10): 显式角色覆盖（review 车道具名角色）
       --tools) user_tools="${2:-}"; shift 2 2>/dev/null || shift ;;  # explicit tool selection for --subagent
+      # 2026-11-08（research-408）：受治联网显式开关（0=关/缺省，1=开）；只对本次派发生效。
+      --web) web_flag="${2:-0}"; shift 2 2>/dev/null || shift ;;
       --task-file) task_file="${2:-}"; shift 2 2>/dev/null || shift ;;  # L1 自动派发（2026-09-23）：窄任务经文件下发
       # G1（2026-10-03）：批身份注入 —— 编排方对**一次 MoA 批**取同一 `--batch-epoch`（如 date +%s），
       #   N 臂共享 ⟹ 同一 batch_id（治「同计划 10 分钟内两轮误并 / 一轮跨桶误分」）。禁第二实现：
@@ -4441,7 +4443,7 @@ cmd_monitor() {
            #     把任务静默换成 `1`（三份 sub-*.md 报告头「任务」字段均为 `1` 实证）。
            #     档位一律走 env `SUBAGENT_TIER`（`apply-worktree` 的 next 串即此形，见本函数 L7140 注），
            #     禁止在 monitor 上再造 `--tier` 第二通道；对齐 paper-review 未知参数的 fail-loud 惯例。
-        echo "{\"ok\":false,\"error\":\"unknown flag: $1\",\"exit_code\":2,\"usage\":\"monitor [--local|--api|--gitnexus|--align|--subagent [--role R] [--tools T] [--task-file F] [--crossrev] [--batch-plan P] [--batch-narrow n1,n2] [--batch-epoch E] [--arm-group G1|G2|G3] [--api-key K]] | --watch <pr-*|12hex|worktree> [--kind auto|pipeline|aggregation|worktree] [--expect N] [--interval S] [--iterations N] [--max-wait S] | <stage>（档位用 env SUBAGENT_TIER）\"}"
+        echo "{\"ok\":false,\"error\":\"unknown flag: $1\",\"exit_code\":2,\"usage\":\"monitor [--local|--api|--gitnexus|--align|--subagent [--role R] [--tools T] [--web 0|1] [--task-file F] [--crossrev] [--batch-plan P] [--batch-narrow n1,n2] [--batch-epoch E] [--arm-group G1|G2|G3] [--api-key K]] | --watch <pr-*|12hex|worktree> [--kind auto|pipeline|aggregation|worktree] [--expect N] [--interval S] [--iterations N] [--max-wait S] | <stage>（档位用 env SUBAGENT_TIER）\"}"
         return 2 ;;
       *) stage="$1"; shift ;;
     esac
@@ -4512,14 +4514,46 @@ cmd_monitor() {
     [ -n "$stage" ] || { echo "{\"ok\":false,\"error\":\"--task-file 为空\",\"path\":\"$task_file\"}"; return 2; }
   fi
 
-  # F-REV-11 C2 (2026-09-10)：--role 白名单校验（与 subagent_runner.ROLE_ALLOWED_REGIONS 同集；
-  # 一致性由 test_subagent_runner_extract.TestCliMonitorRoleWiring 断言守护）——非法角色
-  # fail-loud exit 2（禁静默降级：subagent_runner 对未知角色会回落 reporter 区，静默收敛不可接受）。
+  # F-REV-11 C2 (2026-09-10)：--role 白名单校验（2026-11-08 **去双源**）——
+  #   原为字面 case 清单（与 `subagent_runner.ROLE_ALLOWED_REGIONS` 是第二份名单，靠测试比对防漂移）。
+  #   现改为**运行时读单源**：角色表只存在于 runner 侧，CLI 不再复制；表不可读 ⟹ fail-closed。
   if [ -n "$role_override" ]; then
-    case "$role_override" in
-      default|plan-refinement|scanner|exploiter|auditor|reporter|coder|venue-prior-art) ;;
-      *) echo "{\"ok\":false,\"error\":\"unknown role '$role_override'\",\"valid\":\"default|plan-refinement|scanner|exploiter|auditor|reporter|coder|venue-prior-art\"}"; return 2 ;;
+    local _valid_roles _role_py
+    _role_py=$(_subagent_py_real)
+    _valid_roles=$(env -u STATE_FILE "$_role_py" -c \
+      "import sys; sys.path.insert(0, '${SKILL_DIR}/scripts'); import subagent_runner as s; print('|'.join(sorted(s.ROLE_ALLOWED_REGIONS)))" \
+      2>/dev/null || true)
+    if [ -z "$_valid_roles" ]; then
+      echo '{"ok":false,"error":"ROLE_TABLE_UNREADABLE","hint":"无法从 scripts/subagent_runner.py 读取 ROLE_ALLOWED_REGIONS；修解释器/依赖后重试"}'
+      return 2
+    fi
+    case "|$_valid_roles|" in
+      *"|$role_override|"*) ;;
+      *) echo "{\"ok\":false,\"error\":\"unknown role '$role_override'\",\"valid\":\"$_valid_roles\"}"; return 2 ;;
     esac
+  fi
+  # 2026-11-08（research-408）：`--web` 只接受 0/1，非法值 fail-loud（禁静默当 0）。
+  case "$web_flag" in
+    0|1) ;;
+    *) echo "{\"ok\":false,\"error\":\"bad --web '$web_flag'\",\"valid\":\"0|1\"}"; return 2 ;;
+  esac
+  # 2026-11-08（research-408）：角色准入 = **408 分析帧单源判定**（不新造关键词表）。
+  #   判定单源 = `gk_advance.classify_research_frame`（与 advance 的 research_frame 同一函数）；
+  #   generic ⟹ fail-loud：要么改窄任务文本，要么显式 `GK_RESEARCH_FRAME=408` 覆盖。
+  if [ "$mode" = "--subagent" ] && [ "$role_override" = "research-408" ]; then
+    if [ -z "${_role_py:-}" ]; then _role_py=$(_subagent_py_real); fi
+    local _frame
+    _frame=$(printf '%s' "$stage" | env -u STATE_FILE "$_role_py" -c \
+      "import sys; sys.path.insert(0, '${SKILL_DIR}/scripts'); from gk_advance import classify_research_frame as c; print(c(sys.stdin.read()).get('frame',''))" \
+      2>/dev/null || true)
+    if [ -z "$_frame" ]; then
+      echo '{"ok":false,"error":"FRAME_UNREADABLE","hint":"无法调用 gk_advance.classify_research_frame；修解释器/依赖后重试"}'
+      return 2
+    fi
+    if [ "$_frame" != "408" ]; then
+      echo "{\"ok\":false,\"error\":\"FRAME_MISMATCH\",\"frame\":\"$_frame\",\"hint\":\"research-408 仅接受 408 分析帧；改窄任务文本，或显式 GK_RESEARCH_FRAME=408 覆盖\"}"
+      return 2
+    fi
   fi
 
   # 2026-09-26（ECC-835E2928497D D 侧 · coder **加载安全网**，对齐
@@ -5143,6 +5177,7 @@ print('true' if task_in_pipeline(os.environ.get('STATE_FILE',''), os.environ.get
       --api-base "${API_BASE}" \
       --api-model "$(_subagent_model_chain)" \
       --reasoning "${DS_REASONING_EFFORT}" \
+      --web "$web_flag" \
       $mode_flag \
       $inject_flag \
       2>/tmp/gk_subagent_dbg.log)
@@ -7451,6 +7486,19 @@ cmd_moa_aggregate() {
              return 2 ;;
     esac
   fi
+  # 批 → state 自动解析（2026-11-06）：plan 指针是**会话级**的（`.gatekeeper.plan.<session>`），
+  #   新进程回落 base ⟹ `--batch` 在当前 state 未命中时，扫指针指向的 state，唯一命中则切换。
+  #   实现单源 = scripts/gk_batch_state_resolve.py（本层只编排，禁第二实现）。
+  if [ -n "$batch" ] && [ -n "$state_file" ]; then
+    local _bs
+    _bs=$(python3 "$(_gk_py_path "$SKILL_DIR")/scripts/gk_batch_state_resolve.py" \
+            --skill-dir "$(_gk_py_path "$SKILL_DIR")" \
+            --state "$(_gk_py_path "$state_file")" --batch "$batch" 2>>"$GK_DBG_LOG") || _bs=""
+    if [ -n "$_bs" ]; then
+      state_file="$_bs"
+      echo "INFO[batch-state]: $batch → $state_file" >> "$GK_DBG_LOG"
+    fi
+  fi
   local args=()
   [ -n "$state_file" ] && args+=(--state "$state_file")
   [ -n "$recent" ] && [ "$recent" != "0" ] && args+=(--recent "$recent")
@@ -8909,7 +8957,10 @@ cmd_release_check() {
 # 故 code-fix 编排作为本命令的 `--code-fix` 模式挂在**区外**的既有函数体上（零保护区改动）。
 # 族判定/窄任务编译的单一事实源 = `gk_agent_family.py resolve`（本函数只做参数编排，不复制判定）。
 cmd_apply_worktree() {
-  local fid="" family="" codefix="0" tier="" dry="0" state_override="" state_flag_given="0" batch="0" session="" reclaim="0" reclaim_apply="0" reclaim_tmp="0" tmp_days="7" reclaim_trash="0" trash_days="3" bind_mode="" path_arg="" main_repo_arg="" receive_check_wt="" release_claim="" reclaim_all="0" sat_reclaim="" sat_backfill="" finding_spill="" reclaim_branches="0" plan_arg=""
+  local fid="" family="" codefix="0" tier="" dry="0" state_override="" state_flag_given="0" batch="0" session="" reclaim="0" reclaim_apply="0" reclaim_tmp="0" tmp_days="7" reclaim_trash="0" trash_days="3" bind_mode="" path_arg="" main_repo_arg="" receive_check_wt="" release_claim="" reclaim_all="0" sat_reclaim="" sat_backfill="" finding_spill="" reclaim_branches="0" reclaim_all_branches="0" plan_arg=""
+  # 2026-11-08：`--path` 改为**可重复**（模块侧本就支持重复白名单；CLI 原为单值 ⟹ 第二条覆盖第一条，
+  #   多棵 worktree 只能分多次跑）。数组只用于 reclaim 透传；bind/unbind 仍用 path_arg（单值语义不变）。
+  local -a reclaim_paths=()
   # T7（2026-10-16，finding ECC-21AB384F03A9）：处置链闭环出口参数（`--close-out`）。
   local closeout="0" closeout_wts="" accept_files="" full_regression="0" no_gitnexus="0" no_reclaim="0"
   case "${1:-}" in
@@ -8930,6 +8981,7 @@ cmd_apply_worktree() {
     --release-claim) release_claim="${2:-}"; shift 2 2>/dev/null || shift ;;
     --all) reclaim_all="1"; shift ;;
     --branches) reclaim_branches="1"; shift ;;
+    --all-branches) reclaim_all_branches="1"; shift ;;
     *) fid="${1:-}"; shift 2>/dev/null || true ;;
   esac
   while [ $# -gt 0 ]; do
@@ -8951,13 +9003,15 @@ cmd_apply_worktree() {
       --session) session="${2:-}"; shift 2 2>/dev/null || shift ;;
       --bind) bind_mode="bind"; shift ;;
       --unbind) bind_mode="unbind"; shift ;;
-      --path) path_arg="${2:-}"; shift 2 2>/dev/null || shift ;;
+      --path) path_arg="${2:-}"; reclaim_paths+=("${2:-}"); shift 2 2>/dev/null || shift ;;
       --receive-check) receive_check_wt="${2:-}"; shift 2 2>/dev/null || shift ;;
       --release-claim) release_claim="${2:-}"; shift 2 2>/dev/null || shift ;;
       --reclaim) reclaim="1"; shift ;;
       --tmp) reclaim_tmp="1"; shift ;;
       --trash) reclaim_trash="1"; shift ;;
       --all) reclaim_all="1"; shift ;;
+      --branches) reclaim_branches="1"; shift ;;
+      --all-branches) reclaim_all_branches="1"; shift ;;
       --tmp-days) tmp_days="${2:-7}"; shift 2 2>/dev/null || shift ;;
       --trash-days) trash_days="${2:-3}"; shift 2 2>/dev/null || shift ;;
       --apply) reclaim_apply="1"; shift ;;
@@ -8965,7 +9019,7 @@ cmd_apply_worktree() {
       --tier) tier="${2:-}"; shift 2 2>/dev/null || shift ;;
       --state) state_override="${2:-}"; state_flag_given="1"; shift 2 2>/dev/null || shift ;;
       --dry-run) dry="1"; shift ;;
-      *) echo "{\"ok\":false,\"error\":\"unknown arg: $1\",\"usage\":\"apply-worktree <finding-id> --family <F> | apply-worktree [--code-fix] --finding <fid[,…]> [--batch] [--family F] [--tier N] [--dry-run] [--state P] | apply-worktree --session <name> [--state P] | apply-worktree --bind|--unbind --path <dir> [--state P] [--dry-run] | apply-worktree --reclaim [--tmp|--trash] [--tmp-days N] [--trash-days N] [--path <dir>] [--apply] [--all] | apply-worktree --release-claim <sid>\",\"next\":\"bash gatekeeper-cli.sh help apply-worktree\"}"; return 2 ;;
+      *) echo "{\"ok\":false,\"error\":\"unknown arg: $1\",\"usage\":\"apply-worktree <finding-id> --family <F> | apply-worktree [--code-fix] --finding <fid[,…]> [--batch] [--family F] [--tier N] [--dry-run] [--state P] | apply-worktree --session <name> [--state P] | apply-worktree --bind|--unbind --path <dir> [--state P] [--dry-run] | apply-worktree --reclaim [--tmp|--trash] [--tmp-days N] [--trash-days N] [--path <dir>]... [--branches] [--all-branches] [--apply] [--all] | apply-worktree --release-claim <sid>\",\"next\":\"bash gatekeeper-cli.sh help apply-worktree\"}"; return 2 ;;
     esac
   done
   # ── sanctioned 手动 release 出口（write-claims 台账；仅**追加** released 终态行）（2026-10-06）──────
@@ -9114,10 +9168,21 @@ cmd_apply_worktree() {
     #   进 skipped（原语义 = 本仓**全部** agent worktree ⟹ `--apply` 会删掉**并发会话正在用的**
     #   工作区，实测 dry-run 同时列出 b3f2421a/73a535fe）。判据在脚本内（单一事实源），本行只编排；
     #   空 `--path` = 原全量语义（零回归）。
-    [ -n "$path_arg" ] && _rc_args+=(--path "$path_arg")
+    # 2026-11-08：`--path` 可重复（原单值会被后一条覆盖 ⟹ 两棵 worktree 只能分多次回收）。
+    if [ "${#reclaim_paths[@]}" -gt 0 ]; then
+      local _rp
+      for _rp in "${reclaim_paths[@]}"; do
+        [ -n "$_rp" ] && _rc_args+=(--path "$_rp")
+      done
+    elif [ -n "$path_arg" ]; then
+      _rc_args+=(--path "$path_arg")
+    fi
     # B-2（2026-10-16，owner 裁定「回收含 worktree→分支」）：`--branches` 透传 —— 回收 worktree
     #   后按 `_is_merged_clean` 判据回收其分支（opt-in；未并入/有残留 ⟹ fail-closed 保留）。
     [ "$reclaim_branches" = "1" ] && _rc_args+=(--branches)
+    # 2026-11-08（owner 裁定「合并回收所有工作区分支」）：游离分支面 —— worktree 面只看挂载分支，
+    #   长期残留的已并入/patch 等价分支无回收通路（且门禁已拦裸 `git branch -d|-D`）。
+    [ "$reclaim_all_branches" = "1" ] && _rc_args+=(--all-branches)
     if [ "$reclaim_tmp" = "1" ]; then
       # `/tmp` 子模式（2026-09-24 用户裁定「3 是不是更好」）：`/tmp` 是**全局共享**区，
       # 故**只清本仓可归因且超龄**的残留 —— 双条件判定与在用白名单都在脚本内（单一事实源）。
@@ -10980,10 +11045,30 @@ def run(args, timeout=1800, no_llm=True):
         f.write("crossfull %s -> rc=%d\n" % (" ".join(args), rc))
     return rc, out, err
 
+def last_json(out):
+    """取 stdout 里**最后一个完整 JSON 对象**（多行/多文档均适用）。
+
+    2026-11-06（L6 假阴修复）：此前 `json.loads(out)` 要求整段 stdout 恰为一个 JSON，
+    pretty-printed / 带进度行的输出会整段解析失败，FAIL 明细又取 `splitlines()[-1]`
+    ⟹ 只留下一个 `}`。改为 raw_decode 扫描，取最后一个可解析对象。
+    """
+    dec = json.JSONDecoder()
+    best = None
+    i = 0
+    while True:
+        j = out.find("{", i)
+        if j < 0:
+            return best
+        try:
+            obj, end = dec.raw_decode(out[j:])
+            best = obj
+            i = j + end
+        except Exception:
+            i = j + 1
+
 def val(out, keys, default=None):
-    try:
-        d = json.loads(out)
-    except Exception:
+    d = last_json(out)
+    if d is None:
         return default
     for k in keys:
         if isinstance(d, dict) and k in d:
@@ -11011,11 +11096,20 @@ def ws_fingerprint():
         return None
 
 steps = []
-def step(sid, name, args, keys):
+def step(sid, name, args, keys, trust_json_ok=False):
     rc, out, err = run(args)
     v = val(out, keys)
-    if rc != 0 or (rc == 0 and not out.strip() and err.strip()):
-        st = "FAIL"; detail = (err or out).strip().splitlines()[-1][:110] if (err or out).strip() else "no output"
+    _j = last_json(out)
+    # 2026-11-06（L6 收口）：子命令以 JSON 为契约（doc-align 恒输出 JSON）时，
+    #   判据以 JSON `ok` 为准，rc 只作诊断记录 —— 防诊断性非零码被误判成内容 FAIL。
+    if trust_json_ok and isinstance(_j, dict) and _j.get("ok") is True:
+        st = "OK"
+        detail = json.dumps(_j, ensure_ascii=False)[:110] + (" (rc=%d)" % rc if rc else "")
+    elif rc != 0 or (rc == 0 and not out.strip() and err.strip()):
+        st = "FAIL"
+        detail = (json.dumps(_j, ensure_ascii=False)[:110] if isinstance(_j, dict)
+                  else ((err or out).strip().splitlines()[-1][:110]
+                        if (err or out).strip() else "no output"))
     elif v is False or v is None and not out.strip():
         st = "FAIL"; detail = (err or "no output").strip()[:110]
     else:
@@ -11199,7 +11293,7 @@ else:
 steps.append({"id": "L5", "name": "TAINTED(经pdg)", "status": _l5st, "detail": _l5d})
 print("[L5] TAINTED(经pdg)    %s  %s" % (_l5st, _l5d), flush=True)
 if not skip_nonskill("L6", "doc-align", "技能文档/脚本面"):
-    step("L6",  "doc-align",     ["doc-align"],                        ["issues"])
+    step("L6",  "doc-align",     ["doc-align"],                        ["issues"], trust_json_ok=True)
 if not skip_nonskill("L7", "audit-hook", "技能 hook 配置面"):
     step("L7",  "audit-hook",    ["audit","--hook"],                   ["result","issues"])
 if not skip_nonskill("L8", "self-check", "技能自检面"):

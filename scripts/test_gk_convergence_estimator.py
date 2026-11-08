@@ -56,11 +56,17 @@ def test_mu_tgt_zero_is_asymptotic_clear():
 
 # ── ② 集成层：自洽构造 ──────────────────────────────────────────────────────
 def test_not_frozen_gate(tmp_path):
-    """§1-C3 前提门：T 未冻结 ⟹ ok:false + T_NOT_FROZEN（不臆造 N*）。"""
+    """A′（正本 §4）：T 未冻 = warn（只 WARN、不阻断）；仍拒出 N*，但保留判决面。"""
     sf = _sf(tmp_path)
-    _reg(sf, 3)
+    ids = _reg(sf, 8)
+    gk_finding.epoch(sf, reason="r2")
+    for i in ids[:4]:
+        gk_finding.verify(sf, i, True)
     r = est.evaluate(sf)
-    assert r["ok"] is False and r["error"] == "T_NOT_FROZEN"
+    assert r["ok"] is True and r["gate"] == "warn" and r["warn"] == "T_NOT_FROZEN"
+    assert r["n_star"] is None and r["n_star_hi"] is None
+    assert r["verdict"] in ("pass", "abstain", "block")
+    assert r["r_hat"] == 0.5
 
 
 def test_freeze_then_evaluate(tmp_path):

@@ -7,7 +7,7 @@
   · domain          `.gatekeeper.state.<token>`（token 合 `^[A-Za-z0-9][A-Za-z0-9._-]*$`）
   · legacy_plan     `.gatekeeper.state.<plan-basename>`（**只读**；判据 = token 含 4 位年份前缀 `YYYY-MM-DD-`）
   · worktree_local  非技能根下的 `.gatekeeper.state`（**只读**）
-  · artifact        旁挂（`.jsonl`/`.lock`/`.tmp`/`.bak`/`corrupt-*`/`bak-*`）
+  · artifact        旁挂（`.jsonl`/`.lock`/`.tmp`/`.bak`/`.corrupt-*`/`.bak-*`/`.wal`）
 """
 import json
 import os
@@ -18,7 +18,8 @@ BASE_NAME = ".gatekeeper.state"
 WRITABLE_FORMS = ("base", "domain")
 READONLY_FORMS = ("legacy_plan", "worktree_local")   # 设计 §7：仅这两形态只读（artifact 非 state，放行）
 _TOKEN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
-_ARTIFACT_SUFFIXES = (".tmp", ".bak", ".json", ".jsonl", ".lock", ".orig", ".swp", ".seal")
+_ARTIFACT_SUFFIXES = (".tmp", ".bak", ".json", ".jsonl", ".lock", ".orig", ".swp",
+                      ".seal", ".wal")
 _ARTIFACT_MARKERS = ("bak-", "corrupt-", ".subagent-history", "pre-budget")
 _LEGACY_SEG_RE = re.compile(r"^\d{4}-\d{2}-\d{2}-")      # 挑战8：按**段**判（非仅头部）
 

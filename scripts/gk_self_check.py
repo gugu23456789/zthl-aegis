@@ -9,7 +9,8 @@ bash_static, bashpy_loader, tests, l9_runtime_safenet, l9_gatechain_prereq,
 l9_entropy_appeal, sequence_node_safety, governed_baseline, tenant_isolation,
 review_layer_coverage, finding_journal_reconcile, ember_replay_audit,
 python_argv_inject, pr_score_anchor, red_meta_read, bash_write_drift,
-hook_registration, gitnexus_version, model_config, sandbox, cron_health.
+hook_registration, gitnexus_version, model_config, sandbox, cron_health,
+hook_liveness, docs_analysis_untracked, dependencies.
 
 Usage:
   python3 scripts/gk_self_check.py [--state-file <path>] [--skill-dir <path>]
@@ -2400,6 +2401,202 @@ def check_hook_registration(skill_dir: str) -> dict:
     return result
 
 
+# ── hook **存活态**（2026-11-06；注册 ≠ 被执行）────────────────────────────────
+# 病象（实测）：`hooks.json` 里 PreToolUse 条目仍在，但 Trae 的 hook 启用开关被关掉后
+#   条文照旧、hook **从不执行** ⟹ 写面门禁整链静默失效，而 `check_hook_registration`
+#   （只看注册态）仍报 PASS。判据 = 注册态 + 执行态（hook.log 的 `INVOKE event=PreToolUse`）
+#   + 开机时间；任何非 ALIVE 都给**可照做**的开启提示。
+# ⚠ 局限（写进 detail，不假装能判）：hook 由 `wsl bash` 以 root 启动 ⟹ `Path.home()`
+#   会漂到 `/root`（实测 `gk_hook_manage.py status` 报 `/root/.trae/hooks.json` absent）
+#   ⟹ hooks.json 候选必须补扫 `/mnt/c/Users/*/.trae/hooks.json`。
+_HOOK_BOOT_GRACE_S = 600
+_HOOK_STALE_S_DEFAULT = 6 * 3600
+_HOOK_ACTION = ("打开 Trae Settings → Hooks，确认 hook 启用开关为「开启」；"
+                "并核对 hooks.json 的 PreToolUse 指向 pre_tool_hook_wrapper.sh")
+_HOOK_INVOKE_RE = re.compile(
+    r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\s+INVOKE\s+event=PreToolUse\b")
+
+
+def _hook_json_candidates():
+    """hooks.json 候选（按优先级）：env → `~/.trae` / `~/.trae-cn` → Windows 用户目录扫描。"""
+    env = (os.environ.get("GK_HOOKS_JSON") or "").strip()
+    if env:
+        return [Path(env)]
+    out = [Path.home() / ".trae" / "hooks.json", Path.home() / ".trae-cn" / "hooks.json"]
+    users = Path("/mnt/c/Users")
+    if users.is_dir():
+        try:
+            for u in sorted(users.iterdir()):
+                if u.is_dir():
+                    out.append(u / ".trae" / "hooks.json")
+                    out.append(u / ".trae-cn" / "hooks.json")
+        except OSError:
+            pass
+    return out
+
+
+def _hook_log_candidates(skill_dir: str):
+    """hook.log 候选：env → 技能目录 → **主检出**（worktree 内跑 self-check 时日志在主树）。"""
+    env = (os.environ.get("GK_HOOK_LOG") or "").strip()
+    if env:
+        return [Path(env)]
+    out = [Path(skill_dir) / ".gatekeeper.hook.log"]
+    ident = _repo_identity_dir(skill_dir)
+    if ident:
+        cand = Path(ident) / ".gatekeeper.hook.log"
+        if str(cand) != str(out[0]):
+            out.append(cand)
+    return out
+
+
+def _host_boot_ts() -> float:
+    """宿主最近开机时刻（epoch 秒）；不可判 ⟹ 0.0（不猜）。
+
+    WSL 侧 `/proc/uptime` = **WSL VM** 启动时刻（可能晚于 Windows 开机）—— 仅作下界用；
+    已知局限写进结果 detail，不当作权威。
+    """
+    if os.name == "nt":
+        try:
+            r = subprocess.run(
+                ["powershell", "-NoProfile", "-NonInteractive", "-Command",
+                 "(Get-CimInstance Win32_OperatingSystem).LastBootUpTime"
+                 ".ToUniversalTime().ToString('o')"],
+                capture_output=True, text=True, timeout=20)
+            s = (r.stdout or "").strip()
+            if s:
+                return datetime.datetime.fromisoformat(s).timestamp()
+        except (subprocess.TimeoutExpired, OSError, ValueError):
+            return 0.0
+        return 0.0
+    try:
+        with open("/proc/uptime", encoding="utf-8") as f:
+            return time.time() - float(f.read().split()[0])
+    except (OSError, ValueError, IndexError):
+        return 0.0
+
+
+def _last_pretool_invoke(log_file: Path):
+    """日志里最后一条 `INVOKE event=PreToolUse` 的 epoch 秒；无 ⟹ None。"""
+    last = None
+    try:
+        with open(log_file, "r", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                m = _HOOK_INVOKE_RE.match(line)
+                if not m:
+                    continue
+                try:
+                    last = datetime.datetime.strptime(
+                        m.group(1), "%Y-%m-%d %H:%M:%S").timestamp()
+                except ValueError:
+                    continue
+    except OSError:
+        return None
+    return last
+
+
+def check_hook_liveness(skill_dir: str, hooks_json: str = "", log_path: str = "",
+                        boot_ts=None, now_ts=None) -> dict:
+    """hook **存活态**：注册 + 执行 + 开机时间三面判决。
+
+    verdict：`ALIVE`(PASS) / `SUSPECT`(WARN) / `DEAD`(WARN) / `MISCONFIG`(WARN) /
+    `NO_HOOKS_JSON`(SKIP)。非 ALIVE 一律附 `action`（可照做的开启路径）。
+    只报 WARN/SKIP ⟹ **不阻断** self-check 的 issues（开源宿主无 Trae 属合法形态）。
+    """
+    result = {"check": "hook_liveness"}
+    now = time.time() if now_ts is None else float(now_ts)
+    stale_s = int(os.environ.get("GK_SELFCHECK_HOOK_STALE_S", _HOOK_STALE_S_DEFAULT)
+                  or _HOOK_STALE_S_DEFAULT)
+
+    hj = Path(hooks_json) if hooks_json else next(
+        (p for p in _hook_json_candidates() if p.exists()), None)
+    result["hooks_json"] = str(hj) if hj is not None else ""
+    if hj is None or not hj.exists():
+        result.update({"status": "SKIP", "verdict": "NO_HOOKS_JSON",
+                       "detail": "未发现 Trae hooks.json（非 Trae 宿主或未配置 ⟹ 跳过）"})
+        return result
+    try:
+        data = json.loads(hj.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        result.update({"status": "WARN", "verdict": "MISCONFIG",
+                       "detail": "hooks.json 不可解析（%s）：%s" % (type(e).__name__, hj),
+                       "action": _HOOK_ACTION})
+        return result
+
+    hooks = (data.get("hooks") if isinstance(data, dict) else None) or {}
+    pre = hooks.get("PreToolUse")
+    registered = False
+    if isinstance(pre, list):
+        for entry in pre:
+            if not isinstance(entry, dict):
+                continue
+            for h in (entry.get("hooks") or []):
+                if isinstance(h, dict) and "pre_tool_hook" in str(h.get("command") or ""):
+                    registered = True
+                    break
+            if registered:
+                break
+    if not registered:
+        result.update({"status": "WARN", "verdict": "MISCONFIG",
+                       "detail": "hooks.json 无指向 pre_tool_hook 的 PreToolUse 条目",
+                       "action": _HOOK_ACTION})
+        return result
+
+    logs = [Path(log_path)] if log_path else _hook_log_candidates(skill_dir)
+    # 2026-11-06（实测）：worktree 内可能存在**空的** `.gatekeeper.hook.log`（第一次落刀时
+    #   由 CLI/hook 创建），若只取「第一个存在的」会用它盖掉主树里真正有 INVOKE 的日志 ⟹
+    #   恒报「从未触发」假死。改为**取 INVOKE 最新**的那份；无任何 INVOKE 才退到首个存在者。
+    existing = [p for p in logs if p.exists()]
+    latest = {}
+    for cand in existing:
+        ts = _last_pretool_invoke(cand)
+        if ts is not None:
+            latest[cand] = ts
+    if latest:
+        log_used = max(latest, key=lambda p: latest[p])
+        last = latest[log_used]
+    else:
+        log_used = existing[0] if existing else None
+        last = None
+    result["log"] = str(log_used) if log_used is not None else ""
+    if log_used is None:
+        result.update({"status": "WARN", "verdict": "DEAD",
+                       "detail": "hook.log 不存在：hook 从未执行（注册 ≠ 被执行）",
+                       "action": _HOOK_ACTION})
+        return result
+
+    boot = _host_boot_ts() if boot_ts is None else float(boot_ts)
+    if boot:
+        result["last_boot"] = datetime.datetime.fromtimestamp(boot).strftime("%F %T")
+    if last is None:
+        result.update({"status": "WARN", "verdict": "DEAD",
+                       "detail": "hook.log 存在但无 `INVOKE event=PreToolUse`（从未触发）",
+                       "action": _HOOK_ACTION})
+        return result
+    result["last_invoke"] = datetime.datetime.fromtimestamp(last).strftime("%F %T")
+    result["age_s"] = int(now - last)
+
+    if boot and last < boot:
+        if now - boot <= _HOOK_BOOT_GRACE_S:
+            result.update({"status": "WARN", "verdict": "SUSPECT",
+                           "detail": "刚开机 %ds（< grace %ds），尚无 hook 触发；暂不判死"
+                                     % (now - boot, _HOOK_BOOT_GRACE_S)})
+        else:
+            result.update({"status": "WARN", "verdict": "DEAD",
+                           "detail": "本次开机（%s）后无任何 hook 触发；最近一次 %s"
+                                     % (result.get("last_boot", "?"), result["last_invoke"]),
+                           "action": _HOOK_ACTION})
+        return result
+    if now - last > stale_s:
+        result.update({"status": "WARN", "verdict": "SUSPECT",
+                       "detail": "最近触发 %ds 前（> 阈值 %ds）；hook 可能已被关闭"
+                                 % (now - last, stale_s),
+                       "action": _HOOK_ACTION})
+        return result
+    result.update({"status": "PASS", "verdict": "ALIVE",
+                   "detail": "hook 在本开机周期内已触发（最近 %ds 前）" % (now - last)})
+    return result
+
+
 def _gitnexus_verdict(ver, elapsed_ms: int, threshold_ms: int):
     """纯判据（单测友好）：版本过旧 / 调用过慢 ⟹ WARN；其余 PASS。"""
     if ver is None:
@@ -2995,7 +3192,56 @@ def run_all(state_path: str, skill_dir: str,
         issues += 1
     checks.append(r)
 
+    # 41. hook 存活态（2026-11-06）— 注册 ≠ 被执行：hooks.json 有条目但 Trae 开关关闭时
+    #     hook 从不执行（写面门禁静默失效）。非 ALIVE 只报 WARN/SKIP（开源宿主合法），
+    #     不阻断 issues；`action` 给可照做的开启路径。
+    r = check_hook_liveness(skill_dir)
+    if r["status"] == "FAIL":
+        issues += 1
+    checks.append(r)
+
+    # 42. 文档收尾（2026-11-08）— docs/analysis 残留未跟踪产物（复评件漏入库的机检兜底）。
+    #     只 WARN：产物未入库是流程收尾问题，不是状态损坏，不阻断 issues。
+    r = check_docs_analysis_untracked(skill_dir)
+    if r["status"] == "FAIL":
+        issues += 1
+    checks.append(r)
+
     return {"ok": True, "issues": issues, "checks": checks}
+
+
+def check_docs_analysis_untracked(skill_dir: str) -> dict:
+    """文档收尾检查（2026-11-08）：`docs/analysis/` 不得残留未跟踪产物。
+
+    病象（实测 2026-11-06）：`moa-aggregate --out/--html` 默认落**调用方 cwd**，而复评在主树跑；
+    subagent 报告由 runner 直写；两次复评共留下 28 件 `??` 形态产物 —— 既不在版本控制，
+    也会在后续 ff 合并时挡住「同路径新建跟踪文件」。只报 WARN（提示收尾），不阻断 issues。
+    """
+    result = {"check": "docs_analysis_untracked"}
+    repo = skill_dir or "."
+    try:
+        out = subprocess.run(
+            ["git", "-C", repo, "status", "--porcelain", "--", "docs/analysis"],
+            capture_output=True, text=True, timeout=30)
+    except Exception as e:  # noqa: BLE001 —— 缺 git/超时都属环境面，降级 SKIP
+        result.update({"status": "SKIP", "detail": "git 不可用：%s" % e})
+        return result
+    if out.returncode != 0:
+        result.update({"status": "SKIP",
+                        "detail": "git status rc=%d：%s" % (out.returncode, (out.stderr or "").strip()[:120])})
+        return result
+    untracked = [ln[3:].strip() for ln in out.stdout.splitlines() if ln.startswith("??")]
+    result["untracked_count"] = len(untracked)
+    result["untracked_sample"] = untracked[:10]
+    if untracked:
+        result.update({
+            "status": "WARN",
+            "detail": "docs/analysis 有 %d 件未跟踪产物未收尾" % len(untracked),
+            "action": "git add 入库；报告类不落 state 卫星（落点见 CONVENTIONS.md「文档与复评产物落点」）",
+        })
+    else:
+        result.update({"status": "PASS", "detail": "docs/analysis 无未跟踪产物"})
+    return result
 
 
 def check_dependencies() -> dict:

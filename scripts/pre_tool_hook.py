@@ -214,6 +214,22 @@ def _plan_pointer_fresh(pp: dict) -> bool:
         return False
 
 
+def _state_claims(p: Path) -> bool:
+    """就近 state **认领判据**（2026-11-06，B2）：只认领**含 `stage` 的完整 state**。
+
+    病象（实测）：`<home>\\.gatekeeper.state` 由 `gk_finding.save_findings` 在
+    文件不存在时自动创建 —— 只写 `gate_data` + `_checksum`，**没有 `stage`**。就近上溯把它
+    认领成治理 state ⟹ `stage.get("stage", "IDLE")` == IDLE ⟹ home 下任何目标（含兄弟技能
+    `git-workflow/**`）被 "Cannot edit without active R-phase" 误拦。
+    判据：缺 `stage` / 不可解析 ⟹ **不参与认领**（继续上溯；找不到则按范围外放行/回落默认）。
+    """
+    try:
+        d = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return isinstance(d, dict) and "stage" in d
+
+
 def _resolve_state_by_cwd(cwd: str) -> Optional[Path]:
     """按实际工作目录归属解析 state 文件（修复 hook 读错 state）。
 
@@ -277,7 +293,7 @@ def _resolve_state_by_cwd(cwd: str) -> Optional[Path]:
     p = Path(_host_form(cwd or ""))
     while True:
         cand = p / ".gatekeeper.state"
-        if cand.exists():
+        if cand.exists() and _state_claims(cand):
             return cand
         parent = p.parent
         if _state_walk_boundary(p, parent):
@@ -329,7 +345,7 @@ def _resolve_state_by_target_path(target: str) -> Optional[Path]:
     p = Path(t).parent
     while True:
         cand = p / ".gatekeeper.state"
-        if cand.exists():
+        if cand.exists() and _state_claims(cand):
             return cand
         parent = p.parent
         if _state_walk_boundary(p, parent):
@@ -1002,6 +1018,44 @@ def _egress_identity(tool_name, tool_input):
     if host and host in MCP_EGRESS_ALLOWLIST:
         return MCP_EGRESS_ALLOWED, url
     return "McpEgress", url
+
+
+# ── Gate R0.18【蓝色大肥鱼与章鱼浏览器工具面：install / record 写面闸】（2026-11-03）──
+# 真机 25 工具实测：`install_browser` 会下载/安装 Chromium（网络 + 落盘）；
+#   `browser_record_start/stop/generate_steps/generate_skill` 会把录像/技能写盘；
+#   两者都不在 MCP_WRITE_VERBS / MCP_EXEC_TOOLS / R0.14 精确集里 ⟹ 原样可达。
+# 本闸只拦这两类；本地读/UI（dom_tree/screenshot/click/type/fill/press/wait/tab/session）放行。
+# 逃生舱：GK_MCP_ALLOW_BROWSER_INSTALL=1 / GK_MCP_ALLOW_BROWSER_RECORD=1（运维显式放行）。
+BROWSER_TOOLFACE_GATE_NAME = "蓝色大肥鱼与章鱼浏览器工具面【install/record 写面闸】"
+BROWSER_INSTALL_TOOL = "install_browser"
+BROWSER_RECORD_WRITE_TOOLS = frozenset((
+    "browser_record_start", "browser_record_stop",
+    "browser_record_generate_steps", "browser_record_generate_skill"))
+BROWSER_RECORD_READ_TOOLS = frozenset((
+    "browser_record_doctor", "browser_record_status",
+    "browser_record_list", "browser_record_show"))
+BROWSER_LOCAL_UI_TOOLS = frozenset((
+    "browser_dom_tree", "browser_screenshot", "browser_click", "browser_type",
+    "browser_fill", "browser_press", "browser_wait", "browser_switch_tab",
+    "browser_close_tab", "browser_list_tabs", "browser_close_session"))
+
+
+def _browser_toolface_gate(tool_name, tool_input):
+    """→ BLOCK 原因字符串；非 MCP / 非这两类 → 空串（恒等）。"""
+    inner, _args = _mcp_inner_tool(tool_name, tool_input)
+    if not inner:
+        return ""
+    n = inner.lower()
+    if n == BROWSER_INSTALL_TOOL and os.environ.get(
+            "GK_MCP_ALLOW_BROWSER_INSTALL", "0") != "1":
+        return (BROWSER_TOOLFACE_GATE_NAME + ": `install_browser` 会下载/安装 Chromium"
+                "（网络 + 落盘）。请手工执行 `octop-browser install-browser`；"
+                "确需 agent 直调时显式设 GK_MCP_ALLOW_BROWSER_INSTALL=1。")
+    if n in BROWSER_RECORD_WRITE_TOOLS and os.environ.get(
+            "GK_MCP_ALLOW_BROWSER_RECORD", "0") != "1":
+        return (BROWSER_TOOLFACE_GATE_NAME + f": `{inner}` 会把录像/技能写盘；"
+                "确需 agent 直调时显式设 GK_MCP_ALLOW_BROWSER_RECORD=1。")
+    return ""
 
 
 def _wsl_quoting_trap(command: str) -> str | None:
@@ -3834,6 +3888,13 @@ def _merge_lock_preflight(command: str):
 #   段首 `GK_ALLOW_WT_ADD=1`（单条命令，同 R0.15 形）。
 _WT_ROOT_PAT = r"\.trae[\\/]+worktrees(?:[\\/]|$)"
 _WT_ADD_PAT = r"\bgit\b[^\n;&|]*?\bworktree\s+add\b"
+# 2026-11-08（owner：拦截裸 git 生命周期通道）：创建已有 R0.17；本批补**回收侧**——
+#   实测漏网 = `git worktree remove|prune` + `git branch -d`（`-D` 已由 E2-5 拦）。
+#   apply-worktree 早有回收链（`--reclaim [--branches] [--path] [--apply]` →
+#   `gk_worktree_reclaim.py`：归档前置 + merged/clean 判据 + 解绑 worktrees_extra），
+#   故裸 git 回收一律视为绕过单一入口。
+_WT_RECLAIM_PAT = r"\bgit\b[^\n;&|]*?\bworktree\s+(?:remove|prune)\b"
+_WT_BRANCH_DEL_PAT = r"\bgit\b[^\n;&|]*?\bbranch\b[^\n;&|]*?\s-(?:d|D)(?=\s|$)"
 _WT_WRITE_VERBS = ("cp", "mv", "rsync", "install", "ln", "mkdir")
 
 _WT_ROUTE_HINT = (
@@ -3841,6 +3902,12 @@ _WT_ROUTE_HINT = (
     "（建/复用 `feature/<plan-stem>` + 建域 state + 写 plan 指针 + 钉 `state.worktree`，一条命令）；"
     "finding 类：`apply-worktree <finding-id> --family <F>`。"
     "手搓树/搬树一律拒：写面不会登记 ⟹ 之后的 Edit 必被 Gate 3 拦（这就是绕路的代价）。"
+)
+_WT_RECLAIM_HINT = (
+    "Fix: worktree/分支回收走**单一入口** —— "
+    "`bash gatekeeper-cli.sh apply-worktree --reclaim --path <dir> --branches`（缺省 dry-run），"
+    "确认后加 `--apply`；它内置归档前置与 merged/clean 判据，并会解绑 `worktrees_extra[]`。"
+    "禁裸 `git worktree remove|prune` / `git branch -d|-D`。"
 )
 
 
@@ -3858,6 +3925,15 @@ def _wt_route_gate(command: str):
         return None
     # shell 包裹（`bash -c '…'` / `wslsh -c '…'`）内的命令也是命令 ⟹ 归一为命令位（同 R0.15）
     scan = re.sub(r"(?:-c|--command)\s*(['\"])", ";", scan)
+    m = re.search(_WT_RECLAIM_PAT, scan, re.I)
+    if m and not _in_quotes(scan, m.start()):
+        return ("裸 `git worktree remove|prune` 回收（绕过 apply-worktree 回收链）",
+                _WT_RECLAIM_HINT)
+    # `-d` / `-D` 语义相反 ⟹ 本模式**不加 IGNORECASE**；两者都拦（回收走 apply-worktree）。
+    m = re.search(_WT_BRANCH_DEL_PAT, scan)
+    if m and not _in_quotes(scan, m.start()):
+        return ("裸 `git branch -d|-D` 删分支（绕过 apply-worktree --reclaim --branches）",
+                _WT_RECLAIM_HINT)
     m = re.search(_WT_ADD_PAT, scan, re.I)
     if m and not _in_quotes(scan, m.start()):
         return ("手搓 `git worktree add` 建树（绕过 apply-worktree 单一入口）", _WT_ROUTE_HINT)
@@ -3935,6 +4011,24 @@ def _task_dispatch_gate(tool_name: str, tool_input: dict, session: str = "") -> 
     return (f"Task dispatch denied (default-deny, 方案 B): reason={reason}. {hint}")
 
 
+def _main_checkout_root() -> Optional[Path]:
+    """主检出根 = `git-common-dir` 的父目录（worktree 共享同一 common dir）。
+
+    取不到（非 git / git 缺失）⟹ None（不拦；与既有 fail-soft 纪律一致）。
+    """
+    try:
+        p = subprocess.run(["git", "-C", str(SKILL_DIR), "rev-parse", "--git-common-dir"],
+                           capture_output=True, text=True, timeout=10)
+        if p.returncode != 0 or not p.stdout.strip():
+            return None
+        common = Path(p.stdout.strip())
+        if not common.is_absolute():
+            common = (SKILL_DIR / common).resolve()
+        return common.parent.resolve()
+    except Exception:
+        return None
+
+
 def main():
     # Read Hook JSON from stdin
     try:
@@ -3963,6 +4057,20 @@ def main():
         _CALL_TARGET = resolve_path(_fp_ctx, cwd) if _fp_ctx else ""
     except Exception:
         _CALL_TARGET = _fp_ctx or ""
+    # ── 主树只读（2026-11-06，owner 裁定）：编辑目标落在**主检出根** ⟹ 直接 block ──
+    #   现状缺口：Gate 3 只校验「在**活动** worktree 内」；无活动 worktree 时活动面=主树
+    #   ⟹ 直接改主树被放行（本轮实测）。本闸先于 state 解析执行，确保「主树只读」有机检。
+    if tool_name in EDIT_TOOLS and _CALL_TARGET:
+        _main_root = _main_checkout_root()
+        if _main_root is not None:
+            _t = _win_to_wsl(_CALL_TARGET).replace("\\", "/")
+            _r = _win_to_wsl(str(_main_root)).replace("\\", "/").rstrip("/")
+            if _t == _r or _t.startswith(_r + "/"):
+                print(json.dumps({"ok": False, "proceed": False, "mode": "main_tree_readonly",
+                                  "error": "MAIN_TREE_READONLY",
+                                  "hint": "主检出只读：请先 git worktree add，在 worktree 内编辑后合并"}))
+                sys.exit(0)
+
     # ── 会话身份链（Q2a，2026-10-02 · 平台无关兜底；finding ECC-AB2FA16E9133）─────────────
     # 与 CLI 启动块**同源**：env `GK_SESSION_ID` > worktree token（由 `_CALL_TARGET` 所在
     #   git worktree 派生）> 宿主 payload `session_id`。目标路径落在开发 worktree ⟹ token =
@@ -4022,6 +4130,12 @@ def main():
               "契约：**一切出网走 `subagent_runner._prior_art_fetch`**（或**受治车道**的**白名单域**）；"
               "浏览器 MCP 导航/取网/`evaluate` = 无台账的第二出网通道 ⟹ 拒。"
               "逃生舱（仅运维显式放行）：GK_MCP_EGRESS_GATE=0。")
+
+    # ── Gate R0.18【octop 浏览器工具面】：install / record 写面（普适面，先于 scope_out）──
+    _bt_block = _browser_toolface_gate(tool_name, tool_input)
+    if _bt_block:
+        _log_hook(f"MCP-BROWSER-TOOLFACE-BLOCK: {tool_name}")
+        block(_bt_block)
 
     # ── H-SLSN 激活检测（2026-08-27，ECC-8570E847C7C1）──
     # 双条件与：① hook 生效（PreToolUse 被触发 = 本函数在跑） ② 用户指令含 Use Skill: spz-gatekeeper-r-sequence

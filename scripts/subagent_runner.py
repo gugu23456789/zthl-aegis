@@ -447,6 +447,11 @@ p.add_argument("--task-file", default="",
 p.add_argument("--tools", default="",
                help="显式工具白名单（逗号分隔）。**省略** ⟹ F-REV-100 次序 A："
                     "SUBAGENT_TOOLS 逃生位 > 显式角色 ROLE_TOOLS[role] > SUBA_TIERS[tier]")
+# 2026-11-08（research-408）：联网=**逐次显式授权**。角色/档位只给能力上限，
+#   实际出网由本开关收口（0=关，缺省；1=开）。受治车道见 gk_web_tools（https-only、
+#   禁 loopback/私网、egress 留痕）。
+p.add_argument("--web", choices=("0", "1"), default=os.environ.get("SUBAGENT_WEB", "0"),
+               help="联网开关：1 ⟹ 工具面追加 web_search/web_fetch；0 ⟹ 移除二者（缺省 0）")
 p.add_argument("--max-turns", type=int, default=50)
 # F-REV-32 ⑬ (2026-09-11)：图片输入最小核心（可重复）；须配 image-capable 模型
 # （deepseek-flash / deepseek-v4-flash-vision-exp），文本-only 路由 fail-loud。
@@ -1619,6 +1624,9 @@ ROLE_ALLOWED_REGIONS: dict[str, list[str]] = {
     "reporter": ["evidence"],
     # 类型5: venue-prior-art（论文对照，只读 evidence；工具面见 ROLE_TOOLS）
     "venue-prior-art": ["evidence"],
+    # 类型6: research-408（408 分析帧研究报告；只读 evidence）。工具面见 ROLE_TOOLS，
+    #   出网须 `--web 1` 显式授权（2026-11-08）。
+    "research-408": ["evidence"],
     # 类型4: coder（fix 档位）— 2026-09-23（ECC-591BA1B918B4 配套）：
     # 「能落刀的 agent 必须能读它要改的代码」是硬约束 —— fix 档位落点必然在 `gate` 段
     # （gatekeeper-cli.sh 本体）与 `transition` 段（幂等/状态机测试），而原 `--code-fix`
@@ -1673,6 +1681,13 @@ ROLE_TOOLS: dict[str, list[str]] = {
     #   属「注册了但拿不到」。此处给最小只读面（evidence 区）：本地读 + 受治联网检索。
     "venue-prior-art": ["read", "read_repo", "code_search", "read_doc",
                         "openreview_search", "arxiv_search", "web_search", "web_fetch"],
+    # 类型6: research-408（2026-11-08）—— 408 分析帧**研究报告**角色。
+    #   与 coder 的区别是**交付物**：这里是报告，不是落刀（coder 的 ROLE_INSTRUCTIONS 明确
+    #   「只交报告 = 任务失败」⟹ 复用 coder 会把报告任务判成失败）。
+    #   工具面 = 读面全集 + 受治联网；**无 `edit`/`state`/`audit`** ⟹ 不能改代码、不能写 state。
+    #   `web_search`/`web_fetch` 只是**能力上限**，实际出网由 `--web 1` 逐次授权（缺省关）。
+    "research-408": [*ROLE_TOOLS_CORE, *ROLE_TOOLS_SUPPLEMENT,
+                     "web_search", "web_fetch"],
     # 类型4: coder（fix 档位）—— 工具面单一事实源 = `_FIX_TIER_TOOLS`（只读档位 + edit，
     # 最小权限、不含任何其它位移能力）；region 面见 ROLE_ALLOWED_REGIONS["coder"]。
     # ⚠ `_FIX_TIER_TOOLS` 是**逗号分隔字符串**（非 tuple/list）⟹ 须 `.split(",")`；
@@ -1695,6 +1710,16 @@ ROLE_TOOLS: dict[str, list[str]] = {
 # ⚠ **只给执行类角色**注入：审查/报告类角色（reporter/auditor/exploiter/scanner）的基调本来就是
 #   「查证」，注入执行者语义会把它们带偏 ⟹ 本表保持最小。
 ROLE_INSTRUCTIONS: dict[str, str] = {
+    "research-408": """
+## 你的角色：**研究报告作者**（408 分析帧）
+- 交付物 = 一份按 `references/research-408.md` **四轴 + 八段**组织的文字报告；**不是**代码改动。
+- 你**没有** `edit`/`state`/`audit` 工具：不得改代码、不得写 state、不得签报告。
+- 每条结论必须带证据（`文件:符号`、命令输出、或公开 URL）；**推断**必须显式标注「推断」。
+- 每条假设必须配一个**可证伪实验**（方法 + 判据 + 通过阈值），否则视为未完成。
+- 不适用的 408 轴（如单机场景的「计算机网络」）显式写 `N/A`，不得省略。
+- 未获 `--web 1` 时你**没有**联网工具：只能引用本地材料，**不得编造外部来源**。
+- 报告末尾固定给出「剩余风险」与「下一步可验证动作」两节。
+""",
     "coder": """
 ## 你的角色：**执行者**（不是审查者）
 - 本任务的**交付物 = 用 `edit` 工具对目标文件落刀完成修复**。它**不是**可行性分析、
@@ -2914,6 +2939,17 @@ def _bootstrap(argv=None) -> argparse.Namespace:
         args.tools = (_rt
                       or (SUBA_TIERS[args.tier]["tools"] if args.tier in SUBA_TIERS else "")
                       or DEFAULT_TOOLS_SPEC)
+    # 2026-11-08（research-408）：联网开关**在工具面解析之后**统一收口。
+    #   语义：角色/档位/逃生位只表达「能力上限」，出网必须逐次显式 `--web 1`；
+    #   缺省 `--web 0` ⟹ 即使角色清单里有 web_search/web_fetch 也**移除**
+    #   （防「注册了就等于能出网」的静默放大）。收口后仍走 validate_tool_names 校验。
+    _web_tools = ("web_search", "web_fetch")
+    _tool_list = [t.strip() for t in (args.tools or "").split(",") if t.strip()]
+    if str(getattr(args, "web", "0") or "0") == "1":
+        _tool_list += [t for t in _web_tools if t not in _tool_list]
+    else:
+        _tool_list = [t for t in _tool_list if t not in _web_tools]
+    args.tools = ",".join(_tool_list)
     # ─── API key 环境注入回退（原模块顶层 L232-233）───
     if not args.api_key:
         try:

@@ -63,6 +63,177 @@ class TestHookRegistrationCheck:
         assert check_hook_registration(str(tmp_path))["status"] == "SKIP"
 
 
+class TestHookLivenessCheck:
+    """2026-11-06：hook **存活态**检测（注册 ≠ 被执行）。
+
+    病象（实测）：`hooks.json` 里 PreToolUse 条目仍在，但 Trae 的 hook 启用开关被关掉后
+    条文照旧、hook 从不执行 ⟹ 写面门禁整链静默失效，而 `hook_registration` 仍报 PASS。
+    判据：注册态（hooks.json）+ 执行态（`.gatekeeper.hook.log` 最近 `INVOKE event=PreToolUse`）
+    + 开机时间；任何非 ALIVE 都给「去 Trae Settings → Hooks 开启」提示。
+    """
+
+    NOW = 1_800_000_000
+    BOOT = NOW - 3600
+
+    def _hooks(self, tmp_path, pre=True, raw=None):
+        p = tmp_path / "hooks.json"
+        if raw is not None:
+            p.write_text(raw, encoding="utf-8")
+            return str(p)
+        hooks = {}
+        if pre:
+            hooks["PreToolUse"] = [{"matcher": ".*", "hooks": [{
+                "type": "command", "timeout": 30,
+                "command": "wsl bash /x/pre_tool_hook_wrapper.sh"}]}]
+        p.write_text(json.dumps({"version": 1, "hooks": hooks}), encoding="utf-8")
+        return str(p)
+
+    def _log(self, tmp_path, ts):
+        import time as _t
+        p = tmp_path / ".gatekeeper.hook.log"
+        line = (_t.strftime("%Y-%m-%d %H:%M:%S", _t.localtime(ts))
+                + " INVOKE event=PreToolUse tool=Read cwd=x state=y")
+        p.write_text(line + "\n", encoding="utf-8")
+        return str(p)
+
+    def test_alive_pass(self, tmp_path):
+        from gk_self_check import check_hook_liveness
+        r = check_hook_liveness("", hooks_json=self._hooks(tmp_path),
+                                log_path=self._log(tmp_path, self.NOW - 60),
+                                boot_ts=self.BOOT, now_ts=self.NOW)
+        assert r["check"] == "hook_liveness"
+        assert r["status"] == "PASS", r
+        assert r["verdict"] == "ALIVE"
+
+    def test_invoke_before_boot_warn(self, tmp_path):
+        """本次开机后零触发（最近 INVOKE 早于开机且已过 grace）⟹ WARN + 开启提示。"""
+        from gk_self_check import check_hook_liveness
+        r = check_hook_liveness("", hooks_json=self._hooks(tmp_path),
+                                log_path=self._log(tmp_path, self.BOOT - 600),
+                                boot_ts=self.BOOT, now_ts=self.NOW)
+        assert r["status"] == "WARN", r
+        assert r["verdict"] == "DEAD"
+        assert "Hooks" in r["action"]
+
+    def test_just_booted_is_suspect_not_dead(self, tmp_path):
+        """刚开机（< grace）尚无触发 ⟹ SUSPECT，不误判 DEAD。"""
+        from gk_self_check import check_hook_liveness
+        r = check_hook_liveness("", hooks_json=self._hooks(tmp_path),
+                                log_path=self._log(tmp_path, self.BOOT - 600),
+                                boot_ts=self.NOW - 60, now_ts=self.NOW)
+        assert r["status"] == "WARN", r
+        assert r["verdict"] == "SUSPECT"
+
+    def test_missing_log_warn(self, tmp_path):
+        from gk_self_check import check_hook_liveness
+        r = check_hook_liveness("", hooks_json=self._hooks(tmp_path),
+                                log_path=str(tmp_path / "nope.log"),
+                                boot_ts=self.BOOT, now_ts=self.NOW)
+        assert r["status"] == "WARN", r
+        assert r["verdict"] == "DEAD"
+        assert "从未执行" in r["detail"]
+
+    def test_no_pretooluse_misconfig_warn(self, tmp_path):
+        from gk_self_check import check_hook_liveness
+        r = check_hook_liveness("", hooks_json=self._hooks(tmp_path, pre=False),
+                                log_path=self._log(tmp_path, self.NOW - 60),
+                                boot_ts=self.BOOT, now_ts=self.NOW)
+        assert r["status"] == "WARN", r
+        assert r["verdict"] == "MISCONFIG"
+        assert "Hooks" in r["action"]
+
+    def test_missing_hooks_json_skip(self, tmp_path):
+        """无 Trae hooks.json（非 Trae 宿主）⟹ SKIP，不把开源用户打成 WARN。"""
+        from gk_self_check import check_hook_liveness
+        r = check_hook_liveness("", hooks_json=str(tmp_path / "nope.json"),
+                                log_path=self._log(tmp_path, self.NOW - 60),
+                                boot_ts=self.BOOT, now_ts=self.NOW)
+        assert r["status"] == "SKIP", r
+        assert r["verdict"] == "NO_HOOKS_JSON"
+
+    def test_unparseable_hooks_warn(self, tmp_path):
+        from gk_self_check import check_hook_liveness
+        r = check_hook_liveness("", hooks_json=self._hooks(tmp_path, raw="{bad"),
+                                log_path=self._log(tmp_path, self.NOW - 60),
+                                boot_ts=self.BOOT, now_ts=self.NOW)
+        assert r["status"] == "WARN", r
+        assert r["verdict"] == "MISCONFIG"
+
+    def test_unknown_boot_fresh_pass_stale_suspect(self, tmp_path):
+        from gk_self_check import check_hook_liveness
+        fresh = check_hook_liveness("", hooks_json=self._hooks(tmp_path),
+                                    log_path=self._log(tmp_path, self.NOW - 3600),
+                                    boot_ts=0.0, now_ts=self.NOW)
+        assert fresh["status"] == "PASS", fresh
+        stale = check_hook_liveness("", hooks_json=self._hooks(tmp_path),
+                                    log_path=self._log(tmp_path, self.NOW - 7 * 86400),
+                                    boot_ts=0.0, now_ts=self.NOW)
+        assert stale["status"] == "WARN" and stale["verdict"] == "SUSPECT", stale
+
+    def test_run_all_includes_hook_liveness(self, tmp_state, monkeypatch):
+        import gk_self_check
+        monkeypatch.setattr(gk_self_check, "check_tests",
+                            lambda skill_dir: {"check": "tests", "status": "PASS"})
+        monkeypatch.setattr(gk_self_check, "check_provider",
+                            lambda: {"check": "provider", "status": "SKIP"})
+        monkeypatch.setattr(gk_self_check, "check_hook_liveness",
+                            lambda skill_dir: {"check": "hook_liveness", "status": "PASS"})
+        out = gk_self_check.run_all(tmp_state, str(Path(__file__).parent.parent))
+        assert "hook_liveness" in {c["check"] for c in out["checks"]}
+
+
+class TestDocsAnalysisUntracked:
+    """2026-11-08：docs/analysis 复评件漏入库的收尾机检（只 WARN）。
+
+    病象实测：两次 SDK 复评共 28 件产物以 `??` 形态漂在主树，并在 ff 合并时挡住同路径新建。
+    """
+
+    def _repo(self, tmp_path):
+        import subprocess
+        repo = tmp_path / "r"
+        repo.mkdir()
+        subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+        (repo / "docs" / "analysis").mkdir(parents=True)
+        return repo
+
+    def test_untracked_warn(self, tmp_path):
+        from gk_self_check import check_docs_analysis_untracked
+        repo = self._repo(tmp_path)
+        (repo / "docs" / "analysis" / "a.md").write_text("x", encoding="utf-8")
+        r = check_docs_analysis_untracked(str(repo))
+        assert r["status"] == "WARN", r
+        assert r["untracked_count"] == 1
+        assert "CONVENTIONS" in r.get("action", "")
+
+    def test_tracked_pass(self, tmp_path):
+        import subprocess
+        from gk_self_check import check_docs_analysis_untracked
+        repo = self._repo(tmp_path)
+        f = repo / "docs" / "analysis" / "a.md"
+        f.write_text("x", encoding="utf-8")
+        subprocess.run(["git", "add", str(f)], cwd=repo, check=True)
+        r = check_docs_analysis_untracked(str(repo))
+        assert r["status"] == "PASS", r
+
+    def test_not_a_repo_skips(self, tmp_path):
+        from gk_self_check import check_docs_analysis_untracked
+        plain = tmp_path / "plain"
+        plain.mkdir()
+        r = check_docs_analysis_untracked(str(plain))
+        assert r["status"] == "SKIP", r
+
+    def test_run_all_includes_docs_analysis_untracked(self, tmp_state, monkeypatch):
+        import gk_self_check
+        monkeypatch.setattr(gk_self_check, "check_tests",
+                            lambda skill_dir: {"check": "tests", "status": "PASS"})
+        monkeypatch.setattr(gk_self_check, "check_provider",
+                            lambda: {"check": "provider", "status": "SKIP"})
+        monkeypatch.setattr(gk_self_check, "check_docs_analysis_untracked",
+                            lambda skill_dir: {"check": "docs_analysis_untracked", "status": "PASS"})
+        out = gk_self_check.run_all(tmp_state, str(Path(__file__).parent.parent))
+        assert "docs_analysis_untracked" in {c["check"] for c in out["checks"]}
+
+
 class TestGitnexusVersionCheck:
     """2026-10-31：self-check 缺 gitnexus **版本/耗时** 观测（原只跑 status 看首行）。"""
 

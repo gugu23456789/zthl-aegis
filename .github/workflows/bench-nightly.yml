@@ -7,9 +7,7 @@ name: bench-nightly
 #   · 基线**只新增版本/人工更新**，CI 不自动改基线（自动改写会让门禁变成自证）；
 #   · full 结果与对比 JSON 全量上传，供下一版本人工复核后 `--init-baseline` 滚动。
 on:
-  # 2026-11-06（用户裁定）：full 基准改**本地跑**（`python scripts/gk_bench_*.py --full`）。
-  #   定时跑实测为假红来源（11-03 / 11-05 红、11-04 手动绿，期间仅文档提交）；
-  #   保留手动入口供发版前复核。
+  schedule: [{cron: "0 19 * * *"}]        # UTC 19:00 = Asia/Shanghai 03:00
   workflow_dispatch:
 
 permissions:
@@ -36,38 +34,14 @@ jobs:
         with:
           python-version: "3.12"
       - name: install test deps
-        run: python -m pip install --upgrade pip pytest pytest-xdist openai openai-agents pydantic
+        run: python -m pip install --upgrade pip pytest pytest-xdist
       - name: full benchmarks
-        # 2026-11-05 归因：11-03 / 11-05 定时跑红、11-04 手动跑绿，成功→失败之间只差文档提交
-        #   ⟹ flaky，不是回归。注解只给 `exit code 1`，看不出是哪条脚本（两次失败的行号 43/75
-        #   还互相矛盾）⟹ 本步加逐脚本标记 + rc 落盘（随 artifact 留档，下次红可直接定位）。
-        # 同时把取锁预算放宽到 30s：32 写者 × 5s 在被挤占的 runner 上是假红来源；
-        #   **超时本身仍是失败**（不降判定，只是不再把 runner 负载当成产品缺陷）。
-        env:
-          GK_STATE_LOCK_TIMEOUT: "30"
         run: |
-          set -uo pipefail
           mkdir -p dist/bench
-          : > dist/bench/rc.txt
-          bench() {
-            local name="$1"; shift
-            echo "== $name"
-            if "$@"; then
-              echo "$name rc=0" | tee -a dist/bench/rc.txt
-            else
-              local rc=$?
-              echo "::error::bench script failed: $name (rc=$rc)"
-              echo "$name rc=$rc" | tee -a dist/bench/rc.txt
-              exit "$rc"
-            fi
-          }
-          bench state python scripts/gk_bench_state.py --full --json --out-dir dist/bench
-          bench satellite python scripts/gk_bench_satellite.py --full --json --out-dir dist/bench
-          bench gate python scripts/gk_bench_gate.py --full --json --out-dir dist/bench
-          # 公开树只导出 references 子集 ⟹ doc-release --strict 必然 rc=1；
-          #   本步只采集耗时/rc 供 SLA 观测，不因私有面文档缺失判红。
-          python scripts/gk_bench_release.py --json --out-dir dist/bench || true
-          echo "release rc=skip-allowed" | tee -a dist/bench/rc.txt
+          python scripts/gk_bench_state.py --full --json --out-dir dist/bench
+          python scripts/gk_bench_satellite.py --full --json --out-dir dist/bench
+          python scripts/gk_bench_gate.py --full --json --out-dir dist/bench
+          python scripts/gk_bench_release.py --json --out-dir dist/bench
       - name: compare vs committed baseline
         run: |
           set -o pipefail
