@@ -114,6 +114,15 @@ def check_papers_framework_drift(papers_dir: str) -> dict:
     if fn is None:
         return {"check": "papers_framework_drift", "status": "SKIP",
                 "detail": "论文事实清单未随包（私有面 gk_paper_facts.py 不存在）— 跳过"}
+    # 2026-11-08（v0.9.8.3 发布实测）：外部论文目录是**本机私有依赖**（`GK_PAPERS_DIR`
+    #   默认指向 Downloads 下的论文仓副本），在他人机器/CI/导出树上必然不存在。
+    #   原实现把它算 WARN ⟹ `gk_doc_release --strict`（= WARN 也阻断）在干净环境**恒红**，
+    #   发布门被一条"无法检测"卡死。无法检测 ≠ 发现漂移 ⟹ 统一按 SKIP 计（附原因），
+    #   与 `symbol_index_existence`（gitnexus 不可用）同语义。
+    if not Path(papers_dir).is_dir():
+        # 不回显具体路径：它是本机绝对路径（含用户名），输出面不落盘。
+        return {"check": "papers_framework_drift", "status": "SKIP",
+                "detail": "外部论文目录不存在 — 外部依赖缺失，漂移无法检测 ⟹ SKIP"}
     r = fn(papers_dir)
     if r.get("status") == "WARN" and "无在册篇目" in str(r.get("detail", "")):
         # 无公开篇目 = 无可核对项，不是缺陷；发布门按 SKIP 计（不假绿也不假红）。
@@ -1472,7 +1481,11 @@ def check_skill_duty_pointer(skill_dir: str) -> dict:
 
 
 # 计划点名臂名的「否定上下文」豁免词（同行出现即视为历史引用，不判缺失）
-_ARM_EXEMPT_CTX = ("已删", "已移除", "弃用", "退役", "失效", "revert", "回退")
+# 2026-11-08 扩：`待建 / 未落地 / TBD` —— 文档**显式声明**"该臂尚未存在"时，本检查的
+#   语义（防"文书声称已落刀、实际零命中"）已满足：作者没有把它当已落地。原词表只有
+#   "已删/退役"一类历史引用 ⟹ 诚实的"待建"标注反被判 FAIL，逼作者删掉规划信息（劣化）。
+_ARM_EXEMPT_CTX = ("已删", "已移除", "弃用", "退役", "失效", "revert", "回退",
+                   "待建", "未落地", "尚未落地", "TBD")
 # family schema 的**字段名**（`test_first` / `test_file`）不是臂名：活跃计划里出现时不应判缺失
 _ARM_NAME_EXEMPT = frozenset({"test_first", "test_file"})
 

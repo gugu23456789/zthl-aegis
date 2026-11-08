@@ -20,6 +20,10 @@
 - profile：`safe`（默认，`Edit|Write|SearchReplace|RunCommand`）/ `full`（`*`）/ `off`（摘除本技能条目）。
 - 注册**只增删指向本技能 wrapper 的条目**，用户已有条目逐字保留；细节见 §6。
 - 安装后可核验：`python3 scripts/gk_hook_manage.py status --json`。
+- **存活核验（2026-11-06）**：注册 ≠ 被执行 —— `hooks.json` 有条目但 Trae 的 Hooks 开关关闭时，
+  门禁静默失效。`cli.sh self-check` 的 hook 存活项会同时比对三条：`hooks.json` 注册态、
+  `.gatekeeper.hook.log` 最近的 `INVOKE event=PreToolUse`、宿主开机时间；不存活则 WARN 并提示
+  去 Trae Settings → Hooks 开启。
 
 ## 3. 输入 / 输出契约
 
@@ -68,10 +72,14 @@
 | R0.14 | **蓝色大肥鱼与章鱼浏览器**：浏览器出网必须走统一 `_prior_art_fetch`（单出网口） |
 | R0.15 | **蓝色大肥鱼与主树**：绕过工作树直接 `git` 改主树 |
 | R0.16 | **蓝色大肥鱼与配好的解释器**：`-m pytest` 必须用 `ACCEPT_PY` 解析出的解释器 |
-| R0.17 | **worktree 建树单一入口闸**：手搓 worktree 建树/搬树 → BLOCK，强制走 `apply-worktree`（2026-10-28） |
+| R0.17 | **worktree 生命周期单一入口闸**：手搓 worktree 建树/搬树 → BLOCK，强制走 `apply-worktree`（2026-10-28）；**回收侧同源**——裸 `git worktree remove\|prune`、`git branch -d\|-D` 一律 BLOCK，强制走 `apply-worktree --reclaim [--path <dir>]... --branches`（2026-11-08） |
 | R0.18 | **蓝色大肥鱼与章鱼浏览器工具面**：`install_browser`（下载 Chromium）与 `browser_record_*`（写录像/技能）默认 BLOCK；`GK_MCP_ALLOW_BROWSER_INSTALL=1` / `GK_MCP_ALLOW_BROWSER_RECORD=1` 显式放行；本地读/UI 保持放行 |
 
 **治理范围**：技能目录恒在范围内；已登记项目由 `.gatekeeper.scopes.json` 的 `governed_projects[]` 决定。cwd 在范围外 ⟹ 放行（不做治理），这是既定语义，不是漏拦。
+
+**主树只读闸（2026-11-06，`MAIN_TREE_READONLY`）**：编辑类工具的落点若在**主检出根**（含其父路径）⟹ 直接 BLOCK，提示先 `git worktree add` 再在树内编辑。
+它先于 state 解析执行，补的是 Gate 3 的缺口——Gate 3 只校验「在**活动** worktree 内」，而无活动 worktree 时活动面就是主树，直改主树会被放行。
+它不是 R0 家族成员（不依赖命令串形态），判据单源 = `pre_tool_hook.py` 的 `_main_checkout_root()` + 路径前缀比较。
 
 ### 4.3 MCP 与浏览器出网（R0.14）
 
