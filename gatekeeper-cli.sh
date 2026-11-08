@@ -4516,15 +4516,17 @@ cmd_monitor() {
 
   # F-REV-11 C2 (2026-09-10)：--role 白名单校验（2026-11-08 **去双源**）——
   #   原为字面 case 清单（与 `subagent_runner.ROLE_ALLOWED_REGIONS` 是第二份名单，靠测试比对防漂移）。
-  #   现改为**运行时读单源**：角色表只存在于 runner 侧，CLI 不再复制；表不可读 ⟹ fail-closed。
+  #   现改为**运行时读单源**：角色表只存在于 `scripts/gk_role_regions.py`，CLI 不再复制；
+  #   该模块零第三方依赖 ⟹ 本命令**不需要装 openai**（此前为读一张表把 openai 整棵树拖进进程）。
+  #   表不可读 ⟹ fail-closed。
   if [ -n "$role_override" ]; then
     local _valid_roles _role_py
     _role_py=$(_subagent_py_real)
     _valid_roles=$(env -u STATE_FILE "$_role_py" -c \
-      "import sys; sys.path.insert(0, '${SKILL_DIR}/scripts'); import subagent_runner as s; print('|'.join(sorted(s.ROLE_ALLOWED_REGIONS)))" \
+      "import sys; sys.path.insert(0, '${SKILL_DIR}/scripts'); import gk_role_regions as s; print('|'.join(sorted(s.ROLE_ALLOWED_REGIONS)))" \
       2>/dev/null || true)
     if [ -z "$_valid_roles" ]; then
-      echo '{"ok":false,"error":"ROLE_TABLE_UNREADABLE","hint":"无法从 scripts/subagent_runner.py 读取 ROLE_ALLOWED_REGIONS；修解释器/依赖后重试"}'
+      echo '{"ok":false,"error":"ROLE_TABLE_UNREADABLE","hint":"无法从 scripts/gk_role_regions.py 读取 ROLE_ALLOWED_REGIONS；修解释器后重试（该模块无第三方依赖，不需要 openai）"}'
       return 2
     fi
     case "|$_valid_roles|" in
@@ -9533,7 +9535,7 @@ PY
     # 实测不带角色落 `default`（仅 evidence 区）⟹ agent 的 read 全被
     # `scope denied: gate/transition not in effective_regions={'evidence'}` 拒，拿不到待改
     # 函数逐字原文 ⟹ 零落刀。coder 的 region = evidence+transition+gate（见
-    # subagent_runner.ROLE_ALLOWED_REGIONS；两处名单同集由
+    # scripts/gk_role_regions.py；两处名单同集由
     # test_subagent_runner_extract::TestCliMonitorRoleWiring::test_role_whitelist_matches_runner 守护）。
     # 2026-09-23（P4）：回显补 `allowed_paths` —— 批量层要据此做「同批两两 disjoint」互斥门
     # （设计 §11.3-1）；单发路径自身不消费它，属**零成本**透出（数据已在 `_fam_json` 里）。

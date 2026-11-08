@@ -3,7 +3,7 @@
 > 生成器：`scripts/gk_repo_index.py --write`；漂移由 `gk_release_preflight.py` 的 `repo_index` 项守。
 > 用途：**移动端**（GitHub App 没有 “Go to file”）与抓取工具一次拿到全量路径；点路径直达文件。
 
-**共 864 个文件。**
+**共 868 个文件。**
 
 ## 索引生成物
 
@@ -26,11 +26,14 @@
 - [gatekeeper-cli.sh](gatekeeper-cli.sh) — 确定性 CLI：state / 门禁 / 审计 / 评审 / finding / cron
 - [install.sh](install.sh) — 安装到 .trae/skills（非破坏、默认注册 hook）
 - [mcp_manifest.example.json](mcp_manifest.example.json) — JSON 数据
+- [requirements-ci.txt](requirements-ci.txt) — 文本
+- [requirements-runtime.txt](requirements-runtime.txt) — 文本
 - [uninstall.sh](uninstall.sh) — 按 manifest 精确卸载
 
 ## .github/
 
 - [.github/ISSUE_TEMPLATE/bug.yml](.github/ISSUE_TEMPLATE/bug.yml) — CI 配置
+- [.github/dependabot.yml](.github/dependabot.yml) — CI 配置
 - [.github/pull_request_template.md](.github/pull_request_template.md) — 文件
 - [.github/workflows/bench-nightly.yml](.github/workflows/bench-nightly.yml) — CI 配置
 - [.github/workflows/ci.yml](.github/workflows/ci.yml) — CI 配置
@@ -384,6 +387,7 @@
 - [scripts/gk_req_body.py](scripts/gk_req_body.py) — Python 模块
 - [scripts/gk_review_nodes.py](scripts/gk_review_nodes.py) — Python 模块
 - [scripts/gk_review_pins.py](scripts/gk_review_pins.py) — Python 模块
+- [scripts/gk_role_regions.py](scripts/gk_role_regions.py) — Python 模块
 - [scripts/gk_route_center.py](scripts/gk_route_center.py) — Python 模块
 - [scripts/gk_sandbox.py](scripts/gk_sandbox.py) — Python 模块
 - [scripts/gk_sarif.py](scripts/gk_sarif.py) — Python 模块

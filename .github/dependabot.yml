@@ -1,0 +1,28 @@
+# 依赖变更可见化（2026-11-08）：把「锁文件里的版本变了」变成可审的 PR，
+# 而不是每次 CI 静默解析到上游最新版（供应链投毒的典型入口）。
+#
+# 纪律：Dependabot 的 PR 不自动合并；合并前必须本地跑
+#   ① GK_SELFCHECK_TESTS=full python scripts/gk_self_check.py
+#   ② python scripts/gk_release_preflight.py
+# 两绿才改锁文件。
+version: 2
+updates:
+  # workflow 里的 action 虽已钉 40-hex SHA，仍需有人提示「上游发新版了」——
+  # SHA 钉子只会记旧，不会自己跟进安全修复。
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+
+  # requirements-runtime.txt / requirements-ci.txt（Python 生态）
+  - package-ecosystem: pip
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    # 只收安全/版本 PR 的常规面；不做自动合并断言 —— 见文件头。
+    groups:
+      ci-deps:
+        patterns:
+          - "*"

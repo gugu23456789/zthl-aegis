@@ -19,6 +19,10 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  # 供应链（2026-11-08）：只装 wheel、不回连 pip 自更新（同 ci.yml）。
+  PIP_ONLY_BINARY: ":all:"
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  PIP_NO_INPUT: "1"
 
 jobs:
   full:
@@ -33,8 +37,8 @@ jobs:
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
         with:
           python-version: "3.12"
-      - name: install test deps
-        run: python -m pip install --upgrade pip pytest pytest-xdist
+      - name: install test deps (pinned)
+        run: python -m pip install --require-hashes -r requirements-ci.txt
       - name: full benchmarks
         run: |
           mkdir -p dist/bench

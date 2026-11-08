@@ -37,6 +37,12 @@ INJECT_RE = re.compile(
     r"\$\{\{\s*(?:inputs\.|github\.event\.(?:pull_request|issue|comment|review|head_commit|commits)"
     r"|github\.head_ref)")
 PR_HEAD_RE = re.compile(r"github\.event\.pull_request\.(?:head|head_ref)")
+# 2026-11-08（供应链）：pip 安装必须来自依赖单一事实源 `requirements-ci.txt`，
+#   否则每个 requirement 必须 `==` 钉死 —— 浮动 spec（`pytest`、`pkg>=1,<2`）在 runner 上
+#   随时可能解析到上游新版本，是投毒面的直接入口（上游小版本被接管 ⟹ CI 自动执行）。
+PIP_INSTALL_RE = re.compile(r"-m\s+pip\s+install\b(.*)")
+REQ_PIN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*(\[[^\]]*\])?==[A-Za-z0-9._+-]+$")
+CANONICAL_REQ_FILE = "-r requirements-ci.txt"
 
 
 def _on(doc):
@@ -54,6 +60,26 @@ def _steps(job):
 def _perm_write(doc, key):
     p = doc.get("permissions")
     return isinstance(p, dict) and str(p.get(key, "")).lower() == "write"
+
+
+def _pip_install_problems(run: str) -> list:
+    """pip 安装行的供应链问题（浮动版本 / pip 自更新 / 绕过单一事实源）。"""
+    out = []
+    for line in run.splitlines():
+        if not PIP_INSTALL_RE.search(line):
+            continue
+        if re.search(r"--upgrade\s+pip", line):
+            out.append("pip 自更新（`--upgrade pip` 未钉版本）")
+        if CANONICAL_REQ_FILE in line:
+            continue                       # 合规形态：单一事实源
+        args = PIP_INSTALL_RE.search(line).group(1).replace('"', " ").replace("'", " ")
+        # 去掉 flag 与其可选值（`-r x` / `-i url` 等）后剩下的才是 requirement spec
+        toks = [t for t in args.split() if not t.startswith("-")]
+        floats = [t for t in toks if not REQ_PIN_RE.match(t)]
+        if floats:
+            out.append("pip 安装未钉版本: %s（改用 `%s`）"
+                       % (", ".join(floats), CANONICAL_REQ_FILE))
+    return out
 
 
 def lint_doc(name: str, doc: dict) -> dict:
@@ -121,6 +147,9 @@ def lint_doc(name: str, doc: dict) -> dict:
                 checks += 1
                 if INJECT_RE.search(run):
                     bad("job %s 的 run 直接插值不可信上下文（改用 env 中转）" % jid)
+                for p in _pip_install_problems(run):
+                    checks += 1
+                    bad("job %s 的 %s" % (jid, p))
 
     on = _on(doc)
     if isinstance(on, dict) and "pull_request_target" in on:

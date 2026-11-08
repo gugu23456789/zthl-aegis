@@ -114,6 +114,42 @@ def test_release_attestation_warns_and_passes_with_permissions():
     assert not r["warnings"], r
 
 
+def test_pip_install_floating_spec_fails():
+    """2026-11-08（供应链）：浮动 spec = 投毒面（runner 上随时解析到上游新版）。"""
+    import gk_ci_security_lint as L
+    d = _good()
+    d["jobs"]["smoke"]["steps"].append(
+        {"run": "python -m pip install pytest cryptography"})
+    assert any("未钉版本" in i["error"] for i in L.lint_doc("ci.yml", d)["issues"])
+
+
+def test_pip_install_upgrade_pip_fails():
+    import gk_ci_security_lint as L
+    d = _good()
+    d["jobs"]["smoke"]["steps"].append(
+        {"run": "python -m pip install --upgrade pip"})
+    assert any("自更新" in i["error"] or "未钉版本" in i["error"]
+               for i in L.lint_doc("ci.yml", d)["issues"])
+
+
+def test_pip_install_canonical_requirements_passes():
+    import gk_ci_security_lint as L
+    d = _good()
+    d["jobs"]["smoke"]["steps"].append(
+        {"run": "python -m pip install -r requirements-ci.txt"})
+    r = L.lint_doc("ci.yml", d)
+    assert r["ok"] and not r["issues"], r
+
+
+def test_pip_install_pinned_single_package_passes():
+    import gk_ci_security_lint as L
+    d = _good()
+    d["jobs"]["smoke"]["steps"].append(
+        {"run": 'python -m pip install "zizmor==1.26.0"'})
+    r = L.lint_doc("ci.yml", d)
+    assert r["ok"] and not r["issues"], r
+
+
 def test_repo_workflows_pass():
     import gk_ci_security_lint as L
     r = L.check(ROOT / ".github" / "workflows")
