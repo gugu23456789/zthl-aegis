@@ -154,13 +154,21 @@ def adaptive_workers(n: int, cap: int = None, reserve: int = None,
       （与槽位/内存准入闸**同向**）；`min_free_mb=0` ⟹ 关内存闸。
     `reserve`/`cap` 缺省走 env 单源（`GK_HUB_WORKERS_RESERVE` / `GK_HUB_WORKERS_CAP`）——**无硬编码**。
 
-    `subprocess_factor`（2026-11-08，408-research 实测公式）：该批次每用例派生的**峰值外部
-    子进程数** f（纯 python=0；每用例 1 次 bash=1；WSL+openssl 重活=3）。**f>0 才启用**安全
-    并发公式，f=0 保持原行为（向后兼容）：
-        W = min( (可见核-4)/(1+f), 0.6·空闲MB/(180+60f), 80/(1+f), cap或8, todo )
-    依据（本机 16 核/6.5GB，重活四文件实测）：n=1 59.0s / n=2 53.0s / n=4 49.5s / n=6 46.6s
-    ⟹ plateau 在 4 附近（n=6 较 n=4 仅 6%，属噪声），公式 f=2 在 16 核推出 4，与实测吻合；
-    `(核-4)` 保留 OS/IDE，`0.6·R` 留 40% 内存垫，`80/(1+f)` 是 Windows 进程预算硬顶（>600 进程即换页）。
+    `subprocess_factor`（2026-11-08，408-research 公式 + 实机校正）：该批次每用例派生的**峰值
+    外部子进程数** f（纯 python=0；每用例 1 次 bash=1；WSL+openssl 重活=3）。**f>0 才启用**
+    安全并发公式，f=0 保持原行为（向后兼容）：
+        r = min(4, max(1, 可见核//4))            # OS 保留按切片比例缩放（16→4，5→1）
+        W = min( 2·max(1, 可见核-r)/max(1,f),    # I/O 超订 ×2；第 1 个子进程按阻塞 I/O 计
+                 0.6·空闲MB/(180+60f),           # 单 worker 峰值 RSS 180+60f MB，留 40% 垫
+                 80/(1+f),                       # Windows 进程预算硬顶（>600 进程即换页）
+                 cap或8, todo )
+    校正依据（2026-11-08 实机验证，WSL：processors=5 / memory=5GB，visible=5 / free≈4.5GB）：
+      408 原式 `(C-4)/(1+f)` 在该切片给出 f=1 → 1、f=2 → 1，与实测反证——重活四文件
+      n=1 59.0s / n=2 53.0s / n=4 49.5s / n=6 46.6s（plateau≈4–6），全量 n=8 211s / n=12 206s。
+      两处修正：(a) 4 核 OS 保留是**宿主级**预留，WSL/cgroup 切片里再扣一次属双算 ⟹ 按 C//4
+      缩放；(b) 第 1 个外部子进程通常阻塞在管道/文件 I/O，不占满 CPU ⟹ 核项除数用 max(1,f)
+      （f≥2 才线性计入 CPU）。校正后本机 f=1 → 8、f=2 → 4、f=3 → 2（内存/进程项仍在收紧）；
+      16 核宿主 f=1..3 均被 8 令牌封顶。
     """
     if reserve is None:
         reserve = _env_int("GK_HUB_WORKERS_RESERVE", 1)
@@ -179,8 +187,9 @@ def adaptive_workers(n: int, cap: int = None, reserve: int = None,
         todo = 1
     _f = max(0, int(subprocess_factor or 0))
     if _f > 0:
-        # 408 公式：核/内存/进程三项取小，再被 cap（缺省 8 = 机器级并发令牌）与 todo 收紧。
-        w = max(1, (ncpu - 4) // (1 + _f)) if ncpu > 4 else 1
+        # 408 校正式：核/内存/进程三项取小，再被 cap（缺省 8 = 机器级并发令牌）与 todo 收紧。
+        _r = min(4, max(1, ncpu // 4))          # OS 保留核按切片比例缩放（16→4，5→1）
+        w = (2 * max(1, ncpu - _r)) // max(1, _f)   # I/O 超订 ×2；f=1 首个外部进程按阻塞计
         fm = free_avail_mb()
         if fm is not None:
             w = min(w, max(1, int(0.6 * float(fm) / (180 + 60 * _f))))

@@ -86,22 +86,34 @@ def test_adaptive_workers_floor_and_todo_clamp(monkeypatch):
 
 
 def test_adaptive_workers_subprocess_formula(monkeypatch):
-    """408 公式（f>0）：W = min( (核-4)/(1+f), 0.6R/(180+60f), 80/(1+f), cap/8, todo )。
+    """408 校正式（f>0）：W = min( 2·(C-r)/max(1,f), 0.6R/(180+60f), 80/(1+f), cap/8, todo )，
+    r = min(4, max(1, C//4))。
 
-    实测锚（本机 16 核 / 6.5GB，重活四文件）：n=1 59.0s / n=2 53.0s / n=4 49.5s /
-    n=6 46.6s ⟹ plateau≈4；f=2 在 16 核推出 4，与实测吻合。f=0 必须保持旧口径。
+    实机锚（2026-11-08，WSL processors=5 / memory=5GB：C=5 / R≈4.5GB）：
+      重活四文件 n=1 59.0s / n=2 53.0s / n=4 49.5s / n=6 46.6s ⟹ plateau≈4–6；
+      全量 n=8 211s / n=12 206s ⟹ f=1 期望 8。原 408 式 (C-4)/(1+f) 在 5 核切片给 1，属反证。
     """
     monkeypatch.delenv("GK_HUB_WORKERS_CAP", raising=False)
+
+    # 本机切片（C=5）：f=1 → 8、f=2 → 4、f=3 → 2
+    monkeypatch.setattr(hs, "visible_cpus", lambda: 5)
+    monkeypatch.setattr(hs, "free_avail_mb", lambda: 4512)
+    assert hs.adaptive_workers(1000, subprocess_factor=1) == 8, \
+        "5 核 / 4.5GB / f=1 ⟹ 8（对齐全量 n=8 211s 实测最优）"
+    assert hs.adaptive_workers(1000, subprocess_factor=2) == 4, \
+        "f=2 ⟹ 4（对齐重活 n=4 49.5s / n=6 46.6s 的 plateau）"
+    assert hs.adaptive_workers(1000, subprocess_factor=3) == 2      # 8//3（WSL+openssl 收紧）
+
+    # 16 核宿主：核项 2×(16-4)=24，被 8 令牌封顶（f=1..3 同值）
     monkeypatch.setattr(hs, "visible_cpus", lambda: 16)
     monkeypatch.setattr(hs, "free_avail_mb", lambda: 6656)
-    assert hs.adaptive_workers(1000, subprocess_factor=2) == 4, \
-        "16 核 / 6.5GB / f=2 ⟹ 4（核项 (16-4)/3=4 先于内存项 13 生效，对齐实测 plateau）"
+    for f in (1, 2, 3):
+        assert hs.adaptive_workers(1000, subprocess_factor=f) == 8
 
-    monkeypatch.setattr(hs, "free_avail_mb", lambda: 10 ** 9)
-    assert hs.adaptive_workers(1000, subprocess_factor=3) == 3      # (16-4)/4
-    assert hs.adaptive_workers(1000, subprocess_factor=1) == 6      # (16-4)/2
+    # 8 核：r=min(4,2)=2 ⟹ 2×(8-2)=12 ⟹ 令牌 8
     monkeypatch.setattr(hs, "visible_cpus", lambda: 8)
-    assert hs.adaptive_workers(1000, subprocess_factor=1) == 2      # (8-4)/2
+    monkeypatch.setattr(hs, "free_avail_mb", lambda: 10 ** 9)
+    assert hs.adaptive_workers(1000, subprocess_factor=1) == 8
 
     # 内存项单独生效：0.6R/(180+60f) 把 16 核压到 1（R=600MB, f=2 ⟹ 360/300=1.2）
     monkeypatch.setattr(hs, "visible_cpus", lambda: 16)
