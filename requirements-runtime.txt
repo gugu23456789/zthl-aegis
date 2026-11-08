@@ -1,9 +1,12 @@
 # 运行期第三方依赖 —— 哈希锁（2026-11-08）。
 #
-# 来源：`uv pip compile requirements-runtime.txt --generate-hashes`（uv 0.12.17），
+# 来源：`uv pip compile <runtime.in> --universal --generate-hashes`（uv 0.12.17），
 #   手工增删一律禁止 —— 改依赖请改**声明**后整份重新生成（并跑 CI 全绿）。
 # 作用：`--require-hashes` 下，任何一个包被换内容（镜像投毒、上游账号被接管后重发同名版本）
 #   都会在下载后校验失败 ⟹ 装不进去。
+# 平台（2026-11-08 二修）：必须 `--universal`。单平台（Windows）解析会把 win32 专属传递
+#   依赖（pywin32）写成**无条件**要求 ⟹ Linux CI 直接 `No matching distribution found`；
+#   通用解析由解析器自动补 `; sys_platform == 'win32'` / `'emscripten'` 标记。
 # 说明：本文件是**运行期闭包**（direct = openai 3.3.1 / openai-agents 0.22.0 / pydantic 2.13.4
 #   + 传递依赖）；`scripts/gk_sbom.py` 读 `requirements*.txt` ⟹ 发布 SBOM 组件 = 这里的全部组件。
 
@@ -456,7 +459,7 @@ cffi==2.1.1 \
     --hash=sha256:f8ec5e643a9a937f64e1999eb9f75d072263751912dc5cd06d3c85f8f44be7c3 \
     --hash=sha256:fb92203a88b3d3053034db775110081c49d28be6551923805e039924093761e4 \
     --hash=sha256:fcd22650c908d7b7da162bbfaab594a1227a15d1643a98c68b122ac642fa2264
-pywin32==312 \
+pywin32==312 ; sys_platform == 'win32' \
     --hash=sha256:02ebca0f0242b75292e218065004310d6a477407c09fa449bfe4f6022bc0c0fc \
     --hash=sha256:17948aeadbdb091f0ced6ef0841620794e68327b94ee415571c1203594b7215c \
     --hash=sha256:3020656e34f1cf7faeb7bccd2b84653a607c6ff0c55ada85e6487d61716deabd \
@@ -909,3 +912,6 @@ griffelib==2.4.1 \
 httpx2==2.16.0 \
     --hash=sha256:0d54c98128e8f2ff7fbbde0fca8c359e5f032edeaaaac443cdb7f31f685bcd7f \
     --hash=sha256:fd2c5d7909e8d86fe92d53020c310ca0e4e431b838c207c5754b9bbf0308d49a
+httpx2-jsfetch==1.0 ; sys_platform == 'emscripten' \
+    --hash=sha256:70a0e3eabfef7cce5ad9c629f7d01ca05e418f586646f4ddf14782e4c1454c60 \
+    --hash=sha256:cb916b707601e69a07721aabc8f3f6659be3a6893bc1ff5c6f9e02241df2da32
