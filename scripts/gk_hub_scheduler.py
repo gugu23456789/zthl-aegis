@@ -141,7 +141,8 @@ def visible_cpus() -> int:
 
 
 def adaptive_workers(n: int, cap: int = None, reserve: int = None,
-                     min_free_mb: int = None, cpus: int = None) -> int:
+                     min_free_mb: int = None, cpus: int = None,
+                     subprocess_factor: int = 0) -> int:
     """按**可见核数** + 空闲内存下限自适应当前并发度（stdlib only，保底 1，**不放大**）。
 
     全仓**单源**（s5.5）：MoA 检测器 / 相位探针 `--jobs` / 审计 `ThreadPoolExecutor` /
@@ -152,6 +153,14 @@ def adaptive_workers(n: int, cap: int = None, reserve: int = None,
     · `min_free_mb`（默认走既有 `GK_HUB_MIN_FREE_MB`）>0 且空闲内存可读且低于阈值 ⟹ 压到 1
       （与槽位/内存准入闸**同向**）；`min_free_mb=0` ⟹ 关内存闸。
     `reserve`/`cap` 缺省走 env 单源（`GK_HUB_WORKERS_RESERVE` / `GK_HUB_WORKERS_CAP`）——**无硬编码**。
+
+    `subprocess_factor`（2026-11-08，408-research 实测公式）：该批次每用例派生的**峰值外部
+    子进程数** f（纯 python=0；每用例 1 次 bash=1；WSL+openssl 重活=3）。**f>0 才启用**安全
+    并发公式，f=0 保持原行为（向后兼容）：
+        W = min( (可见核-4)/(1+f), 0.6·空闲MB/(180+60f), 80/(1+f), cap或8, todo )
+    依据（本机 16 核/6.5GB，重活四文件实测）：n=1 59.0s / n=2 53.0s / n=4 49.5s / n=6 46.6s
+    ⟹ plateau 在 4 附近（n=6 较 n=4 仅 6%，属噪声），公式 f=2 在 16 核推出 4，与实测吻合；
+    `(核-4)` 保留 OS/IDE，`0.6·R` 留 40% 内存垫，`80/(1+f)` 是 Windows 进程预算硬顶（>600 进程即换页）。
     """
     if reserve is None:
         reserve = _env_int("GK_HUB_WORKERS_RESERVE", 1)
@@ -168,6 +177,17 @@ def adaptive_workers(n: int, cap: int = None, reserve: int = None,
         todo = max(1, int(n))
     except Exception:  # noqa: BLE001
         todo = 1
+    _f = max(0, int(subprocess_factor or 0))
+    if _f > 0:
+        # 408 公式：核/内存/进程三项取小，再被 cap（缺省 8 = 机器级并发令牌）与 todo 收紧。
+        w = max(1, (ncpu - 4) // (1 + _f)) if ncpu > 4 else 1
+        fm = free_avail_mb()
+        if fm is not None:
+            w = min(w, max(1, int(0.6 * float(fm) / (180 + 60 * _f))))
+        w = min(w, max(1, 80 // (1 + _f)))
+        w = min(w, todo)
+        w = min(w, 8 if cap is None else max(1, int(cap)))
+        return max(1, w)
     w = max(1, ncpu - max(0, int(reserve)))
     w = min(w, todo)
     if cap is not None:

@@ -1,5 +1,15 @@
 # Agent Loop 分层条款（两层 loop · 暗依赖红线 · DSH 对齐）
 
+<!-- DOC-META
+title: Agent Loop 分层条款（两层 loop · 暗依赖红线 · DSH 对齐）
+type: reference
+owner: spz-gatekeeper-r-sequence
+status: public
+updated: 2026-11-08
+source: 本仓内实测（2026-09-08 F-REV-1 隔离实验 + 2026-11-08 pywin32 锁事故）+ owner 裁定
+license: MulanPSL-2.0（见仓库根 LICENSE；本文为第一方文档，无第三方衍生文本）
+-->
+
 > 生效日 2026-11-08。触发原因：一句「不自研 loop」被读成「这个技能本身就是 loop，怎么还说不搞 loop」——
 > 表述歧义。本条款把两层 loop 显式切开：**A 层是技能本体，B 层是 SDK 内部**。混称一律视为缺陷。
 
@@ -40,8 +50,15 @@
 - **锁**：`requirements-runtime.txt`（`uv pip compile --universal --generate-hashes`）+ `requirements-ci.txt`，
   CI 一律 `--require-hashes` + `PIP_ONLY_BINARY=:all:`。**必须 `--universal`**：
   单平台解析会把 `pywin32` 这类 win32 专属传递依赖写成无条件要求 ⟹ Linux 直接装不上（2026-11-08 实发事故）。
-- **不迁国产平替包**：openai / openai-agents 无对等物，硬迁=自研 SDK（违反 §1）。国产杠杆只有三个：
-  国产镜像（腾讯云 PyPI，哈希不变⟹可行）、内容哈希锁、国产模型端点（换 base_url，不动 A 层）。
+- **长期目标 = 与国产算力软件栈适配验证**（不是"换国产平替包"）：openai / openai-agents 无对等物，
+  硬迁=自研 SDK（违反 §1）。适配按三层推进：① 国产镜像（腾讯云 PyPI，内容哈希不变 ⟹ 可验证）；
+  ② 国产模型端点（换 base_url，不动 A 层）；③ 国产 GPU 算力栈（如沐曦 **MXMACA**：全栈覆盖
+  驱动/用户态接口/MXCC 编译器/算子库/训练推理框架对接，原生兼容 PyTorch 生态）上跑 A 层门禁链，
+  以及 B 层替换后的 tool-call 回路。
+- **许可证面同源**：本仓 MulanPSL-2.0 属木兰许可证族；该族 2026-06-25 已由
+  中国电子技术标准化研究院联合北大/国防科大/上海交大捐赠给**开放原子开源基金会**，
+  MulanPSL-2.0 为 OSI 认证、国内 33 万+ 项目在用 ⟹ 与国产开源治理面同源，不构成适配障碍。
+  来源：<https://www.openatom.cn/journalism/detail/37wkGdESesra>、<https://www.metax-tech.com/platform.html?cid=4>
 
 ## 5. 与 DSH 对齐的验收形状
 

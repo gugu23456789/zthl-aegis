@@ -3595,3 +3595,21 @@ class TestR020NonInteractiveGitGate:
         monkeypatch.setattr(pre_tool_hook, "_git_remote_and_helper", _boom)
         assert pre_tool_hook._git_push_guard("echo hi") == ""
         assert called["n"] == 0
+
+
+def test_main_tree_write_exits_2(monkeypatch, capsys, tmp_path):
+    """主树只读必须用 exit 2（2026-11-08 实测：exit 0 让宿主把 proceed:false 当成功继续落盘）。"""
+    root = tmp_path / "main"
+    root.mkdir()
+    target = root / "gatekeeper-cli.sh"
+    target.write_text("#!/bin/bash\n", encoding="utf-8")
+    monkeypatch.setattr(pre_tool_hook, "_main_checkout_root", lambda: root)
+    rc = run_hook_inline({
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Write",
+        "tool_input": {"file_path": str(target)},
+        "cwd": str(tmp_path),
+    })
+    out = capsys.readouterr().out
+    assert rc == 2, f"主树写未以 exit 2 拒绝（rc={rc}）⟹ 宿主会继续落盘"
+    assert "MAIN_TREE_READONLY" in out

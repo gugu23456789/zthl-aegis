@@ -26,3 +26,8 @@ updates:
       ci-deps:
         patterns:
           - "*"
+    # openai-agents 0.24.0 会让 DeepSeek 返回 400 `insufficient tool messages`
+    # （2026-09-08 F-REV-1 隔离实测；见 RELEASE-NOTES-v0.9.8.4.md）。上游是否已修复待评估，
+    # 修好之前拒绝升级请求 —— 否则每次周更都会开一个必定红 CI 的 PR（#6 已因此关闭）。
+    ignore:
+      - dependency-name: "openai-agents"

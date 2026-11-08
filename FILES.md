@@ -3,7 +3,7 @@
 > 生成器：`scripts/gk_repo_index.py --write`；漂移由 `gk_release_preflight.py` 的 `repo_index` 项守。
 > 用途：**移动端**（GitHub App 没有 “Go to file”）与抓取工具一次拿到全量路径；点路径直达文件。
 
-**共 870 个文件。**
+**共 868 个文件。**
 
 ## 索引生成物
 
@@ -67,6 +67,7 @@
 - [RELEASE-NOTES/RELEASE-NOTES-v0.9.8.3.md](RELEASE-NOTES/RELEASE-NOTES-v0.9.8.3.md) — ZTHL Aegis v0.9.8.3 — 发布说明
 - [RELEASE-NOTES/RELEASE-NOTES-v0.9.8.4.md](RELEASE-NOTES/RELEASE-NOTES-v0.9.8.4.md) — ZTHL Aegis v0.9.8.4 — 发布说明
 - [RELEASE-NOTES/RELEASE-NOTES-v0.9.8.5.md](RELEASE-NOTES/RELEASE-NOTES-v0.9.8.5.md) — ZTHL Aegis v0.9.8.5 — 发布说明
+- [RELEASE-NOTES/RELEASE-NOTES-v0.9.8.6.md](RELEASE-NOTES/RELEASE-NOTES-v0.9.8.6.md) — ZTHL Aegis v0.9.8.6 — 发布说明
 - [RELEASE-NOTES/RELEASE-NOTES-v0.9.8.md](RELEASE-NOTES/RELEASE-NOTES-v0.9.8.md) — v0.9.8 — 人评结构锚 + p_meta 冻结 + MoA 链路修正 + 相关性基准
 
 ## THIRD_PARTY_LICENSES/
@@ -157,7 +158,6 @@
 - [references/convergence-evaluator.md](references/convergence-evaluator.md) — 收敛评估器（Convergence Evaluator）—— 机制正本
 - [references/credit-economy.md](references/credit-economy.md) — 额度银行 / 经济回路正本
 - [references/doc-align-contracts.json](references/doc-align-contracts.json) — JSON 数据
-- [references/ecc-impact-20260609-gitnexus.md](references/ecc-impact-20260609-gitnexus.md) — ECC-IMPACT-20260609-gitnexus
 - [references/ecc-write-spec.md](references/ecc-write-spec.md) — ECC 写入规范（正本）
 - [references/extension-registry.md](references/extension-registry.md) — Extension Registry — 扩展注册表
 - [references/meta-routing-protocol.md](references/meta-routing-protocol.md) — META 路由协议 — 工作发现 + 仓库路由 + 阶段推进
@@ -167,7 +167,6 @@
 - [references/oss-moa-phase-provenance.md](references/oss-moa-phase-provenance.md) — MoA 相位/污染 provenance（公开口径）
 - [references/plan-writing-safety-net.md](references/plan-writing-safety-net.md) — 计划写入安全网（Plan-Writing Safety Net，简称 **PW-SN**）
 - [references/plugin-loading-test-framework.md](references/plugin-loading-test-framework.md) — 插件加载安全网协议 + 插件导入测试安全网框架
-- [references/prm-monitor-methodology.md](references/prm-monitor-methodology.md) — PRM Monitor：方法论与交叉审查
 - [references/red-arm-templates.json](references/red-arm-templates.json) — JSON 数据
 - [references/red-external-map.json](references/red-external-map.json) — JSON 数据
 - [references/red-intel-sources.json](references/red-intel-sources.json) — JSON 数据
@@ -182,7 +181,6 @@
 - [references/standard-maintenance-module.md](references/standard-maintenance-module.md) — 标准维护模块（自愈层）
 - [references/state-storage.md](references/state-storage.md) — 状态存储形态、卫星片与容量纪律
 - [references/superagent-comparison.md](references/superagent-comparison.md) — 与 dsh Super-agent 的一手材料对照
-- [references/trae-cross-user-leakage-report.md](references/trae-cross-user-leakage-report.md) — Trae IDE 跨用户上下文注入漏洞报告
 - [references/wasm-engineering-template.md](references/wasm-engineering-template.md) — WASM 工程标准模板（通用）
 - [references/xspi-defense.md](references/xspi-defense.md) — XSPI 污染攻防机制正本（跨站/间接提示注入）
 

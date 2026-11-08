@@ -20,7 +20,6 @@
 - [references/cli-protocol.md](references/cli-protocol.md): CLI Protocol — Gatekeeper Command Reference & PRM Monitor
 - [references/convergence-evaluator.md](references/convergence-evaluator.md): 收敛评估器（Convergence Evaluator）—— 机制正本
 - [references/credit-economy.md](references/credit-economy.md): 额度银行 / 经济回路正本
-- [references/ecc-impact-20260609-gitnexus.md](references/ecc-impact-20260609-gitnexus.md): ECC-IMPACT-20260609-gitnexus
 - [references/ecc-write-spec.md](references/ecc-write-spec.md): ECC 写入规范（正本）
 - [references/extension-registry.md](references/extension-registry.md): Extension Registry — 扩展注册表
 - [references/meta-routing-protocol.md](references/meta-routing-protocol.md): META 路由协议 — 工作发现 + 仓库路由 + 阶段推进
@@ -28,7 +27,6 @@
 - [references/oss-moa-phase-provenance.md](references/oss-moa-phase-provenance.md): MoA 相位/污染 provenance（公开口径）
 - [references/plan-writing-safety-net.md](references/plan-writing-safety-net.md): 计划写入安全网（Plan-Writing Safety Net，简称 **PW-SN**）
 - [references/plugin-loading-test-framework.md](references/plugin-loading-test-framework.md): 插件加载安全网协议 + 插件导入测试安全网框架
-- [references/prm-monitor-methodology.md](references/prm-monitor-methodology.md): PRM Monitor：方法论与交叉审查
 - [references/research-408.md](references/research-408.md): Research 408 — 计算机 408 四轴优化分析
 - [references/sdk-loop-layering.md](references/sdk-loop-layering.md): Agent Loop 分层条款（两层 loop · 暗依赖红线 · DSH 对齐）
 - [references/security-incident-response.md](references/security-incident-response.md): 密钥泄露应急处置流程（BP.08.05 对照）
@@ -37,7 +35,6 @@
 - [references/standard-maintenance-module.md](references/standard-maintenance-module.md): 标准维护模块（自愈层）
 - [references/state-storage.md](references/state-storage.md): 状态存储形态、卫星片与容量纪律
 - [references/superagent-comparison.md](references/superagent-comparison.md): 与 dsh Super-agent 的一手材料对照
-- [references/trae-cross-user-leakage-report.md](references/trae-cross-user-leakage-report.md): Trae IDE 跨用户上下文注入漏洞报告
 - [references/wasm-engineering-template.md](references/wasm-engineering-template.md): WASM 工程标准模板（通用）
 - [references/xspi-defense.md](references/xspi-defense.md): XSPI 污染攻防机制正本（跨站/间接提示注入）
 

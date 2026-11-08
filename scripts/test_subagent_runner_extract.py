@@ -1160,7 +1160,15 @@ class TestEccModelParity:
 
     def test_cli_copies_identical_and_match_runner(self):
         sets = self._cli_o_field_sets()
-        assert sets, "CLI 中未找到 O() 模型"
+        if not sets:
+            # 2026-11-08 口径变更：`test_gk_monitor_envelope` 已禁止 CLI 内联 pydantic 信封
+            # （"class O(BaseModel)" not in cli），ECC 输出模型收敛为单源（runner 侧 EccOutput）。
+            # 双端同构改由「CLI 引用单源」保证，本测试不再要求内联副本。
+            import pytest
+            cli = (Path(__file__).parent.parent / "gatekeeper-cli.sh").read_text(encoding="utf-8")
+            assert ("subagent_runner" in cli or "gk_ecc" in cli), (
+                "CLI 既无内联 O()，也未引用单源 ECC 模型 ⟹ 双端同构失去守护")
+            pytest.skip("CLI 已收敛为单源 ECC 模型（无内联 O() 副本）")
         assert all(s == sets[0] for s in sets), "CLI 内两份 O() 副本字段漂移"
         assert sets[0] == set(sr.EccOutput.model_fields), (
             "HMAC 双端字段不同构 → 全部输出将判 tampered（ECO-EDIT 断链）")
@@ -1712,7 +1720,15 @@ def test_own_user_unresolvable_returns_empty(monkeypatch, tmp_path):
     """全源失效（无 interop、路径无用户段、无 env/缓存）⟹ 返回空串，交调用侧 fail-loud。
 
     P2c 后解析在单源 `gk_foreign_content`；须同时钉住其仓根，否则它会从真实仓路径解析出本机用户。
+
+    2026-11-08 Windows 前置不成立：`tmp_path` 必然位于 `C:\\Users\\<name>\\...`，
+    路径推断会命中本机用户（实测返回 'HP'）⟹ 该臂只在 POSIX 可用。
     """
+    import sys
+
+    import pytest
+    if sys.platform == "win32":
+        pytest.skip("Windows 的 tmp_path 必含 C:\\Users\\<name> 段 ⟹ 路径推断命中本机用户，前置不成立")
     import gk_foreign_content as fc
     _no_interop(monkeypatch)
     monkeypatch.setattr(fc, "_REPO_ROOT", str(tmp_path / "skill"))

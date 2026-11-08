@@ -72,13 +72,23 @@ PY="${ACCEPT_PY:-$(python3 "$SKILL_DIR/scripts/gk_accept_py.py" 2>/dev/null || e
 #   `docs/plans/2026-10-29-accept-throughput-forensics-plan.md`）。
 #   `ACCEPT_JOBS=0` 仍可显式关并行；传具体数字即覆盖。
 _BASE_W=""
+# 2026-11-08（408 公式）：子进程因子 f 缺省 1（混合面）——W=min((核-4)/(1+f), 0.6R/(180+60f),
+#   80/(1+f), 8)；f>0 时**不再 ×2**（公式已含安全垫）。f=0 显式退回旧口径（nproc×2 上限 12）。
+_FACTOR="${ACCEPT_SUBPROC_FACTOR:-1}"
 if [ -z "${ACCEPT_JOBS:-}" ]; then
-  # 用 `python3`（**非** `$PY`）：探测是 stdlib-only 的硬件读数，且 `$PY` 可能是自测替身
-  #   （`test_gk_accept_cli.py` 用假解释器数调用次数 ⟹ 用 `$PY` 会多计一次、污染判定）。
-  _BASE_W="$(PYTHONPATH="$SKILL_DIR/scripts" python3 -c 'import gk_hub_scheduler as H; print(H.adaptive_workers(1000))' 2>/dev/null || true)"
+  if [ "$_FACTOR" -gt 0 ] 2>/dev/null; then
+    _BASE_W="$(PYTHONPATH="$SKILL_DIR/scripts" python3 -c "import gk_hub_scheduler as H; print(H.adaptive_workers(1000, subprocess_factor=${_FACTOR}))" 2>/dev/null || true)"
+  else
+    _BASE_W="$(PYTHONPATH="$SKILL_DIR/scripts" python3 -c 'import gk_hub_scheduler as H; print(H.adaptive_workers(1000))' 2>/dev/null || true)"
+  fi
 fi
 case "$_BASE_W" in ''|*[!0-9]*) _BASE_W="$(nproc 2>/dev/null || echo 4)" ;; esac
-_DEF_JOBS=$(( _BASE_W * 2 )); [ "$_DEF_JOBS" -gt 12 ] && _DEF_JOBS=12; [ "$_DEF_JOBS" -lt 1 ] && _DEF_JOBS=1
+if [ "$_FACTOR" -gt 0 ] 2>/dev/null; then
+  _DEF_JOBS="$_BASE_W"
+else
+  _DEF_JOBS=$(( _BASE_W * 2 ))
+fi
+[ "$_DEF_JOBS" -gt 12 ] && _DEF_JOBS=12; [ "$_DEF_JOBS" -lt 1 ] && _DEF_JOBS=1
 JOBS="${ACCEPT_JOBS:-$_DEF_JOBS}"
 # I/O 卫生（2026-09-24；**诚实标注：未单独 A/B**）：pytest 进程自身的 `.pyc` 落 CIFS（本仓在
 #   /mnt/c）会在每次冷 import 时付出跨 fs 写代价；改投 /tmp（ext4）。属低成本卫生面，非提速主项。

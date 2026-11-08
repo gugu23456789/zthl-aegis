@@ -278,3 +278,14 @@ def test_accept_and_redfirst_use_hub_adaptive_workers():
             "%s 未接 gk_hub_scheduler.adaptive_workers（并发度须单源）" % name
         assert "_CPU=" not in txt, "%s 仍有自算 nproc 的旧路径" % name
 
+
+def test_accept_cli_wires_subprocess_factor():
+    """408 公式接线（**机检臂**）：f 缺省 1（混合面）⟹ 不再 ×2；f=0 显式退回旧口径。
+
+    f 必须**由公式单源**消费（`subprocess_factor=`），不得在 `.sh` 里另写一套阈值。
+    """
+    txt = (SCRIPT_DIR / "_accept_cli.sh").read_text(encoding="utf-8")
+    assert 'ACCEPT_SUBPROC_FACTOR:-1' in txt, "f 缺省须为 1（每用例至少 1 次外部子进程）"
+    assert "subprocess_factor=${_FACTOR}" in txt, "f 未传给 adaptive_workers（公式旁路）"
+    assert "_DEF_JOBS=$(( _BASE_W * 2 ))" in txt, "f=0 旧口径须保留（紧急回退开关）"
+

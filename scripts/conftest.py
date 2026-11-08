@@ -7,8 +7,29 @@ Shared fixtures and utilities for gk_*.py tests.
 import json
 import os
 import signal
+import subprocess
 
 import pytest
+
+
+# ── 子进程 stdin 缺省隔离（2026-11-08，长尾/蓝屏根因止血）──────────────────────
+# 病象：xdist worker 继承父进程 stdin 管道（已打开、对端永不写入）⟹ 用例派生的
+#   bash.exe / openssl / wsl.exe 子进程 readline 无界阻塞 ⟹ 全量在 95%+ 处「永不结束」
+#   （源码定案：scripts/test_subagent_runner_stdin.py 顶部注释 + 408-research 报告）。
+# 处置：未**显式**指定 stdin 的 Popen 一律 DEVNULL（显式 stdin= 的调用完全不动，
+#   例如 run(input=...) 传的是 PIPE）。父链上再无「悬空读端」⟹ 卡死面消失。
+_ORIG_POPEN_INIT = subprocess.Popen.__init__
+
+
+def _popen_default_stdin(self, *args, **kwargs):
+    # Popen(args, bufsize, executable, stdin, stdout, stderr, ...)：args 达到 4 个 ⟹
+    #   stdin 已由位置参数给出，此时不得再塞 kwargs（会 TypeError 重复传参）。
+    if len(args) < 4 and "stdin" not in kwargs:
+        kwargs["stdin"] = subprocess.DEVNULL
+    return _ORIG_POPEN_INIT(self, *args, **kwargs)
+
+
+subprocess.Popen.__init__ = _popen_default_stdin
 
 
 # ── 单测看门狗（2026-11-03，全量取证引出）─────────────────────────────────────

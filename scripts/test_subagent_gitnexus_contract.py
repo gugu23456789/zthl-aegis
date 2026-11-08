@@ -158,11 +158,20 @@ class TestEvidenceAnchorMachineCheck:
         assert sr._missing_evidence_anchors(None) == []
 
     def test_ecc_output_carries_field(self):
-        """EccOutput 必须带该字段（CLI 侧两处 O() 模型同步 = HMAC 两端同构的契约面）。"""
+        """EccOutput 必须带该字段（HMAC 两端同构的契约面）。
+
+        2026-11-08 口径变更：CLI 已禁止内联 pydantic 信封（见 `test_gk_monitor_envelope`），
+        ECC 模型收敛为单源 ⟹ 有内联副本时仍要求"两份一致"，无副本时只要求引用单源。
+        """
         assert "evidence_anchor" in sr.EccOutput.model_fields
         cli = (Path(__file__).parent.parent / "gatekeeper-cli.sh").read_text(encoding="utf-8")
-        assert cli.count("evidence_anchor:dict=Field(default_factory=dict)") == 2, \
-            "CLI 侧 O() 模型（校验 + HMAC 重算）必须同步新增该字段，否则全部输出判 tampered"
+        marker = "evidence_anchor:dict=Field(default_factory=dict)"
+        if marker in cli:
+            assert cli.count(marker) == 2, \
+                "CLI 侧 O() 模型（校验 + HMAC 重算）必须同步新增该字段，否则全部输出判 tampered"
+        else:
+            assert ("subagent_runner" in cli or "gk_ecc" in cli), \
+                "CLI 既无内联 O()，也未引用单源 ECC 模型 ⟹ 双端同构失去守护"
 
     def test_runner_wires_machine_check_into_output(self):
         """runner 侧须真的机检并写回（重试一次 + 仍缺标 incomplete，同 F-REV-81 形）。"""

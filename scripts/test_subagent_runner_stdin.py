@@ -279,3 +279,19 @@ class TestNoUnboundedRead:
         # 不 OOM 崩溃（rc 不是 -11/-9 这类信号），且不在无界读上挂死。
         assert rc in (0, 1, 2), f"超长 stdin 下 runner 异常退出 rc={rc}（疑似 OOM/崩溃）"
         assert dt < 30.0, f"超长 stdin 耗时 {dt:.1f}s ⟹ 无长度上限，无界吃内存"
+
+
+def test_spawned_child_gets_eof_when_stdin_unset():
+    """未显式 stdin 的子进程必须立刻读到 EOF（2026-11-08，conftest 缺省 DEVNULL 的回归臂）。
+
+    背景：xdist worker 的 stdin 是「已打开但对端永不写入」的管道 ⟹ 子进程 readline 无界阻塞
+    ⟹ 全量在 95% 后「永不结束」。本臂用 10s 超时兜住：修复前是超时红，修复后 0 秒过。
+    """
+    import subprocess
+    import sys
+
+    p = subprocess.run(
+        [sys.executable, "-c", "import sys; sys.stdin.readline(); print('eof-ok')"],
+        capture_output=True, text=True, timeout=10)
+    assert p.returncode == 0, f"子进程异常：{p.stderr}"
+    assert "eof-ok" in p.stdout, f"未读到 EOF（stdin 仍被继承的悬空管道占住）：{p.stdout!r}"

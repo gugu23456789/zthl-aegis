@@ -85,6 +85,51 @@ def test_adaptive_workers_floor_and_todo_clamp(monkeypatch):
     assert hs.adaptive_workers(3) == 3          # 不超过待办数
 
 
+def test_adaptive_workers_subprocess_formula(monkeypatch):
+    """408 公式（f>0）：W = min( (核-4)/(1+f), 0.6R/(180+60f), 80/(1+f), cap/8, todo )。
+
+    实测锚（本机 16 核 / 6.5GB，重活四文件）：n=1 59.0s / n=2 53.0s / n=4 49.5s /
+    n=6 46.6s ⟹ plateau≈4；f=2 在 16 核推出 4，与实测吻合。f=0 必须保持旧口径。
+    """
+    monkeypatch.delenv("GK_HUB_WORKERS_CAP", raising=False)
+    monkeypatch.setattr(hs, "visible_cpus", lambda: 16)
+    monkeypatch.setattr(hs, "free_avail_mb", lambda: 6656)
+    assert hs.adaptive_workers(1000, subprocess_factor=2) == 4, \
+        "16 核 / 6.5GB / f=2 ⟹ 4（核项 (16-4)/3=4 先于内存项 13 生效，对齐实测 plateau）"
+
+    monkeypatch.setattr(hs, "free_avail_mb", lambda: 10 ** 9)
+    assert hs.adaptive_workers(1000, subprocess_factor=3) == 3      # (16-4)/4
+    assert hs.adaptive_workers(1000, subprocess_factor=1) == 6      # (16-4)/2
+    monkeypatch.setattr(hs, "visible_cpus", lambda: 8)
+    assert hs.adaptive_workers(1000, subprocess_factor=1) == 2      # (8-4)/2
+
+    # 内存项单独生效：0.6R/(180+60f) 把 16 核压到 1（R=600MB, f=2 ⟹ 360/300=1.2）
+    monkeypatch.setattr(hs, "visible_cpus", lambda: 16)
+    monkeypatch.setattr(hs, "free_avail_mb", lambda: 600)
+    assert hs.adaptive_workers(1000, subprocess_factor=2) == 1
+
+    # 进程预算硬顶 80/(1+f)：超大核数下 f=40 ⟹ 1（Windows >600 进程即换页）
+    monkeypatch.setattr(hs, "visible_cpus", lambda: 100000)
+    monkeypatch.setattr(hs, "free_avail_mb", lambda: 10 ** 9)
+    assert hs.adaptive_workers(1000, subprocess_factor=40) == 1
+
+    # cap 与 todo 仍能收紧（cap 显式传入优先于缺省 8）
+    monkeypatch.setattr(hs, "visible_cpus", lambda: 16)
+    assert hs.adaptive_workers(1000, cap=4, subprocess_factor=1) == 4
+    assert hs.adaptive_workers(3, subprocess_factor=1) == 3
+
+
+def test_adaptive_workers_f_zero_keeps_legacy(monkeypatch):
+    """f=0（纯 python 批）必须与旧口径逐位一致（向后兼容，不改既有调度）。"""
+    monkeypatch.delenv("GK_HUB_WORKERS_CAP", raising=False)
+    monkeypatch.setenv("GK_HUB_WORKERS_RESERVE", "1")
+    monkeypatch.setattr(hs, "visible_cpus", lambda: 16)
+    monkeypatch.setattr(hs, "free_avail_mb", lambda: 10 ** 9)
+    assert hs.adaptive_workers(100) == 15
+    assert hs.adaptive_workers(100, subprocess_factor=0) == 15
+    assert hs.adaptive_workers(100, subprocess_factor=-1) == 15   # 负值视同未启用
+
+
 # ── 槽位限流（跨 fd / 跨线程） ─────────────────────────────────────────
 def test_slot_cap_enforced():
     root = hs.slots_root()

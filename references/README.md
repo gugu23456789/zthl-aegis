@@ -9,7 +9,7 @@ Citation discipline:
 - Historical line numbers are not kept in the public tree.
 
 <!-- GK-REFS:START（由 scripts/gk_docgen_facts.py 生成，勿手改） -->
-> 公开面共 **25** 份文档（本索引自动生成；出包范围 = `oss-export-whitelist.json`）。
+> 公开面共 **22** 份文档（本索引自动生成；出包范围 = `oss-export-whitelist.json`）。
 
 ### 1. Architecture and routing
 
@@ -28,7 +28,6 @@ Citation discipline:
 | [cli-protocol.md](cli-protocol.md) | CLI Protocol — Gatekeeper Command Reference & PRM Monitor |
 | [convergence-evaluator.md](convergence-evaluator.md) | 收敛评估器（Convergence Evaluator）—— 机制正本 |
 | [plan-writing-safety-net.md](plan-writing-safety-net.md) | 计划写入安全网（Plan-Writing Safety Net，简称 **PW-SN**） |
-| [prm-monitor-methodology.md](prm-monitor-methodology.md) | PRM Monitor：方法论与交叉审查 |
 | [stages.md](stages.md) | Stage Guide (0–5) |
 
 ### 3. Safety and security
@@ -37,14 +36,12 @@ Citation discipline:
 |:--|:--|
 | [plugin-loading-test-framework.md](plugin-loading-test-framework.md) | 插件加载安全网协议 + 插件导入测试安全网框架 |
 | [security-incident-response.md](security-incident-response.md) | 密钥泄露应急处置流程（BP.08.05 对照） |
-| [trae-cross-user-leakage-report.md](trae-cross-user-leakage-report.md) | Trae IDE 跨用户上下文注入漏洞报告 |
 | [xspi-defense.md](xspi-defense.md) | XSPI 污染攻防机制正本（跨站/间接提示注入） |
 
 ### 4. Findings and history
 
 | Document | Purpose |
 |:--|:--|
-| [ecc-impact-20260609-gitnexus.md](ecc-impact-20260609-gitnexus.md) | ECC-IMPACT-20260609-gitnexus |
 | [ecc-write-spec.md](ecc-write-spec.md) | ECC 写入规范（正本） |
 
 ### 5. Templates

@@ -102,10 +102,17 @@ def run_bash(script: str, *, cwd: str | Path | None = None,
         `subprocess.CompletedProcess`（`stdout`/`stderr` 已 decode 为 str，errors=replace）。
     """
     import os
-    env_full = None
+    env_full = dict(os.environ) if env is None else dict(os.environ)
     if env is not None:
-        env_full = dict(os.environ)
         env_full.update({k: str(v) for k, v in env.items()})
+    # 2026-11-08 修（Windows 实测 rc=127）：只继承 Windows 形态 PATH 时，MSYS bash 找不到
+    # 同目录的 awk/sed（`awk: command not found`）。把 bash 自身目录前置进 PATH；
+    # POSIX 侧 bash 就在 /usr/bin，前置为幂等无副作用。
+    _bash_dir = os.path.dirname(os.path.abspath(bash))
+    if os.name == "nt" and _bash_dir:
+        _cur = env_full.get("PATH", "")
+        if _bash_dir.lower() not in _cur.lower():
+            env_full["PATH"] = _bash_dir + os.pathsep + _cur
     # 坑④：`bash -s` 读 stdin 时**末行无换行符则整行不执行**（实测 2026-11-01：
     # `printf %s "$V"` 无尾 \n ⟹ 空输出且 rc=0，极隐蔽）。一律补尾换行。
     if not script.endswith("\n"):

@@ -4069,7 +4069,10 @@ def main():
                 print(json.dumps({"ok": False, "proceed": False, "mode": "main_tree_readonly",
                                   "error": "MAIN_TREE_READONLY",
                                   "hint": "主检出只读：请先 git worktree add，在 worktree 内编辑后合并"}))
-                sys.exit(0)
+                # 2026-11-08 修（ECC：主树只读形同虚设）：原先 `sys.exit(0)` ⟹ 宿主只看退出码
+                #   ⟹ 把 proceed:false 当「成功」继续落盘（实测：Edit/Write 直写主树成功）。
+                #   与 `block()` 对齐 = exit 2，宿主才真正拦截。
+                sys.exit(2)
 
     # ── 会话身份链（Q2a，2026-10-02 · 平台无关兜底；finding ECC-AB2FA16E9133）─────────────
     # 与 CLI 启动块**同源**：env `GK_SESSION_ID` > worktree token（由 `_CALL_TARGET` 所在

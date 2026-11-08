@@ -6733,7 +6733,7 @@ print('{\"ok\":true,\"pid\":%d}' % p.pid)
       [ ! -f "$rc_file" ] && { echo '{"ok":false,"error":"report file required: cron health <json-file>"}'; return 1; }
       GK_PY_RC="$(_gk_py_path "$rc_file")" _state_write "d.setdefault('gate_data',{})['cron_health']={'last_tick_at':'$(date -u +%Y-%m-%dT%H:%M:%SZ)','last_tick_ok':True,'source':'cron'}; d.setdefault('gate_data',{})['_latest_release_check']=json.load(open(os.environ['GK_PY_RC']))" 2>/dev/null || true
       local ptype; ptype=$(python3 "${SKILL_DIR}/scripts/gk_gate_project_type.py" "$STATE_FILE" 2>/dev/null || echo "standard")
-      echo "{\"ok\":true,\"state_file\":\"$STATE_FILE\",\"project_type\":\"$ptype\"}"
+      python3 "$SKILL_DIR/scripts/gk_json.py" build ok=true state_file="$STATE_FILE" project_type="$ptype"
       ;;
     *) echo '{"ok":false,"error":"Usage: cron [list|create|remove|enable|disable|tick|start|status|run|trigger|edit|health]"}' ;;
   esac

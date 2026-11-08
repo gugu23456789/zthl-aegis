@@ -61,7 +61,10 @@
     {"pattern": "^references/security-measures\\.md$", "reason": "内部安全记录（owner 2026-11-02：不随开源发布，仅私仓留存）"},
     {"pattern": "^references/flywheel-implementation-plan\\.md$", "reason": "飞轮实施计划（1665 行内部设计源头，含 87 处硬编码行号与未落地的对比表）：owner 2026-10-30 裁定「flywheel 不放出去、也不压缩」⟹ 不进公开核心包，仅私仓留存（`docs/` 侧引用不受影响）"},
     {"pattern": "^references/game-path-audit\\.md$", "reason": "2026-11-05 退役（owner 裁定）：6 条攻击路径的早期推演，门禁面已由 R 序列/hook/node-guard/audit --red/self-check 覆盖，路径编号与现行实现对不上 ⟹ **私仓留存、不进公开包**（避免对外承诺过期机制）"},
-    {"pattern": "^references/(bashpy-problem-taxonomy|e1e4-evaluator-matrix|ecc-analysis-findings|ecc-impact-2026-08-13-key-question|ecc-impact-20260826-plugin-dual-loop|ecc-impact-flywheel|ecc-impact-v7|stage-[0-9][^/]*)\\.md$", "reason": "公开面压缩到 20 份以内（owner 2026-10-30）：stage 指南合并为 `stages.md`；bashpy 分类学、E1-E4 规格、ECC 分析/impact 记录（含 flywheel 影响）转入私仓，避免导出面过大与历史行号漂移。2026-11-05 追加 `ecc-impact-v7.md`：飞轮 v7 的内部裁定（7D 评分 + P0 排序），属私仓决策档案，owner 裁定不对外"}
+    {"pattern": "^references/(bashpy-problem-taxonomy|e1e4-evaluator-matrix|ecc-analysis-findings|ecc-impact-2026-08-13-key-question|ecc-impact-20260826-plugin-dual-loop|ecc-impact-flywheel|ecc-impact-v7|stage-[0-9][^/]*)\\.md$", "reason": "公开面压缩到 20 份以内（owner 2026-10-30）：stage 指南合并为 `stages.md`；bashpy 分类学、E1-E4 规格、ECC 分析/impact 记录（含 flywheel 影响）转入私仓，避免导出面过大与历史行号漂移。2026-11-05 追加 `ecc-impact-v7.md`：飞轮 v7 的内部裁定（7D 评分 + P0 排序），属私仓决策档案，owner 裁定不对外"},
+    {"pattern": "^references/ecc-impact-20260609-gitnexus\\.md$", "reason": "ECC 冲击记录（gitnexus v1.6.7 升级决策 + 本机安装路径 %APPDATA% 与内部裁决）：与 `ecc-impact-*` 同族内部决策档案，2026-11-08 发现是漏网（同族其它 4 份早已排除）⟹ 补排除，仅私仓留存"},
+    {"pattern": "^references/trae-cross-user-leakage-report\\.md$", "reason": "Trae IDE 跨用户上下文注入漏洞报告：含**第三方用户**的项目名与桌面路径、以及未修复漏洞的可复现细节 ⟹ 公开即二次泄露第三方数据并等于披露未修复缺陷；2026-11-08 owner 裁定撤出公开面，仅私仓留存"},
+    {"pattern": "^references/prm-monitor-methodology\\.md$", "reason": "PRM 方法论与实现严重脱节（2026-11-08 owner 裁定）：旧文把已 sunset 的 v4-flash 评分写成主线；重写版《现行机制》仅私仓保留，公开面不再提供该文档，避免对外承诺过期机制"}
   ],
   "forbidden_exemptions": [
     {"pattern": "^references/(convergence-evaluator\\.md|moa-kappa-ledger\\.json|red-arm-templates\\.json|sequence-node-safety-net-template\\.md|xspi-defense\\.md)$", "terms": ["κ_tilt", "κ_cap", "tilt_total", "φ(κ"], "reason": "MoA 机制文档（owner 2026-11-01 裁定转公开，v0.9.4 已随包发布）：κ 记号在这几份文档里是机制正身，不是稿件指纹；只豁免这 4 个记号，其余反查词（稿件术语/预印本/路径）照常拦截"},
