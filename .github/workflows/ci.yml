@@ -43,7 +43,11 @@ jobs:
       - name: install test deps
         # cryptography：身份认证验签 / Ed25519 封印用例的**真跑**依赖。缺它时相关测试
         # 只能 importorskip（覆盖归零）；装上才守得住验签路径。
-        run: python -m pip install --upgrade pip pytest pyyaml==6.0.2 pytest-xdist cryptography pyyaml==6.0.2
+        # 2026-11-08（v0.9.8.3 CI 实测）：`openai-agents` 必须落在 `subagent_runner.py` 声明的
+        #   区间 `>=0.22,<0.24` 内 —— 不钉版本时 runner 上的 0.24.0 会让 8 条角色/工具面测试
+        #   直接 `SUAGENT_SDK_VERSION_MISMATCH` 退出 2（本地解释器恰在区间内 ⟹ 本地绿、CI 红）。
+        #   上游 0.24 是否已修复 DeepSeek `insufficient tool messages`：待评估，修复后再放宽上限。
+        run: python -m pip install --upgrade pip pytest pyyaml==6.0.2 pytest-xdist cryptography "openai-agents>=0.22,<0.24"
       - name: smoke gate
         env:
           CI_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before }}
@@ -118,7 +122,7 @@ jobs:
         run: |
           python -m venv .venv
           . .venv/bin/activate
-          python -m pip install --upgrade pip pytest pytest-xdist cryptography pyyaml==6.0.2
+          python -m pip install --upgrade pip pytest pytest-xdist cryptography pyyaml==6.0.2 "openai-agents>=0.22,<0.24"
       - name: assert interpreter is the venv
         run: |
           . .venv/bin/activate

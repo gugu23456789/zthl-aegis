@@ -53,7 +53,10 @@ jobs:
         with:
           python-version: "3.12"
       - name: install test deps
-        run: python -m pip install --upgrade pip pytest pytest-xdist cryptography pyyaml==6.0.2 openai openai-agents pydantic
+        # 2026-11-08：`openai-agents` 钉在 `subagent_runner.py` 声明的区间 `>=0.22,<0.24`
+        #   （不钉时 runner 的 0.24.0 会让角色/工具面测试 `SUAGENT_SDK_VERSION_MISMATCH` 退出 2，
+        #   连带 release 的 smoke gate 恒红）。上游 0.24 修复 DeepSeek 400 后再放宽。
+        run: python -m pip install --upgrade pip pytest pytest-xdist cryptography pyyaml==6.0.2 openai "openai-agents>=0.22,<0.24" pydantic
       - name: workflow security gate
         run: python scripts/gk_ci_security_lint.py --json
       - name: package/hook integrity
