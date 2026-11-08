@@ -47,27 +47,48 @@ else
 fi
 
 echo "== 5/5 fast pytest =="
-"$PY" -m pytest -q \
-  scripts/test_gk_plan_lint.py \
-  scripts/test_gk_gate_appeal.py \
-  scripts/test_gk_econ_params.py \
-  scripts/test_gk_monitor_m1.py \
-  scripts/test_gk_budget_ledger.py \
-  scripts/test_gk_credit_floor.py \
-  scripts/test_gk_main_repo.py \
-  scripts/test_main_repo_value_sync.py \
-  scripts/test_gk_advance_transition_table.py \
-  scripts/test_gk_ecc_sink.py \
-  scripts/test_gk_finding_open_spillover.py \
-  scripts/test_gk_state_map.py \
-  scripts/test_gk_monitor_decision.py \
-  scripts/test_gk_agent_identity.py \
-  scripts/test_gk_subagent_model_chain.py \
-  scripts/test_opcap_evidence_alias.py \
-  scripts/test_pack_release.py \
-  scripts/test_gk_bomb_inventory.py \
-  scripts/test_gk_paper_review_loader.py \
-  scripts/test_gk_gate_entropy.py \
+# 2026-11-08（v0.9.8.2 实测缺陷，公开 CI smoke 双红）：原为**硬编码全量**列表，其中
+#   `test_gk_paper_review_loader.py` 属 paper-review（私仓专属，见
+#   `references/oss-export-whitelist.json` 排除面）⟹ 公开树里该文件不存在，pytest 直接
+#   `file or directory not found` 退出 4 ⟹ CI `smoke gate` 与 `smoke gate in venv` 恒红，
+#   而私仓本地跑永远绿（文件都在）—— 同一个「导出面独有的红」家族。
+# 口径：**意图列表保留**（声明快速门该覆盖什么），实际执行面按**存在性**过滤，缺失项显式打印
+#   （不静默）；私仓侧行为逐字不变。
+smoke_tests=(
+  scripts/test_gk_plan_lint.py
+  scripts/test_gk_gate_appeal.py
+  scripts/test_gk_econ_params.py
+  scripts/test_gk_monitor_m1.py
+  scripts/test_gk_budget_ledger.py
+  scripts/test_gk_credit_floor.py
+  scripts/test_gk_main_repo.py
+  scripts/test_main_repo_value_sync.py
+  scripts/test_gk_advance_transition_table.py
+  scripts/test_gk_ecc_sink.py
+  scripts/test_gk_finding_open_spillover.py
+  scripts/test_gk_state_map.py
+  scripts/test_gk_monitor_decision.py
+  scripts/test_gk_agent_identity.py
+  scripts/test_gk_subagent_model_chain.py
+  scripts/test_opcap_evidence_alias.py
+  scripts/test_pack_release.py
+  scripts/test_gk_bomb_inventory.py
+  scripts/test_gk_paper_review_loader.py
+  scripts/test_gk_gate_entropy.py
   scripts/test_subagent_role_tools.py
+)
+smoke_run=()
+smoke_missing=()
+for t in "${smoke_tests[@]}"; do
+  if [ -f "$t" ]; then smoke_run+=("$t"); else smoke_missing+=("$t"); fi
+done
+if [ "${#smoke_missing[@]}" -gt 0 ]; then
+  echo "(skip: not in this tree) ${smoke_missing[*]}"
+fi
+if [ "${#smoke_run[@]}" -eq 0 ]; then
+  echo "FAIL  fast pytest 列表在本树**一个都不存在** ⟹ 疑导出面异常（拒红/拒绿）" >&2
+  exit 2
+fi
+"$PY" -m pytest -q "${smoke_run[@]}"
 
 echo "ci_smoke: OK"

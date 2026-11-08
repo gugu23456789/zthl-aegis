@@ -61,6 +61,24 @@ def test_hidden_files_skipped(tmp_path, monkeypatch):
     assert ".gitignore" not in R.build(root)["files"]
 
 
+def test_runtime_state_files_not_indexed(tmp_path, monkeypatch):
+    """2026-11-08（导出树实测）：运行期 state 不是公开面输入，不得进索引。
+
+    导出树没有 `.git` ⟹ 走 `os.walk`；预检/生成器自己写出的 `.gatekeeper.state*` 若被计入，
+    `--check` 会与刚写入的 FILES.md 立刻漂移（实测 860 → 861 ⟹ 导出树内 preflight 恒 FAIL）。
+    私仓侧靠 `git ls-files` 天然排除（未跟踪）⟹ 两侧判据必须对齐。
+    """
+    root = _tree(tmp_path, monkeypatch)
+    (root / ".gatekeeper.state").write_text("{}", encoding="utf-8")
+    (root / ".gatekeeper.state.own_user").write_text("HP", encoding="utf-8")
+    files = R.build(root)["files"]
+    assert not [f for f in files if f.startswith(".gatekeeper.state")], files
+    # 生成后即便 state 再被写出，`--check` 也必须保持收敛（不自污染）
+    R.write(root)
+    (root / ".gatekeeper.state.own_user").write_text("HP", encoding="utf-8")
+    assert R.check(root)["ok"] is True
+
+
 def test_write_then_check_ok(tmp_path, monkeypatch):
     root = _tree(tmp_path, monkeypatch)
     changed = R.write(root)

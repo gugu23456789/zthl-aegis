@@ -91,6 +91,13 @@ def iter_files(root: Path = ROOT) -> list:
             continue
         if rel in _HIDDEN_SKIP or rel in _SELF:
             continue
+        # 2026-11-08（导出树实测）：运行期状态文件不是公开面输入。私仓靠 `git ls-files`
+        #   天然排除（未跟踪），但导出树走 `os.walk` ⟹ 预检/生成器自己写出的
+        #   `.gatekeeper.state*` 会被算进"可索引文件"，使 `--check` 与刚写入的 FILES.md
+        #   立刻漂移（实测 860 → 861 ⟹ 导出树内预检恒报 repo_index FAIL）。
+        #   判据与 `oss_scrub.purge_run_artifacts` 同源：`.gatekeeper.state` 前缀族。
+        if Path(rel).name.startswith(".gatekeeper.state"):
+            continue
         if _is_excluded(rel):
             continue
         if not (root / rel).is_file():

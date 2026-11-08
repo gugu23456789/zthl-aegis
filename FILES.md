@@ -12,7 +12,6 @@
 
 ## 根目录
 
-- [.gatekeeper.state.own_user](.gatekeeper.state.own_user) — 文件
 - [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) — 贡献者公约（Contributor Covenant v2.1 精简版）
 - [CONTRIBUTING.md](CONTRIBUTING.md) — Contributing / 参与贡献
 - [CONVENTIONS.md](CONVENTIONS.md) — SPZ Gatekeeper Skill — Git 管理规范
@@ -62,6 +61,7 @@
 - [RELEASE-NOTES/RELEASE-NOTES-v0.9.6.md](RELEASE-NOTES/RELEASE-NOTES-v0.9.6.md) — v0.9.6 发布说明
 - [RELEASE-NOTES/RELEASE-NOTES-v0.9.7.md](RELEASE-NOTES/RELEASE-NOTES-v0.9.7.md) — ZTHL Aegis v0.9.7
 - [RELEASE-NOTES/RELEASE-NOTES-v0.9.8.2.md](RELEASE-NOTES/RELEASE-NOTES-v0.9.8.2.md) — ZTHL Aegis v0.9.8.2 — 发布说明
+- [RELEASE-NOTES/RELEASE-NOTES-v0.9.8.3.md](RELEASE-NOTES/RELEASE-NOTES-v0.9.8.3.md) — ZTHL Aegis v0.9.8.3 — 发布说明
 - [RELEASE-NOTES/RELEASE-NOTES-v0.9.8.md](RELEASE-NOTES/RELEASE-NOTES-v0.9.8.md) — v0.9.8 — 人评结构锚 + p_meta 冻结 + MoA 链路修正 + 相关性基准
 
 ## THIRD_PARTY_LICENSES/

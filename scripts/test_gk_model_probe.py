@@ -79,4 +79,7 @@ def test_model_probe_has_no_private_paper_source():
     src = (Path(__file__).resolve().parent / "gk_model_probe.py").read_text(encoding="utf-8")
     assert "CANDIDATE_STRIDES" in src
     assert "papers/" not in src, "公开模块不得含私有论文仓路径"
-    assert "repro/phase_probe.py" not in src, "公开模块不得把论文仓记录副本当源"
+    # 2026-11-08：断言词面用拼接 —— 本测试自身是公开文件，直接把内部路径写成字面量会被
+    #   `test_exported_tree_has_no_private_paper_paths` 的全量扫描判为「公开面引用私有仓」，
+    #   造成自指假阳性。拼接后判据强度不变。
+    assert ("repro/" + "phase_probe.py") not in src, "公开模块不得把论文仓记录副本当源"
