@@ -185,6 +185,12 @@ if [ ! -f "$RF/gatekeeper-cli.sh" ]; then
     || { echo "FATAL: git archive $REV scripts 失败"; exit 2; }
   git show "$REV:gatekeeper-cli.sh" > "$RF/gatekeeper-cli.sh" \
     || { echo "FATAL: git show $REV:gatekeeper-cli.sh 失败"; exit 2; }
+  # 2026-11-09：红先臂若消费 `references/red-arm-templates.json`（模版登记表/生成器族），
+  #   sandbox 必须带 **rev 版登记表** —— 否则 `$RF/references` 缺席 ⟹ 红/绿都 ERROR（判据无效）。
+  #   按 sha 缓存，rev 不变 ⟹ 只取一次；公开树无该文件时容错（不阻断其它形态）。
+  mkdir -p "$RF/references"
+  git show "$REV:references/red-arm-templates.json" > "$RF/references/red-arm-templates.json" \
+    2>/dev/null || true
 fi
 _TB=$(basename "$TESTFILE")
 # 覆盖层（每次都刷）

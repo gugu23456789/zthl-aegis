@@ -338,6 +338,9 @@ def _resolve_state_by_target_path(target: str) -> Optional[Path]:
         if any(k == s or k.startswith(s + "/") for k in t_keys):
             cand = SKILL_DIR / ".gatekeeper.state"
             return cand if cand.exists() else None
+    linked = _skill_linked_worktree_state(t)
+    if linked is not None:
+        return linked
     for marker, sf in GOVERNED_SCOPES.items():
         if marker in t:
             c = _resolve_existing(sf)
@@ -351,6 +354,78 @@ def _resolve_state_by_target_path(target: str) -> Optional[Path]:
         if _state_walk_boundary(p, parent):
             return None
         p = parent
+
+
+def _linked_gitdir_matches(gitdir_raw: str, wt_dir: str, skill_dir: str) -> bool:
+    """`gitdir:` 是否指向本技能仓的 `.git/worktrees/`（形态/相对/大小写/`..` 全归一）。
+
+    2026-11-09（残余漏洞收口）：原实现只做「原样 + `_win_to_wsl`」字符串前缀比较 ⟹
+      ① 相对 `gitdir:`（`git worktree add --relative-paths`）永不命中；
+      ② `..` / 双斜杠 / Windows 大小写差异永不命中（`<home>/.TRAE` vs `.trae`）；
+      ③ 单侧归一（右不归一）复现 ECC-DF56818912BD 同族。
+    修法 = 双侧 `_norm_forms`（原样 + win→wsl + wsl→win）+ `normpath` + 仅对
+    `/mnt/` 与盘符形态做大小写折叠（不在大小写敏感 FS 上全局 lower）；前缀比较带
+    目录边界（`/…/spz-gatekeeper-r-sequence-x` 不得误命中）。
+    """
+    gd = str(gitdir_raw or "").strip()
+    if not gd:
+        return False
+    # 相对 gitdir 按 worktree 根解析（git 的 `gitdir:` 相对语义）
+    if not re.match(r"^[A-Za-z]:[\\/]", gd) and not gd.startswith("/"):
+        gd = os.path.normpath(os.path.join(str(wt_dir), gd.replace("\\", "/")))
+    base = os.path.join(str(skill_dir), ".git", "worktrees")
+
+    def _keys(x: str):
+        out = []
+        for raw in _norm_forms(x):
+            n = os.path.normpath(raw).replace("\\", "/").rstrip("/")
+            if not n:
+                continue
+            cand = [n]
+            if n.startswith("/mnt/") or re.match(r"^[A-Za-z]:/", n):
+                cand.append(n.lower())
+            for v in cand:
+                if v and v not in out:
+                    out.append(v)
+        return out
+
+    return any(g == b or g.startswith(b + "/") for g in _keys(gd) for b in _keys(base))
+
+
+def _skill_linked_worktree_state(t: str) -> Optional[Path]:
+    """目标是否在本技能仓的 **linked worktree**（名字无关），是则归主树 state。
+
+    2026-11-09 修（预算/门禁绕过，用户质询「额度银行没在干活」）：原判定只认目录名
+    **恰好等于技能名**（`worktrees/<SKILL_DIR.name>`）；`worktrees/spz-gatekeeper-*-json`
+    等副本 ⟹ 返回 None ⟹ 回退 cwd 判定（cwd 也在 worktree ⟹ None）⟹ `scope_out` ⟹
+    Gate3/Gate4/edit_budget 整链**不执行且不计费**（本次 JSON 改造实测即此路径）。
+
+    判据（确定性，不猜名字）：向上找到含 `.git` **文件** 的目录，读 `gitdir:` 行，归一为
+    WSL 形态后必须落在 `<技能仓>/.git/worktrees/` 之下（= 同仓 linked worktree）。
+    只认文件形态（`git worktree` 的 `.git` 是文件；主检出是目录 ⟹ 不认领）。
+    """
+    p = Path(t)
+    if not p.is_dir():
+        p = p.parent
+    for _ in range(10):
+        gf = p / ".git"
+        try:
+            if gf.is_file():
+                line = gf.read_text(encoding="utf-8", errors="replace").strip()
+                if not line.startswith("gitdir:"):
+                    return None
+                gd_raw = line.split(":", 1)[1].strip()
+                if _linked_gitdir_matches(gd_raw, str(p), str(SKILL_DIR)):
+                    cand = SKILL_DIR / ".gatekeeper.state"
+                    return cand if cand.exists() else None
+                return None        # 别的仓的 linked worktree：不认领（防误伤）
+        except OSError:
+            return None
+        parent = p.parent
+        if parent == p:
+            return None
+        p = parent
+    return None
 
 
 def _state_walk_boundary(p: Path, parent: Path) -> bool:

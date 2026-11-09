@@ -65,9 +65,28 @@ def cmd_count(stream, path: str) -> dict:
 
 
 def cmd_build(pairs: list[tuple[str, str]]) -> dict:
-    out = {}
+    """k=v 构造 JSON；支持两种扩展（2026-11-09，CLI 手工拼 JSON 收口）：
+
+    · **嵌套**：`repo_paths.skill=/x` ⟹ `{"repo_paths":{"skill":"/x"}}`
+    · **原样片段**：`k:=<JSON>` ⟹ 值按 JSON 解析后原样放入（数组/对象/数字/null 均可）；
+      片段非法 JSON ⟹ 抛 ValueError（**不产出非法 JSON**，调用方据 rc!=0 判失败）
+    """
+    out: dict = {}
     for k, v in pairs:
-        out[k] = _default_coerce(v)
+        raw = k.endswith(":")
+        if raw:
+            k = k[:-1]
+        if not k:
+            raise ValueError("build: 空键")
+        parts = [p for p in k.split(".") if p]
+        node = out
+        for p in parts[:-1]:
+            nxt = node.get(p)
+            if not isinstance(nxt, dict):
+                nxt = {}
+                node[p] = nxt
+            node = nxt
+        node[parts[-1]] = json.loads(v) if raw else _default_coerce(v)
     return {"ok": True, "value": out}
 
 

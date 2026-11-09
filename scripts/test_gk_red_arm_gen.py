@@ -8,15 +8,29 @@
 """
 import json
 import os
+import shutil
 import sys
 from pathlib import Path
 
 import pytest
 
 _HERE = Path(__file__).parent
+_REG = _HERE.parent / "references" / "red-arm-templates.json"
 sys.path.insert(0, str(_HERE))
 
 import gk_red_arm_gen as gen  # noqa: E402
+
+# 2026-11-09 扩展形态（本批「大幅刷新」的 8 个新形状；红先：HEAD 版登记表尚无这些 id）
+NEW_SHAPES = [
+    "fail-open-to-fail-loud",
+    "generated-artifact-sync",
+    "required-subset-registry",
+    "cross-copy-equality",
+    "consumer-wiring",
+    "empty-vs-missing-loud",
+    "snapshot-pollution-guard",
+    "tamper-flip-detector",
+]
 
 
 def test_module_and_registry_exist():
@@ -95,3 +109,138 @@ class TestFailLoud:
         assert gen.main(["list"]) == 0
         out = json.loads(capsys.readouterr().out)
         assert out["ok"] is True and out["ids"]
+
+
+# ── 2026-11-09：扩展形态 + 自动判定/骨架/回灌闭环（红先新增面）──────────────
+def test_registry_has_extended_shapes():
+    ids = set(gen.template_ids())
+    missing = [i for i in NEW_SHAPES if i not in ids]
+    assert not missing, f"扩展形态未登记: {missing}"
+    assert len(ids) >= 20, f"模版数应 ≥20（大幅刷新），实际 {len(ids)}"
+
+
+def test_every_template_has_classify_metadata():
+    """分类器只读登记表 ⟹ 每条必须有 keywords/when/desc（防第二份形态清单）。"""
+    for t in gen.load_registry()["templates"]:
+        assert isinstance(t.get("keywords"), list) and t["keywords"], f"{t.get('id')}: 缺 keywords"
+        assert str(t.get("when") or "").strip(), f"{t.get('id')}: 缺 when"
+        assert str(t.get("desc") or "").strip(), f"{t.get('id')}: 缺 desc"
+
+
+class TestClassify:
+    def test_reuse_fail_open_to_fail_loud(self):
+        r = gen.classify("把 ⑦ 的 fail-open 改成 fail-loud：缺失基线和空单元格也要 WARN")
+        assert r["decision"] == "reuse"
+        assert r["id"] == "fail-open-to-fail-loud", r
+
+    def test_reuse_generated_artifact_sync(self):
+        r = gen.classify("新增自动生成登记表，用 --check 防漂移")
+        assert r["decision"] == "reuse"
+        assert r["id"] == "generated-artifact-sync", r
+
+    def test_reuse_cross_copy(self):
+        r = gen.classify("双副本常量被单边篡改，需要差分检出")
+        assert r["decision"] == "reuse"
+        assert r["id"] == "cross-copy-equality", r
+
+    def test_new_when_unmatched(self):
+        r = gen.classify("把界面按钮颜色改成蓝色")
+        assert r["decision"] == "new", r
+
+
+class TestScaffold:
+    def test_reuse_exports_skeleton(self):
+        r = gen.scaffold("fail-open 改 fail-loud，缺失基线要 loud")
+        assert r["decision"] == "reuse"
+        assert r["skeleton"].count("{") >= 1, "骨架必须保留占位符"
+        assert r["missing"], "未给值时 missing 必须非空（不能伪装成已填充）"
+
+    def test_reuse_fills_code_when_all_values_given(self):
+        t = gen.get_template("fail-open-to-fail-loud")
+        vals = {p.strip("{}"): "X" for p in t["placeholders"]}
+        r = gen.scaffold("fail-open 改 fail-loud，缺失基线要 loud", values=vals)
+        assert r["decision"] == "reuse" and r["missing"] == []
+        assert gen._PH_RE.findall(r["code"]) == []
+
+    def test_new_returns_draft(self):
+        r = gen.scaffold("完全无关的界面颜色调整", id_hint="ui-color")
+        assert r["decision"] == "new"
+        assert r["draft"]["id"] == "ui-color"
+        assert r["draft"]["body"] == "", "新形态草案不得伪造已写好的臂"
+
+
+def _draft(**kw) -> dict:
+    d = {
+        "id": "demo-new-shape",
+        "desc": "示例新形态",
+        "when": "改动是示例面时",
+        "keywords": ["示例", "demo"],
+        "placeholders": ["{target}", "{anchor}"],
+        "body": 'def test_{target}():\n    assert "{anchor}" in _txt()',
+        "test_file": "scripts/test_demo.py",
+        "shape_k": "test_demo",
+        "rev": "HEAD~1",
+    }
+    d.update(kw)
+    return d
+
+
+class TestPromote:
+    def _runner_ok(self, rev, test_file, k, expect):
+        return 0
+
+    def test_promote_appends_and_bumps_version(self, tmp_path):
+        reg = tmp_path / "reg.json"
+        shutil.copy(_REG, reg)
+        before = json.loads(reg.read_text(encoding="utf-8"))
+        r = gen.promote(_draft(), str(reg), runner=self._runner_ok)
+        after = json.loads(reg.read_text(encoding="utf-8"))
+        assert r["ok"] is True
+        assert after["version"] == before["version"] + 1
+        assert "demo-new-shape" in [t["id"] for t in after["templates"]]
+
+    def test_promote_rejects_duplicate_id(self, tmp_path):
+        reg = tmp_path / "reg.json"
+        shutil.copy(_REG, reg)
+        with pytest.raises(ValueError) as e:
+            gen.promote(_draft(id="source-absence"), str(reg), runner=self._runner_ok)
+        assert "已存在" in str(e.value)
+
+    def test_promote_requires_red_then_green(self, tmp_path):
+        reg = tmp_path / "reg.json"
+        shutil.copy(_REG, reg)
+
+        def red_fail(rev, test_file, k, expect):
+            return 1 if expect == "red" else 0
+
+        with pytest.raises(ValueError) as e:
+            gen.promote(_draft(), str(reg), runner=red_fail)
+        assert "红" in str(e.value)
+        assert "demo-new-shape" not in [t["id"] for t in json.loads(
+            reg.read_text(encoding="utf-8"))["templates"]], "红未达成不得回灌"
+
+    def test_promote_rejects_placeholder_drift(self, tmp_path):
+        reg = tmp_path / "reg.json"
+        shutil.copy(_REG, reg)
+        with pytest.raises(ValueError) as e:
+            gen.promote(_draft(placeholders=["{target}"]), str(reg), runner=self._runner_ok)
+        assert "占位符" in str(e.value)
+
+
+class TestDocAlignKeywordsGuard:
+    def test_doc_align_flags_missing_keywords(self, tmp_path):
+        """登记表条目缺 keywords → doc-align 必须 FAIL（HEAD 版忽略 keywords ⟹ 红）。"""
+        import gk_doc_align as gda
+
+        (tmp_path / "references").mkdir()
+        (tmp_path / "scripts").mkdir()
+        shutil.copy(_HERE / "gk_red_arm_gen.py", tmp_path / "scripts" / "gk_red_arm_gen.py")
+        reg = json.loads(_REG.read_text(encoding="utf-8"))
+        reg["templates"] = [dict(reg["templates"][0])]
+        reg["templates"][0].pop("keywords", None)
+        (tmp_path / "references" / "red-arm-templates.json").write_text(
+            json.dumps(reg, ensure_ascii=False), encoding="utf-8")
+        (tmp_path / "SKILL.md").write_text("references/red-arm-templates.json", encoding="utf-8")
+        r = gda.check_red_arm_templates(str(tmp_path))
+        assert r["status"] == "FAIL"
+        assert "keywords" in r["detail"]

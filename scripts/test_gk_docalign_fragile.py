@@ -104,7 +104,7 @@ def test_frag_probe_cmd_has_docgen_banner():
     for fn in ("cmd_model_probe", "cmd_phase_probe"):
         m = _re.search(r"(?m)^" + fn + r"\(\) \{", src)
         assert m, "缺函数 %s" % fn
-        before = src[: m.start()].split("\n")[-5:]
+        before = src[: m.start()].rstrip("\n").split("\n")[-5:]
         assert any(_re.match(r"^#\s*-{5,}\s*\S.*\s*-{5,}\s*$", ln) for ln in before), (
             "%s 上方缺 docgen 可识别 banner（Purpose 会退化成 '%s'）"
             % (fn, fn.replace("cmd_", "").replace("_", " ")))

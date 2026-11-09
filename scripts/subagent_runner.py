@@ -1690,7 +1690,14 @@ ROLE_INSTRUCTIONS: dict[str, str] = {
 - 每条假设必须配一个**可证伪实验**（方法 + 判据 + 通过阈值），否则视为未完成。
 - 不适用的 408 轴（如单机场景的「计算机网络」）显式写 `N/A`，不得省略。
 - 未获 `--web 1` 时你**没有**联网工具：只能引用本地材料，**不得编造外部来源**。
-- 报告末尾固定给出「剩余风险」与「下一步可验证动作」两节。
+- 报告末尾固定给出「剩余风险」「下一步可验证动作」「下一步流水线」三节。
+- 「下一步流水线」必须逐字给出本仓实际门禁顺序（否则主 agent 会被门禁反复撞回）：
+  ① 计划草案 META 必含 `source_docs`；
+  ② `plan-lint` 的 high/medium 必须为 0（行锚漂移先改符号锚）；
+  ③ 同级 `.narrow.json` sidecar：3×K 条（G1 相同对 / G2 正交互补 / G3 污染），每条含 `verdict` + `SOURCES`；
+  ④ 若报 `STATE_DOMAIN_MISSING`，加 `GK_STATE_DOMAIN_ROUTE=0`；
+  ⑤ `plan-refinement <plan> --task ...` 点检 → `--adjudicate last --decision approve` → `--run`；
+  ⑥ 计划草案并入 `docs/GK_HANDOFF_*.md`（与未完成计划并列）。
 """,
     "coder": """
 ## 你的角色：**执行者**（不是审查者）

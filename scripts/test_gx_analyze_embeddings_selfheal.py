@@ -76,7 +76,8 @@ def _extract_function(src: str, name: str) -> str:
 
 
 def _run_helper(tmp_path: Path, first_to: str, recover_to: str,
-                residue: bool = False, keep_calls: bool = False):
+                residue: bool = False, keep_calls: bool = False,
+                store_residual: bool = False):
     """抽取真实函数体 → 拼桩 → 跑；返回 (returncode, [每次 analyze 的 argv 行], 输出)。
 
     residue=True ⟹ 桩在首试时向 stderr 打**残态证据**（主键冲突），用于判据③；
@@ -108,10 +109,13 @@ def _run_helper(tmp_path: Path, first_to: str, recover_to: str,
             "  return 0",
             "}",
             '_gitnexus_baseline_status() { cat "$STATUS_FILE"; }',
+            # 2026-11-09：store 残态探针（stub）；STORE_RESIDUAL=1 模拟 lbug.wal/dirty-recovery
+            '_gx_store_residual_evidence() { [ "${STORE_RESIDUAL:-0}" = "1" ] && return 0; return 1; }',
             "",
             body,
             "",
-            ('RESIDUE=1 %s "%s"' if residue else '%s "%s"') % (FUNC_NAME, w),
+            '%s%s "%s"' % (("STORE_RESIDUAL=1 " if store_residual else "")
+                            + ("RESIDUE=1 " if residue else ""), FUNC_NAME, w),
             'echo "RC=$?"',
         ]), encoding="utf-8", newline="\n")
     r = subprocess.run(["bash", _wsl(harness)], capture_output=True, text=True, timeout=60)
@@ -168,3 +172,16 @@ def test_single_flight_per_dir(tmp_path):
         tmp_path, first_to="stale", recover_to="stale", keep_calls=True)
     assert len(recorded2) == 1, f"二次调用不得再 analyze（marker 单飞），实际 {recorded2}"
     assert rc2 != "0", out2
+
+def test_store_residue_triggers_drop_embeddings_retry(tmp_path):
+    """判据③b（2026-11-09）：stderr 无残态关键词，但索引目录有 `lbug.wal` /
+    `lbug.wal.dirty-recovery` ⟹ 仍须 `--drop-embeddings`。
+
+    红先性：修复前函数只 grep stderr ⟹ store_residual=True 时仍只跑 1 次 analyze ⟹ 本臂红。
+    """
+    _, recorded, out = _run_helper(tmp_path, first_to="stale", recover_to="current",
+                                   store_residual=True)
+    assert len(recorded) == 2, f"store 残态应有且仅有 1 次重试，实际 {recorded}"
+    assert FALLBACK_FLAG in recorded[1], f"store 残态重试臂未带自愈旗标：{recorded[1]}"
+    assert FALLBACK_FLAG not in recorded[0], f"首试不应预设自愈旗标：{recorded[0]}"
+

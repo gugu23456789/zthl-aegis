@@ -31,7 +31,7 @@ def _near(anchor: str, window: int) -> str:
 
 def test_domain_route_exports_gk_plan_file():
     """臂1（红）：域路由成功块内 export GK_PLAN_FILE（域来源=域落点同源）。"""
-    seg = _near('STATE_FILE="$_pr_dom_state"', 2000)
+    seg = _near('if [ -n "$_pr_dom_state" ]', 2000)
     assert "export GK_PLAN_FILE" in seg, (
         "plan-refinement 域路由只改 STATE_FILE、未同步 GK_PLAN_FILE ⟹ "
         "下游 _conv_state_path 用启动期默认 PLAN_FILE 派生域（金字塔搜索撞库计划）"
@@ -42,7 +42,7 @@ def test_domain_route_exports_gk_plan_file():
 
 def test_domain_route_exports_gk_plan_file_from_resolved_plan():
     """臂2（红）：export 的值必须来自已解析的真实计划 `_pr_plan`（非 target 裸名）。"""
-    seg = _near('STATE_FILE="$_pr_dom_state"', 2000)
+    seg = _near('if [ -n "$_pr_dom_state" ]', 2000)
     assert 'GK_PLAN_FILE="$_pr_plan"' in seg, (
         "GK_PLAN_FILE 须赋值为 `_pr_plan`（已验证存在的真实计划路径）；"
         "裸名会再次触发 resolve_plan 金字塔搜索撞库。"

@@ -196,8 +196,10 @@ def check_review_dual_source(skill_dir: str, review_skill_dir: str,
         return result
     s3 = _read(stage3)
     if not reqcr.exists():
-        result["status"] = "WARN"
-        result["detail"] = "requesting-code-review 缺失 — stage-3-review 应引用但不可验证"
+        result["status"] = "SKIP" if release else "WARN"
+        result["detail"] = ("requesting-code-review 未安装（外部兄弟技能，发布门不可验证）⟹ SKIP"
+                            if release else
+                            "requesting-code-review 缺失 — stage-3-review 应引用但不可验证")
         return result
     rc = _read(reqcr)
     s3_links = "requesting-code-review" in s3
@@ -466,8 +468,15 @@ def check_crossref_drift(skill_dir: str) -> dict:
             if not any(re.search(pat, _read(Path(c))) for c in exists):
                 issues.append(f"{doc} → {target} §{anchor}: 章节锚点未命中")
         # 2026-11-02：主机绝对路径 = 公开包不可移植（旧 /mnt/c/Users/<name>、<home> 等）
+        # 例外（2026-11-09）：`## 路由白名单基线` 是**代码常量镜像**（安全锚），其值本身
+        #   就是主机路径；这里不当作「可移植性指引」扫描，否则 ⑦ 与 14 互相打架。
+        scan_text = _read(p)
+        if doc == "references/meta-routing-protocol.md":
+            _bm = re.search(r"## 路由白名单基线(.*?)(?=\n## |\Z)", scan_text, re.DOTALL)
+            if _bm:
+                scan_text = scan_text[:_bm.start()] + scan_text[_bm.end():]
         if not _doc_excluded(doc):
-            for hm in re.finditer(r"(/mnt/[a-z]/|/home/[^/\s]+/|/root/|[A-Za-z]:\\\\Users\\\\)", _read(p)):
+            for hm in re.finditer(r"(/mnt/[a-z]/|/home/[^/\s]+/|/root/|[A-Za-z]:\\\\Users\\\\)", scan_text):
                 issues.append(f"{doc}: 主机绝对路径 {hm.group(0)}（公开包不可移植）")
     if issues:
         result["status"] = "WARN"
@@ -1104,10 +1113,20 @@ def check_route_center_alignment(skill_dir: str) -> dict:
         problems.append(f"gatekeeper-cli.sh 重新出现内嵌 worktree fallback 目录: {bm.group(1)} "
                         f"（L3 已统一路由中枢——bash 第三副本不应复活）")
     # ⑦ 文档权威基线 ↔ 代码常量值（2026-09-02 红队 D 层：篡改代码常量不改文档 → 值失配检出；
-    #    文档登记于 meta-routing-protocol.md「路由白名单基线」，改常量必须同步改文档）
-    if meta.exists() and mt:
-        bm7 = re.search(r"## 路由白名单基线(.*?)(?=\n## |\Z)", mt, re.DOTALL)
-        baseline_sec = bm7.group(1) if bm7 else ""
+    #    文档登记于 meta-routing-protocol.md「路由白名单基线」，改常量必须同步改文档）。
+    #    2026-11-09 fail-loud 硬化：原实现有五处静默通道 —— meta 缺失 / 读取失败 / 章节缺失 /
+    #    单元格缺失或为空 / MAIN_REPO_WSL 无字面量（运行时解析）⟹ v0.9.4 整段删除基线后本检查
+    #    假绿约一周。现在「不可核对」一律入 problems（WARN；--strict 下阻断），不得短路到 PASS。
+    if not meta.exists():
+        problems.append("meta-routing-protocol.md 缺失 — ⑦ 路由白名单基线不可核对（fail-loud）")
+    elif not mt:
+        problems.append("meta-routing-protocol.md 不可读 — ⑦ 路由白名单基线不可核对（fail-loud）")
+    elif not re.search(r"## 路由白名单基线(.*?)(?=\n## |\Z)", mt, re.DOTALL):
+        problems.append("meta-routing-protocol.md 缺「## 路由白名单基线」章节 — "
+                        "⑦ 路由白名单基线不可核对（fail-loud）")
+    else:
+        baseline_sec = re.search(r"## 路由白名单基线(.*?)(?=\n## |\Z)",
+                                 mt, re.DOTALL).group(1)
 
         def _doc_cell(text: str, name: str) -> str:
             m = re.search(r"\|\s*`" + re.escape(name) + r"`\s*\|\s*([^|]*)\s*\|", text, re.DOTALL)
@@ -1132,21 +1151,48 @@ def check_route_center_alignment(skill_dir: str) -> dict:
                     out.add(s.replace("\\", "/").rstrip("/").lower())
             return out
 
-        # MAIN_REPO_WSL（单值精确）
-        mr_code = _code_single(rtext, "MAIN_REPO_WSL")
-        mr_doc = _doc_vals(_doc_cell(baseline_sec, "MAIN_REPO_WSL"))
-        if mr_code and mr_doc and mr_code != mr_doc[0]:
-            problems.append(f"MAIN_REPO_WSL 偏离文档基线: 代码={mr_code} vs 文档={mr_doc[0]}（常量篡改或基线未同步）")
-        # DEV_WORKTREE_ROOTS（集合；⑤ 已查双副本一致）
+        # MAIN_REPO_WSL：文档「运行时解析」哨兵 ⟹ 代码须有运行时赋值且无硬编码字面量；
+        # 否则按字面量精确比对（两侧任一无值都算不可核对）。
+        mr_cell = _doc_cell(baseline_sec, "MAIN_REPO_WSL")
+        if not mr_cell.strip():
+            problems.append("文档基线缺 MAIN_REPO_WSL 单元格 — 不可核对（fail-loud）")
+        elif "运行时" in mr_cell:
+            assigns = re.findall(r"(?m)^MAIN_REPO_WSL\s*=\s*(.+)$", rtext)
+            runtime = any(("_main_repo_wsl()" in a) or ("_main_repo(" in a) for a in assigns)
+            literals = [a.strip() for a in assigns if re.fullmatch(r'"[^"]+"', a.strip())]
+            if not runtime:
+                problems.append("MAIN_REPO_WSL 文档声明运行时解析但代码无运行时赋值 — "
+                                "不可核对（fail-loud）")
+            if literals:
+                problems.append(f"MAIN_REPO_WSL 文档声明无字面量但代码硬编码: {literals}（fail-loud）")
+        else:
+            mr_code = _code_single(rtext, "MAIN_REPO_WSL")
+            mr_doc = _doc_vals(mr_cell)
+            if not mr_doc:
+                problems.append("文档基线 MAIN_REPO_WSL 单元格无可比对值（fail-loud）")
+            elif not mr_code:
+                problems.append("代码 MAIN_REPO_WSL 无字面量 — 与文档基线不可比对（fail-loud）")
+            elif mr_code != mr_doc[0]:
+                problems.append(f"MAIN_REPO_WSL 偏离文档基线: 代码={mr_code} vs 文档={mr_doc[0]}"
+                                f"（常量篡改或基线未同步）")
+        # DEV_WORKTREE_ROOTS（⑤ 已查双副本一致；此处查文档基线）
         roots_doc = set(_doc_vals(_doc_cell(baseline_sec, "DEV_WORKTREE_ROOTS")))
         roots_code = {v.lower() for v in _roots_of(rtext)}
-        if roots_doc and roots_code != roots_doc:
+        if not roots_doc:
+            problems.append("文档基线 DEV_WORKTREE_ROOTS 缺失或无可比对值（fail-loud）")
+        elif not roots_code:
+            problems.append("代码 DEV_WORKTREE_ROOTS 缺失或为空 — 与文档基线不可比对（fail-loud）")
+        elif roots_code != roots_doc:
             problems.append(f"DEV_WORKTREE_ROOTS 偏离文档基线: 代码={sorted(roots_code)} "
                             f"vs 文档={sorted(roots_doc)}（常量篡改或基线未同步）")
         # SEARCH_DIRS（集合）
         sdirs_doc = set(_doc_vals(_doc_cell(baseline_sec, "SEARCH_DIRS")))
         sdirs_code = _code_tuple(rtext, "SEARCH_DIRS")
-        if sdirs_doc and sdirs_code != sdirs_doc:
+        if not sdirs_doc:
+            problems.append("文档基线 SEARCH_DIRS 缺失或无可比对值（fail-loud）")
+        elif not sdirs_code:
+            problems.append("代码 SEARCH_DIRS 缺失或为空 — 与文档基线不可比对（fail-loud）")
+        elif sdirs_code != sdirs_doc:
             problems.append(f"SEARCH_DIRS 偏离文档基线: 代码={sorted(sdirs_code)} "
                             f"vs 文档={sorted(sdirs_doc)}（搜索目录被篡改或基线未同步）")
     result["layer_funcs"] = [f for f in LAYER_FUNCS if f"def {f}(" in rtext]
@@ -1247,6 +1293,17 @@ def check_red_arm_templates(skill_dir: str) -> dict:
         result["status"] = "FAIL"
         result["detail"] = f"模版 id 空或重复: {ids}"
         return result
+    # ⑤ 分类器元数据（2026-11-09）：`classify` 只读本表 keywords/when/desc ⟹ 任一为空
+    #   会让「自动判定复用/新增」静默退化（无关键词 = 永远判 new）。旧条目须同批补齐。
+    for t in tmpls:
+        if not isinstance(t.get("keywords"), list) or not t["keywords"]:
+            result["status"] = "FAIL"
+            result["detail"] = f"模版 {t.get('id')} 缺 keywords（分类器单源，旧条目需补）"
+            return result
+        if not str(t.get("when") or "").strip() or not str(t.get("desc") or "").strip():
+            result["status"] = "FAIL"
+            result["detail"] = f"模版 {t.get('id')} 缺 when/desc（分类与说明不可为空）"
+            return result
     for t in tmpls:
         body_ph = set(re.findall(r"\{[A-Za-z0-9_]+\}", str(t.get("body") or "")))
         decl = set(str(x) for x in (t.get("placeholders") or []))

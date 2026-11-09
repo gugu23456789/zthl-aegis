@@ -11,6 +11,7 @@
 被测面用**临时目录外的测试文件**（显式路径传入），与本仓测试状态**解耦**。
 """
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -286,8 +287,10 @@ def test_accept_cli_wires_subprocess_factor():
     """
     txt = (SCRIPT_DIR / "_accept_cli.sh").read_text(encoding="utf-8")
     assert 'ACCEPT_SUBPROC_FACTOR:-1' in txt, "f 缺省须为 1（每用例至少 1 次外部子进程）"
-    assert "subprocess_factor=${_FACTOR}" in txt, "f 未传给 adaptive_workers（公式旁路）"
-    assert "_DEF_JOBS=$(( _BASE_W * 2 ))" in txt, "f=0 旧口径须保留（紧急回退开关）"
+    assert "subprocess_factor=${_f}" in txt, "f 未传给 adaptive_workers（公式旁路）"
+    assert "_DEF_JOBS=$(( _BASE_W * 2 ))" in txt or "_jobs_for_factor" in txt, \
+        "f=0 旧口径须保留（紧急回退开关）"
+    assert "gk_accept_factor.py" in txt, "f 未接自动分档（重活批次仍按 1 派发）"
 
 
 def test_accept_cli_has_explosion_guard():
@@ -296,4 +299,23 @@ def test_accept_cli_has_explosion_guard():
     assert "ACCEPT_MIN_FREE_MB:-800" in txt, "缺防爆硬闸默认值（800MB）"
     assert "防爆硬闸" in txt and "free_avail_mb" in txt, "硬闸未接 gk_hub_scheduler.free_avail_mb"
     assert "exit 2" in txt, "硬闸命中须 fail-loud（exit 2）"
+
+
+def test_accept_cli_wires_runtime_watchdog():
+    """运行期看门狗（**机检臂**）：pytest 必须经 `gk_watchdog.py` 包络，且可显式关闭。"""
+    txt = (SCRIPT_DIR / "_accept_cli.sh").read_text(encoding="utf-8")
+    assert "gk_watchdog.py" in txt, "accept 未接最小看门狗（运行期仍有换页/悬挂面）"
+    assert "ACCEPT_WATCHDOG:-1" in txt, "缺默认开关（默认开）"
+    assert "_WD_PREFIX" in txt and '"${_WD_PREFIX[@]}" "$PY" -m pytest' in txt, \
+        "pytest 调用点未套看门狗前缀"
+    assert "ACCEPT_WATCHDOG_WALL_S" in txt and "ACCEPT_WATCHDOG_IDLE_S" in txt, \
+        "墙钟/空闲闸参数缺失"
+    # 阈值单源（2026-11-09）：不得在 accept 再写 2700/180 缺省（与 gk_watchdog 漂移）。
+    # 用**变量名锚定**的正则：原 `":-180"` 子串会误伤无关的 `_REUSE_TTL:-1800`。
+    assert not re.search(r"ACCEPT_WATCHDOG_WALL_S:-2700", txt), \
+        "看门狗墙钟出现第二份缺省（多源漂移面）"
+    assert not re.search(r"ACCEPT_WATCHDOG_IDLE_S:-180(?!\d)", txt), \
+        "看门狗空闲闸出现第二份缺省（多源漂移面）"
+    assert '--min-free-mb "${ACCEPT_MIN_FREE_MB:-800}"' in txt, \
+        "内存闸未与启动前硬闸共用 ACCEPT_MIN_FREE_MB（两套阈值）"
 

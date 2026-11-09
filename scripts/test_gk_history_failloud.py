@@ -29,6 +29,7 @@ import sys
 from pathlib import Path
 
 CLI = Path(__file__).resolve().parent.parent / "gatekeeper-cli.sh"
+PAYLOAD = Path(__file__).resolve().parent / "gk_monitor_payload.py"
 SCRIPTS = Path(__file__).resolve().parent
 if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
@@ -37,32 +38,28 @@ if str(SCRIPTS) not in sys.path:
 # ───────────────────────── C3①/C3②：落库段形态臂 ─────────────────────────
 
 def _hist_region() -> str:
-    """subagent 落库段：`GK_HMAC_VALID=` 锚 → python -c 的**收尾行**（列 0 的 `"`）末。
+    """subagent 落库段：2026-11-04 起下沉为脚本式模块 `gk_monitor_payload.py`（逐字搬运）。
 
-    切片止于收尾行，**不含**其后的 bash `_state_checksum_write` 注释区 —— HEAD 实测
-    `_state_checksum_write` 在注释（L4129）里先于真调用（L4137）出现，若切到首个 token
-    会**在注释处误截**（收尾行 4126 恰好仍在内，故臂不假绿，但语义边界不清）。
+    本文件只判**契约**（stderr 不吞 / dump_state 设防 / 指针 env），与落点文件无关。
     """
-    txt = CLI.read_text(encoding="utf-8")
-    i = txt.index("GK_HMAC_VALID=")
-    j = txt.index('\n"', i) + 1          # 收尾行行首 `"`
-    k = txt.index("\n", j + 1)
-    return txt[i:k]
+    return PAYLOAD.read_text(encoding="utf-8")
 
 
 def _terminator(seg: str) -> str:
-    """落库段里以列 0 `"` 开头的那一行（闭合 python -c 双引号 + 其后重定向）。"""
-    lines = [ln for ln in seg.splitlines() if ln.startswith('"')]
-    assert lines, "落库段未见 python -c 收尾行（锚漂移？）"
+    """落库段收尾行（旧=列 0 `"` 闭合 python -c；现=模块最后一条非空语句）。"""
+    lines = [ln for ln in seg.splitlines() if ln.strip()]
+    assert lines, "落库段为空（锚漂移？）"
     return lines[-1]
 
 
 def test_history_block_terminator_not_silent():
     """① 落库段收尾行不得丢弃 stderr（HEAD = `" 2>/dev/null || true` ⟹ 本臂必红）。"""
-    term = _terminator(_hist_region())
-    assert "2>/dev/null" not in term, (
-        "subagent 落库段收尾行仍丢弃 stderr（%r）⟹ dump_state 写失败/载荷异常无痕（C3① 未落）"
-        % term.strip())
+    seg = _hist_region()
+    # 只看**可执行面**：注释里为说明历史会引用旧吞错形态，那不是契约。
+    code = "\n".join(ln for ln in seg.splitlines() if not ln.strip().startswith("#"))
+    assert "2>/dev/null" not in code, (
+        "subagent 落库段仍丢弃 stderr ⟹ dump_state 写失败/载荷异常无痕（C3① 未落）"
+        "\n收尾行：%r" % _terminator(seg).strip())
 
 
 def test_history_block_fail_loud_marker():

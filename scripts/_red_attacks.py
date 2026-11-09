@@ -1278,6 +1278,119 @@ def red_coverage():
     return findings
 
 
+def red_gov(contract: dict | None = None):
+    """RED-GOV: 治理面静态向量（额度银行 / 路径归一化 / 并发锁）。
+
+    由 `governance_contract` 驱动（`references/governance-contract.json`）：
+      · 额度银行：链接 worktree 认领 / 封印 fail-loud / append+seal 锁；
+      · 路径归一化：相对 gitdir / 大小写+`..` / 目录边界；契约 cases 走纯函数对拍；
+      · 并发：budget-log 锁 / edit-log rotate+seal 锁 / repro_cmd 可复现。
+    0 API、0 网络；只读源码 + 可选纯函数对拍，不写 state。
+    """
+    findings = []
+    _DEFS = [
+        {"id": "RED-GOV-BANK-01", "severity": "high",
+         "title": "链接 worktree 未按 gitdir 认领（scope_out 免计费）",
+         "description": "Gate3/4/edit_budget 对同仓 linked worktree 不执行 ⟹ 编辑不计费/不拦",
+         "fix": "按 `.git` 的 gitdir 归一并认领（名字无关）"},
+        {"id": "RED-GOV-BANK-02", "severity": "high",
+         "title": "提额账本封印失效未 fail-loud",
+         "description": "删/改 budget-log 可把提额计数与 CAP 清零而门禁照绿",
+         "fix": "读侧统一抛 LedgerSealInvalid（RAISE_LEDGER_SEAL_INVALID）"},
+        {"id": "RED-GOV-BANK-03", "severity": "high",
+         "title": "budget-log append/seal 无跨进程锁（重复 seq 根因）",
+         "description": "并发 append 各自 seal 同一账本 ⟹ 链上同 seq 重复 ⟹ seq_mismatch 拦 advance",
+         "fix": "append+seal+推链整段持 _budget_lock"},
+        {"id": "RED-GOV-PATH-01", "severity": "high",
+         "title": "相对 gitdir 未按 worktree 根解析",
+         "description": "--relative-paths 的 gitdir 归一后永不命中 ⟹ 回退就近 state ⟹ 绕过主树治理",
+         "fix": "相对 gitdir 以 worktree 根 join 后 normpath"},
+        {"id": "RED-GOV-PATH-02", "severity": "medium",
+         "title": "路径大小写/`..`/双斜杠未归一",
+         "description": "Windows 面无大小写敏感；`..`/双斜杠形态可绕过前缀比较",
+         "fix": "双侧 _norm_forms + normpath + 仅 /mnt/ 与盘符形态大小写折叠"},
+        {"id": "RED-GOV-PATH-03", "severity": "high",
+         "title": "前缀比较缺目录边界（兄弟名误命中）",
+         "description": "`spz-gatekeeper-r-sequence-x` 会被前缀误判为仓内工作树",
+         "fix": "比较带目录边界（b + '/'）"},
+        {"id": "RED-GOV-PATH-04", "severity": "high",
+         "title": "契约路径等价类对拍不一致",
+         "description": "契约 cases 与 _linked_gitdir_matches 实测不一致",
+         "fix": "按契约等价类归一（相对/大小写/../Windows↔WSL/边界）"},
+        {"id": "RED-GOV-CONC-01", "severity": "high",
+         "title": "budget-log 并发 append 无锁",
+         "description": "并发 append 产生重复 seq / stale seal，读侧 fail-loud 拦 advance",
+         "fix": "cross-process flock 串行化 append+seal+chain"},
+        {"id": "RED-GOV-CONC-02", "severity": "high",
+         "title": "edit-log rotate/append 无锁（丢事件）",
+         "description": "rotate 与 append 并发 ⟹ 事件丢失 / archive 与主文件不一致",
+         "fix": "读-改-写整段持 _edit_lock"},
+        {"id": "RED-GOV-CONC-03", "severity": "info",
+         "title": "并发攻击缺少可复现命令",
+         "description": "governance_contract.concurrency.repro_cmd 为空 ⟹ 红队无法独立复现",
+         "fix": "补 repro_cmd（如 pytest -k concurrent_no_duplicate）"},
+    ]
+    _BY = {d["id"]: d for d in _DEFS}
+
+    def _read(rel):
+        try:
+            with open(os.path.join(SKILL_DIR, rel), encoding="utf-8", errors="replace") as f:
+                return f.read()
+        except OSError:
+            return ""
+
+    def _need(vid, ok):
+        if not ok:
+            findings.append(dict(_BY[vid], surface="治理面（bank|path|concurrency）"))
+
+    hook = _read("scripts/pre_tool_hook.py")
+    led = _read("scripts/gk_budget_ledger.py")
+    _need("RED-GOV-BANK-01",
+          "_linked_gitdir_matches" in hook and "gd_raw" in hook and "_skill_linked_worktree_state" in hook)
+    _need("RED-GOV-BANK-02",
+          "class LedgerSealInvalid" in led and "RAISE_LEDGER_SEAL_INVALID" in led
+          and "raise LedgerSealInvalid" in led)
+    _need("RED-GOV-BANK-03",
+          "def _budget_lock" in led and "def _append_unlocked" in led
+          and "_seal_now_unlocked" in led and "with _budget_lock" in led)
+    _need("RED-GOV-PATH-01", "os.path.normpath(os.path.join(str(wt_dir)" in hook)
+    _need("RED-GOV-PATH-02", "n.lower()" in hook and "os.path.normpath(raw)" in hook)
+    _need("RED-GOV-PATH-03", 'g.startswith(b + "/")' in hook)
+    _need("RED-GOV-CONC-01", "fcntl.flock" in led and "def _budget_lock" in led)
+    _need("RED-GOV-CONC-02", "def _edit_lock" in led and "with _edit_lock(state_file)" in led)
+
+    if contract is not None:
+        gov = contract.get("governance_contract") or {}
+        cases = (gov.get("path_normalization") or {}).get("cases") or []
+        if cases:
+            try:
+                import importlib.util
+                spec = importlib.util.spec_from_file_location(
+                    "gk_hook_gov", os.path.join(SKILL_DIR, "scripts", "pre_tool_hook.py"))
+                mod = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(mod)
+            except Exception as e:
+                findings.append(dict(_BY["RED-GOV-PATH-04"], title="契约路径对拍不可执行",
+                                     description="pre_tool_hook 导入失败: %s" % e))
+            else:
+                for case in cases:
+                    try:
+                        got = bool(mod._linked_gitdir_matches(
+                            str(case.get("gitdir") or ""), str(case.get("wt") or ""),
+                            str(case.get("skill") or "")))
+                    except Exception:
+                        got = None
+                    if got != bool(case.get("expect")):
+                        findings.append(dict(_BY["RED-GOV-PATH-04"],
+                                             title="契约路径等价类对拍不一致: %s" % (case.get("name") or "?"),
+                                             description="gitdir=%r expect=%r got=%r" % (
+                                                 case.get("gitdir"), case.get("expect"), got)))
+        conc = gov.get("concurrency") or {}
+        if not str(conc.get("repro_cmd") or "").strip():
+            findings.append(dict(_BY["RED-GOV-CONC-03"]))
+    return findings
+
+
 def red_diff(ctx: dict | None = None):
     """RED-DIFF: 差分对拍 — 从契约模型派生差分攻击向量，对候选提交确定性实测。
 
@@ -1367,9 +1480,20 @@ def red_diff(ctx: dict | None = None):
                     continue
                 break
     if contract is None:
-        return [{"id": "RED-DIFF-CONTRACT", "severity": "info",
+        # 无 SWE 契约时仍跑治理面：保留 RED-DIFF-CONTRACT info 首条（非假绿），
+        # 并追加 governance_contract 的额度银行/路径/并发向量。
+        _gov_p = os.path.join(SKILL_DIR, "references", "governance-contract.json")
+        _gov = None
+        if os.path.isfile(_gov_p):
+            try:
+                with open(_gov_p, encoding="utf-8") as f:
+                    _gov = json.load(f)
+            except (OSError, json.JSONDecodeError):
+                _gov = None
+        _info = {"id": "RED-DIFF-CONTRACT", "severity": "info",
                  "title": "差分契约模型未找到",
-                 "description": "设置 RED_DIFF_CONTRACT=<contract.json> 或先在 state.gate_data.srb.contract_json 登记（swe-rb analyze --out）"}]
+                 "description": "设置 RED_DIFF_CONTRACT=<contract.json> 或先在 state.gate_data.srb.contract_json 登记（swe-rb analyze --out）"}
+        return [_info] + (red_gov(_gov) if _gov else [])
 
     # 候选提交目录：ctx/env 显式 → 当前 worktree（仅非 ctx 隔离时，A2 通道隔离）
     if not submit_root and not _ctx_isolated:
@@ -1552,6 +1676,8 @@ def red_diff(ctx: dict | None = None):
                              "description": "source-contract-v1 api_contract 类面缺失于提交",
                              "fix": "保留 API 类 + 方法签名面（行为 oracle）"})
 
+    if (contract or {}).get("governance_contract"):
+        findings.extend(red_gov(contract))
     return findings
 
 
@@ -2310,6 +2436,8 @@ if __name__ == "__main__":
     all_findings = []
     if phase in ("all", "scope"):
         all_findings.extend(red_scope())
+    if phase in ("all", "gov"):
+        all_findings.extend(red_gov())
     if phase in ("all", "surface"):
         all_findings.extend(red_surface())
     if phase in ("all", "constraints"):

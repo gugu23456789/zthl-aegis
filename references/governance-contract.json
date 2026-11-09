@@ -1,0 +1,59 @@
+{
+ "schema": "gk-governance-contract/1",
+ "what": "治理面差分契约（额度银行/路径归一化/并发）。RED-DIFF 以此为契约模型派生攻击向量。",
+ "governance_contract": {
+  "budget_bank": {
+   "vectors": [
+    "RED-GOV-BANK-01",
+    "RED-GOV-BANK-02",
+    "RED-GOV-BANK-03"
+   ]
+  },
+  "path_normalization": {
+   "vectors": [
+    "RED-GOV-PATH-01",
+    "RED-GOV-PATH-02",
+    "RED-GOV-PATH-03",
+    "RED-GOV-PATH-04"
+   ],
+   "cases": [
+    {
+     "name": "relative-gitdir",
+     "gitdir": "../../skills/spz-gatekeeper-r-sequence/.git/worktrees/wt-x",
+     "wt": "/tmp/trae/worktrees/wt-x",
+     "skill": "/tmp/trae/skills/spz-gatekeeper-r-sequence",
+     "expect": true
+    },
+    {
+     "name": "case-dotdot",
+     "gitdir": "<home>/.TRAE/../.trae/skills/SPZ-GATEKEEPER-R-SEQUENCE/.git/worktrees/WT-X",
+     "wt": "<home>/.trae/worktrees/wt-x",
+     "skill": "<home>/.trae/skills/spz-gatekeeper-r-sequence",
+     "expect": true
+    },
+    {
+     "name": "windows-form",
+     "gitdir": "<home>/.trae/skills/spz-gatekeeper-r-sequence/.git/worktrees/wt-x",
+     "wt": "<home>/.trae/worktrees/wt-x",
+     "skill": "<home>/.trae/skills/spz-gatekeeper-r-sequence",
+     "expect": true
+    },
+    {
+     "name": "sibling-negative",
+     "gitdir": "<home>/.trae/skills/spz-gatekeeper-r-sequence-x/.git/worktrees/wt-x",
+     "wt": "<home>/.trae/worktrees/wt-x",
+     "skill": "<home>/.trae/skills/spz-gatekeeper-r-sequence",
+     "expect": false
+    }
+   ]
+  },
+  "concurrency": {
+   "vectors": [
+    "RED-GOV-CONC-01",
+    "RED-GOV-CONC-02",
+    "RED-GOV-CONC-03"
+   ],
+   "repro_cmd": "/opt/<venv>/bin/python -m pytest scripts/test_gk_budget_ledger.py -k concurrent_no_duplicate -q"
+  }
+ }
+}

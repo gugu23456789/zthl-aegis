@@ -32,6 +32,7 @@ import gk_task_gate  # noqa: E402
 
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 _CLI = os.path.join(os.path.dirname(_SCRIPT_DIR), "gatekeeper-cli.sh")
+_PAYLOAD = os.path.join(_SCRIPT_DIR, "gk_monitor_payload.py")
 
 
 def _cli_text() -> str:
@@ -39,17 +40,22 @@ def _cli_text() -> str:
         return f.read()
 
 
+def _payload_text() -> str:
+    with open(_PAYLOAD, encoding="utf-8", errors="replace") as f:
+        return f.read()
+
+
 def _hist_max_bytes() -> int:
-    """从 CLI 源码读出 `_HIST_MAX_BYTES`（bash 常量，Python 不可 import）。"""
-    m = re.search(r"^_HIST_MAX_BYTES=(\d+)", _cli_text(), re.M)
-    assert m, "gatekeeper-cli.sh 缺 `_HIST_MAX_BYTES=<int>` 定义"
+    """从载荷模块（2026-11-04 下沉）读出 `_HIST_MAX_BYTES` 字面量，与 python 单源逐值比对。"""
+    m = re.search(r"^_HIST_MAX_BYTES=(\d+)", _payload_text(), re.M)
+    assert m, "gk_monitor_payload.py 缺 `_HIST_MAX_BYTES=<int>` 定义"
     return int(m.group(1))
 
 
 def test_three_legs_match_single_source():
     """bash 字面量与 python 单源逐值一致（禁三份各自漂移）。"""
     assert _hist_max_bytes() == J.HIST_MAX_BYTES, (
-        "history 腿漂移：bash=%d python=%d" % (_hist_max_bytes(), J.HIST_MAX_BYTES))
+        "history 腿漂移：payload=%d python=%d" % (_hist_max_bytes(), J.HIST_MAX_BYTES))
     assert gk_task_gate._TASK_PIPE_MAX_BYTES == J.TASK_PIPE_MAX_BYTES, (
         "pipeline 腿漂移：%d vs %d"
         % (gk_task_gate._TASK_PIPE_MAX_BYTES, J.TASK_PIPE_MAX_BYTES))
@@ -78,5 +84,5 @@ def test_legs_bounded_and_hold_one_round():
 
 
 def test_trim_line_env_override_documented():
-    """bash 侧须有 `GK_STATE_TRIM_KB` 覆盖口（运维可改线，不需改源码）。"""
-    assert "GK_STATE_TRIM_KB" in _cli_text(), "缺 GK_STATE_TRIM_KB 覆盖口"
+    """载荷侧须有 `GK_STATE_TRIM_KB` 覆盖口（运维可改线，不需改源码）。"""
+    assert "GK_STATE_TRIM_KB" in _payload_text(), "缺 GK_STATE_TRIM_KB 覆盖口"

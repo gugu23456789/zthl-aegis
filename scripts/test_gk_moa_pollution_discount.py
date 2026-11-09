@@ -80,13 +80,26 @@ def _hist2():
             for i in (1, 2)]
 
 
-def test_aggregate_connects_p_meta_divergence(tmp_path):
-    """批 R5 的 ledger p_in tilt=0；state 的 divergence=0.4 ⟹ pollution_tilt=1−(1−0)(1−0.4)=0.4。"""
+def test_aggregate_ignores_unfrozen_divergence(tmp_path):
+    """2026-11-06 owner 裁定：p_meta 只读 adjudicate **冻结**值；未冻结的
+    `human_calibration_log` divergence 不得回灌本批（否则越评越弃权）。"""
     sf = tmp_path / "state.json"
     sf.write_text(json.dumps({"gate_data": {
         "subagent_history": _hist2(),
         "human_calibration_log": [{"divergence": 0.4}]}}, ensure_ascii=False),
         encoding="utf-8")
+    out = M.aggregate(str(sf), None, "plan-refinement", plan=_PLAN, batch="R5")
+    assert out["consensus"]["pollution_tilt"] == 0.0, out["consensus"]
+    assert out["consensus"]["adjusted"] is False
+
+
+def test_aggregate_connects_frozen_p_meta(tmp_path):
+    """冻结 ≥3 批（中位数 0.4）⟹ p_in(0) ⊕ p_meta(0.4) = 0.4。"""
+    sf = tmp_path / "state.json"
+    frozen = {"b%d" % i: {"batch": "b%d" % i, "value": 0.4} for i in (1, 2, 3)}
+    sf.write_text(json.dumps({"gate_data": {
+        "subagent_history": _hist2(),
+        "kappa_p_meta": frozen}}, ensure_ascii=False), encoding="utf-8")
     out = M.aggregate(str(sf), None, "plan-refinement", plan=_PLAN, batch="R5")
     assert out["consensus"]["pollution_tilt"] == 0.4, out["consensus"]
     assert out["consensus"]["agreement_eff"] == round(out["consensus"]["agreement"] * 0.6, 4)

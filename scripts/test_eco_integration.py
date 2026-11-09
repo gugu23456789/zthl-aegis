@@ -1394,6 +1394,9 @@ class TestSubagentRoleReachesRunnerEnv:
         stub = tmp_path / "probe_env.sh"
         stub.write_bytes((
             "#!/bin/sh\n"
+            # 本桩同时被 CLI 当作 `_role_py` 去执行 `-c`（角色表/帧判定）⟹ 真 python 委托，
+            # 否则角色表读到桩的 JSON、合法角色校验失败（探针链在派发前被拒）。
+            "if [ \"$1\" = \"-c\" ]; then exec python3 \"$@\"; fi\n"
             "{\n"
             '  echo "SUBAGENT_ROLE=${SUBAGENT_ROLE:-<unset>}"\n'
             '  echo "SUBAGENT_ID=${SUBAGENT_ID:-<unset>}"\n'

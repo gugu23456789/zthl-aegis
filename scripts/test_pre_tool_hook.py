@@ -1965,6 +1965,91 @@ class TestTargetPathScope:
         monkeypatch.setattr(pre_tool_hook, "_win_to_wsl", lambda p: p)
         assert pre_tool_hook._resolve_state_by_target_path(str(other / "x.py")) is None
 
+    # ── linked worktree 按 `.git` 指向认领（2026-11-09，预算绕过根因）────────────
+    def test_resolve_linked_worktree_by_gitdir_not_name(self, tmp_path, monkeypatch):
+        """正臂：名字**不等于**技能名的同仓 linked worktree 也必须归主树 state。
+
+        现场：`worktrees/spz-gatekeeper-json2` ⟹ 原判 None ⟹ scope_out ⟹
+        Gate3/Gate4/edit_budget 整链不执行且不计费（用户质询「额度银行没在干活」）。
+        """
+        trae = tmp_path / "trae"
+        skill = trae / "skills" / "spz-gatekeeper-r-sequence"
+        main_sf = skill / ".gatekeeper.state"
+        main_sf.parent.mkdir(parents=True)
+        main_sf.write_text("{}", encoding="utf-8")
+        wt = trae / "worktrees" / "spz-gatekeeper-json2"
+        (wt / "scripts").mkdir(parents=True)
+        (wt / ".git").write_text(
+            "gitdir: %s\n" % (skill / ".git" / "worktrees" / "spz-gatekeeper-json2"),
+            encoding="utf-8")
+        monkeypatch.setattr(pre_tool_hook, "SKILL_DIR", skill)
+        monkeypatch.setattr(pre_tool_hook, "GOVERNED_SCOPES", {})
+        monkeypatch.setattr(pre_tool_hook, "_win_to_wsl", lambda p: p)
+        assert pre_tool_hook._resolve_state_by_target_path(
+            str(wt / "scripts" / "gk_x.py")) == main_sf
+
+    def test_resolve_foreign_linked_worktree_not_claimed(self, tmp_path, monkeypatch):
+        """负臂：`.git` 指向**别的仓**的 worktrees 目录 ⟹ 不得被认领。"""
+        trae = tmp_path / "trae"
+        skill = trae / "skills" / "spz-gatekeeper-r-sequence"
+        (skill / "scripts").mkdir(parents=True)
+        (skill / ".gatekeeper.state").write_text("{}", encoding="utf-8")
+        other = trae / "worktrees" / "other-skill"
+        (other / "scripts").mkdir(parents=True)
+        (other / ".git").write_text(
+            "gitdir: %s\n" % (trae / "skills" / "other" / ".git" / "worktrees" / "other-skill"),
+            encoding="utf-8")
+        monkeypatch.setattr(pre_tool_hook, "SKILL_DIR", skill)
+        monkeypatch.setattr(pre_tool_hook, "GOVERNED_SCOPES", {})
+        monkeypatch.setattr(pre_tool_hook, "_win_to_wsl", lambda p: p)
+        assert pre_tool_hook._resolve_state_by_target_path(str(other / "x.py")) is None
+
+    def test_linked_gitdir_windows_form_vs_wsl_skill(self):
+        """Windows 形态 gitdir（C:\\...）与 WSL 形态 skill 根必须互认（双侧形态归一）。"""
+        assert pre_tool_hook._linked_gitdir_matches(
+            r"<home>\.trae\skills\spz-gatekeeper-r-sequence\.git\worktrees\wt-x",
+            r"<home>\.trae\worktrees\wt-x",
+            "<home>/.trae/skills/spz-gatekeeper-r-sequence") is True
+
+    def test_linked_gitdir_relative_resolves_against_worktree(self):
+        """相对 gitdir（--relative-paths）按 worktree 根解析后必须命中。"""
+        assert pre_tool_hook._linked_gitdir_matches(
+            "../../skills/spz-gatekeeper-r-sequence/.git/worktrees/wt-x",
+            "/tmp/trae/worktrees/wt-x",
+            "/tmp/trae/skills/spz-gatekeeper-r-sequence") is True
+
+    def test_linked_gitdir_case_and_dotdot_normalized(self):
+        """Windows 面无大小写敏感 + `..` 必须归一后命中。"""
+        assert pre_tool_hook._linked_gitdir_matches(
+            "<home>/.TRAE/../.trae/skills/SPZ-GATEKEEPER-R-SEQUENCE/.git/worktrees/WT-X",
+            "<home>/.trae/worktrees/wt-x",
+            "<home>/.trae/skills/spz-gatekeeper-r-sequence") is True
+
+    def test_linked_gitdir_sibling_name_not_claimed(self):
+        """目录边界：`spz-gatekeeper-r-sequence-x` 不得被前缀误命中。"""
+        assert pre_tool_hook._linked_gitdir_matches(
+            "<home>/.trae/skills/spz-gatekeeper-r-sequence-x/.git/worktrees/wt-x",
+            "<home>/.trae/worktrees/wt-x",
+            "<home>/.trae/skills/spz-gatekeeper-r-sequence") is False
+
+    def test_resolve_linked_worktree_by_relative_gitdir(self, tmp_path, monkeypatch):
+        """集成臂：`.git` 用**相对** gitdir 也必须归主树 state。"""
+        trae = tmp_path / "trae"
+        skill = trae / "skills" / "spz-gatekeeper-r-sequence"
+        main_sf = skill / ".gatekeeper.state"
+        main_sf.parent.mkdir(parents=True)
+        main_sf.write_text("{}", encoding="utf-8")
+        wt = trae / "worktrees" / "spz-gatekeeper-json2"
+        (wt / "scripts").mkdir(parents=True)
+        (wt / ".git").write_text(
+            "gitdir: ../../skills/spz-gatekeeper-r-sequence/.git/worktrees/spz-gatekeeper-json2\n",
+            encoding="utf-8")
+        monkeypatch.setattr(pre_tool_hook, "SKILL_DIR", skill)
+        monkeypatch.setattr(pre_tool_hook, "GOVERNED_SCOPES", {})
+        monkeypatch.setattr(pre_tool_hook, "_win_to_wsl", lambda p: p)
+        assert pre_tool_hook._resolve_state_by_target_path(
+            str(wt / "scripts" / "gk_x.py")) == main_sf
+
     # ── walk 边界（F5 落刀后实测补）──
     def test_walk_boundary_blocks_volume_root_crossing(self):
         """walk-up **不得跨出卷根**（`parent` 为 `/`/`\\` 即停）。

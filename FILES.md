@@ -3,7 +3,7 @@
 > 生成器：`scripts/gk_repo_index.py --write`；漂移由 `gk_release_preflight.py` 的 `repo_index` 项守。
 > 用途：**移动端**（GitHub App 没有 “Go to file”）与抓取工具一次拿到全量路径；点路径直达文件。
 
-**共 872 个文件。**
+**共 887 个文件。**
 
 ## 索引生成物
 
@@ -63,6 +63,7 @@
 - [RELEASE-NOTES/RELEASE-NOTES-v0.9.6.9.md](RELEASE-NOTES/RELEASE-NOTES-v0.9.6.9.md) — v0.9.6.9 发布说明
 - [RELEASE-NOTES/RELEASE-NOTES-v0.9.6.md](RELEASE-NOTES/RELEASE-NOTES-v0.9.6.md) — v0.9.6 发布说明
 - [RELEASE-NOTES/RELEASE-NOTES-v0.9.7.md](RELEASE-NOTES/RELEASE-NOTES-v0.9.7.md) — ZTHL Aegis v0.9.7
+- [RELEASE-NOTES/RELEASE-NOTES-v0.9.8.10.md](RELEASE-NOTES/RELEASE-NOTES-v0.9.8.10.md) — ZTHL Aegis v0.9.8.10 — 发布说明
 - [RELEASE-NOTES/RELEASE-NOTES-v0.9.8.2.md](RELEASE-NOTES/RELEASE-NOTES-v0.9.8.2.md) — ZTHL Aegis v0.9.8.2 — 发布说明
 - [RELEASE-NOTES/RELEASE-NOTES-v0.9.8.3.md](RELEASE-NOTES/RELEASE-NOTES-v0.9.8.3.md) — ZTHL Aegis v0.9.8.3 — 发布说明
 - [RELEASE-NOTES/RELEASE-NOTES-v0.9.8.4.md](RELEASE-NOTES/RELEASE-NOTES-v0.9.8.4.md) — ZTHL Aegis v0.9.8.4 — 发布说明
@@ -72,6 +73,7 @@
 - [RELEASE-NOTES/RELEASE-NOTES-v0.9.8.8.md](RELEASE-NOTES/RELEASE-NOTES-v0.9.8.8.md) — ZTHL Aegis v0.9.8.8 — 发布说明
 - [RELEASE-NOTES/RELEASE-NOTES-v0.9.8.9.md](RELEASE-NOTES/RELEASE-NOTES-v0.9.8.9.md) — ZTHL Aegis v0.9.8.9 — 发布说明
 - [RELEASE-NOTES/RELEASE-NOTES-v0.9.8.md](RELEASE-NOTES/RELEASE-NOTES-v0.9.8.md) — v0.9.8 — 人评结构锚 + p_meta 冻结 + MoA 链路修正 + 相关性基准
+- [RELEASE-NOTES/RELEASE-NOTES-v0.9.9.md](RELEASE-NOTES/RELEASE-NOTES-v0.9.9.md) — ZTHL Aegis v0.9.9 — 发布说明
 
 ## THIRD_PARTY_LICENSES/
 
@@ -163,6 +165,8 @@
 - [references/doc-align-contracts.json](references/doc-align-contracts.json) — JSON 数据
 - [references/ecc-write-spec.md](references/ecc-write-spec.md) — ECC 写入规范（正本）
 - [references/extension-registry.md](references/extension-registry.md) — Extension Registry — 扩展注册表
+- [references/governance-contract.json](references/governance-contract.json) — JSON 数据
+- [references/list-registry.json](references/list-registry.json) — JSON 数据
 - [references/meta-routing-protocol.md](references/meta-routing-protocol.md) — META 路由协议 — 工作发现 + 仓库路由 + 阶段推进
 - [references/moa-kappa-ledger.json](references/moa-kappa-ledger.json) — JSON 数据
 - [references/oss-export-whitelist.json](references/oss-export-whitelist.json) — JSON 数据
@@ -240,6 +244,7 @@
 - [scripts/cron_scheduler.py](scripts/cron_scheduler.py) — Gatekeeper Cron — Scheduler (Tick Loop)
 - [scripts/cron_tick.bat](scripts/cron_tick.bat) — 文件
 - [scripts/format_release_check.py](scripts/format_release_check.py) — Python 模块
+- [scripts/gk_accept_factor.py](scripts/gk_accept_factor.py) — Python 模块
 - [scripts/gk_accept_py.py](scripts/gk_accept_py.py) — Python 模块
 - [scripts/gk_adjudicate.py](scripts/gk_adjudicate.py) — Python 模块
 - [scripts/gk_advance.py](scripts/gk_advance.py) — Python 模块
@@ -345,6 +350,7 @@
 - [scripts/gk_kvm_launcher.py](scripts/gk_kvm_launcher.py) — Python 模块
 - [scripts/gk_l0_prefetch.py](scripts/gk_l0_prefetch.py) — Python 模块
 - [scripts/gk_l3_prefetch.py](scripts/gk_l3_prefetch.py) — Python 模块
+- [scripts/gk_list_registry.py](scripts/gk_list_registry.py) — Python 模块
 - [scripts/gk_main_repo.py](scripts/gk_main_repo.py) — Python 模块
 - [scripts/gk_main_repo.sh](scripts/gk_main_repo.sh) — Shell 脚本
 - [scripts/gk_mcp_loader.py](scripts/gk_mcp_loader.py) — MCP 加载安全网（声明 / 接线 / 决策 + 跨 SDK 版本）
@@ -381,7 +387,9 @@
 - [scripts/gk_red_arm_gen.py](scripts/gk_red_arm_gen.py) — Python 模块
 - [scripts/gk_red_intel.py](scripts/gk_red_intel.py) — Python 模块
 - [scripts/gk_red_keyleak.py](scripts/gk_red_keyleak.py) — Python 模块
+- [scripts/gk_red_parallel.sh](scripts/gk_red_parallel.sh) — Shell 脚本
 - [scripts/gk_red_stand.py](scripts/gk_red_stand.py) — Python 模块
+- [scripts/gk_red_team.sh](scripts/gk_red_team.sh) — Shell 脚本
 - [scripts/gk_red_vectors.py](scripts/gk_red_vectors.py) — Python 模块
 - [scripts/gk_reflect.py](scripts/gk_reflect.py) — Python 模块
 - [scripts/gk_release_notes.py](scripts/gk_release_notes.py) — gk_release_notes.py — 发布说明**自动生成 + 两轮机检**（2026-11-08，owner 裁定）。
@@ -418,6 +426,7 @@
 - [scripts/gk_turn_cache.py](scripts/gk_turn_cache.py) — Python 模块
 - [scripts/gk_views.py](scripts/gk_views.py) — Python 模块
 - [scripts/gk_watch.py](scripts/gk_watch.py) — Python 模块
+- [scripts/gk_watchdog.py](scripts/gk_watchdog.py) — Python 模块
 - [scripts/gk_web_pyramid_sim.py](scripts/gk_web_pyramid_sim.py) — Python 模块
 - [scripts/gk_web_tools.py](scripts/gk_web_tools.py) — Python 模块
 - [scripts/gk_worker.py](scripts/gk_worker.py) — Python 模块
@@ -492,6 +501,7 @@
 - [scripts/test_git_concurrency_check.py](scripts/test_git_concurrency_check.py) — Test gk_git_concurrency_check.py — git 并发抢锁检测（2026-08-15 追加交叉审查项）
 - [scripts/test_gk_accept_cli.py](scripts/test_gk_accept_cli.py) — Python 模块
 - [scripts/test_gk_accept_env_confusion.py](scripts/test_gk_accept_env_confusion.py) — test_gk_accept_env_confusion.py — 验收解释器解析的**环境混淆攻击**臂（2026-11-05）。
+- [scripts/test_gk_accept_factor.py](scripts/test_gk_accept_factor.py) — Python 模块
 - [scripts/test_gk_access_log.py](scripts/test_gk_access_log.py) — Python 模块
 - [scripts/test_gk_active_surface.py](scripts/test_gk_active_surface.py) — Python 模块
 - [scripts/test_gk_adjudicate.py](scripts/test_gk_adjudicate.py) — test_gk_adjudicate.py -- Tests for gk_adjudicate.py
@@ -669,6 +679,7 @@
 - [scripts/test_gk_kvm_launcher.py](scripts/test_gk_kvm_launcher.py) — Python 模块
 - [scripts/test_gk_l0_prefetch.py](scripts/test_gk_l0_prefetch.py) — Python 模块
 - [scripts/test_gk_l3_prefetch.py](scripts/test_gk_l3_prefetch.py) — Python 模块
+- [scripts/test_gk_list_registry.py](scripts/test_gk_list_registry.py) — Python 模块
 - [scripts/test_gk_lock_observability.py](scripts/test_gk_lock_observability.py) — Python 模块
 - [scripts/test_gk_machine_check.py](scripts/test_gk_machine_check.py) — Python 模块
 - [scripts/test_gk_main_repo.py](scripts/test_gk_main_repo.py) — Python 模块
@@ -774,7 +785,10 @@
 - [scripts/test_gk_read_point_failclosed.py](scripts/test_gk_read_point_failclosed.py) — Python 模块
 - [scripts/test_gk_receive_check.py](scripts/test_gk_receive_check.py) — Python 模块
 - [scripts/test_gk_red_arm_gen.py](scripts/test_gk_red_arm_gen.py) — test_gk_red_arm_gen.py — 红先模版发生器安全网（2026-09-23，用户裁定「扩展红先测试模版」）。
+- [scripts/test_gk_red_findings_fix.py](scripts/test_gk_red_findings_fix.py) — Python 模块
+- [scripts/test_gk_red_gov.py](scripts/test_gk_red_gov.py) — Python 模块
 - [scripts/test_gk_red_intel.py](scripts/test_gk_red_intel.py) — Python 模块
+- [scripts/test_gk_red_json_sandbox.py](scripts/test_gk_red_json_sandbox.py) — Python 模块
 - [scripts/test_gk_red_stand.py](scripts/test_gk_red_stand.py) — test_gk_red_stand.py -- 红队常态化攻击机单测（gk_red_stand.py，2026-11-05）
 - [scripts/test_gk_red_vectors.py](scripts/test_gk_red_vectors.py) — Python 模块
 - [scripts/test_gk_reflect.py](scripts/test_gk_reflect.py) — test_gk_reflect.py -- Tests for gk_reflect.py
@@ -849,6 +863,7 @@
 - [scripts/test_gk_views.py](scripts/test_gk_views.py) — test_gk_views.py — B9b 红先（2026-10-27，锚 RED-MIGRATE-INLINE）
 - [scripts/test_gk_watch.py](scripts/test_gk_watch.py) — Python 模块
 - [scripts/test_gk_watch_gate.py](scripts/test_gk_watch_gate.py) — Python 模块
+- [scripts/test_gk_watchdog.py](scripts/test_gk_watchdog.py) — Python 模块
 - [scripts/test_gk_web_evidence.py](scripts/test_gk_web_evidence.py) — test_gk_web_evidence.py — 受治联网「证据注入契约」（单出网口 · 设计稿 §9.7）测试
 - [scripts/test_gk_web_tools.py](scripts/test_gk_web_tools.py) — Python 模块
 - [scripts/test_gk_worker_auth.py](scripts/test_gk_worker_auth.py) — Python 模块

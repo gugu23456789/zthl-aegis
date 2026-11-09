@@ -15,10 +15,12 @@
 """
 from __future__ import annotations
 
+import io
 import json
 import os
 import shutil
 import subprocess
+import tarfile
 import tempfile
 from pathlib import Path
 
@@ -135,9 +137,11 @@ def test_keys_absent_source_fail_loud():
     plain = Path(tempfile.mkdtemp(prefix="r19plain-")) / "skill"
     plain.mkdir(parents=True)
     arc = subprocess.run(["git", "-C", str(REPO), "archive", "HEAD"],
-                         capture_output=True, text=True, check=True, timeout=120)
-    subprocess.run(["tar", "-x", "-C", str(plain)], input=arc.stdout,
-                   text=True, check=True, timeout=120)
+                         capture_output=True, check=True, timeout=120).stdout
+    # `git archive` 是**二进制 tar**（含非 UTF-8 资源）⟹ 不能再 `text=True` 走 UTF-8 解码；
+    # 直接以 tarfile 解包（等价于旧 `tar -x`，且不依赖宿主 tar）。
+    with tarfile.open(fileobj=io.BytesIO(arc), mode="r:") as tf:
+        tf.extractall(str(plain), filter="data")
     assert not (plain / ".keys").exists(), "前提失败：洁净树不应含 .keys"
     assert not (plain / ".git").exists(), "前提失败：洁净树不应含 .git"
 

@@ -539,6 +539,9 @@ AUDIT_EVIDENCE_CONSUMERS = (
     {"id": "registry_register", "domain": "audit", "kind": "dynamic_reader",
      "file": "gk_audit_registry.py", "symbol": "register",
      "arm": "test_reverse_no_unregistered_dynamic_domain_reader"},
+    {"id": "cron_run", "domain": "audit", "kind": "dynamic_reader",
+     "file": "gk_audit_cron_run.py", "symbol": "run",
+     "arm": "test_reverse_no_unregistered_dynamic_domain_reader"},
 )
 
 

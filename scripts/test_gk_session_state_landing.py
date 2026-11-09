@@ -64,8 +64,8 @@ def test_s5_state_file_is_base():
     """回包 `state_file` 必须 = **base** state（不再是副本路径）；旧 `_s_state` 变量应消失。"""
     seg = _cli_session_seg()
     assert "_s_state" not in seg, "旧副本变量 `_s_state` 仍在使用（废副本未净）"
-    norm = seg.replace('\\"', '"')
-    assert '"state_file":"$_s_st"' in norm, "state_file 未指向 base state"
+    # 回包经 `gk_json.py build` 构造 ⟹ 判据落在 builder 实参（不再有手写 JSON 字面量）。
+    assert 'state_file="$_s_st"' in seg, "state_file 未指向 base state"
 
 
 # ── 行为臂（python 侧 helper）────────────────────────────────────────────────

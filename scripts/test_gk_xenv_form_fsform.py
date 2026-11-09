@@ -73,7 +73,7 @@ elif arm == "walkup_native":
     proj = base / "gk_fsform_reg_proj" / "src"
     proj.mkdir(parents=True)
     nearest = base / "gk_fsform_reg_proj" / ".gatekeeper.state"
-    nearest.write_text("{}", encoding="utf-8")
+    nearest.write_text('{"stage": "STAGE_0"}', encoding="utf-8")
     h.GOVERNED_SCOPES = {"gk_fsform_reg_proj": str(base / "missing.state")}
     # cwd 故意给**最坏情形**：WSL 形态 + Windows 宿主
     cwd_wsl = "/mnt/c" + str(proj)[2:].replace("\\", "/")
@@ -202,7 +202,7 @@ class TestPosixNonRegression:
         proj = tmp_path / "reg2" / "src"
         proj.mkdir(parents=True)
         nearest = tmp_path / "reg2" / ".gatekeeper.state"
-        nearest.write_text("{}", encoding="utf-8")
+        nearest.write_text('{"stage": "STAGE_0"}', encoding="utf-8")
         default = tmp_path / "d.state"
         default.write_text("{}", encoding="utf-8")
         monkeypatch.setattr(h, "SKILL_DIR", tmp_path / "other-skill")

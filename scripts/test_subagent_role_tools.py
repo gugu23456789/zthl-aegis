@@ -393,7 +393,8 @@ class TestResearch408Role:
         """指令必须写清交付物 = 报告（不是落刀），并给出 408 / 证据 / 证伪实验口径。"""
         block = sr.role_instructions("research-408")
         assert block, "research-408 缺角色指令"
-        for kw in ("报告", "408", "证伪", "推断"):
+        for kw in ("报告", "408", "证伪", "推断", "narrow", "source_docs",
+               "plan-lint", "adjudicate", "GK_STATE_DOMAIN_ROUTE"):
             assert kw in block, f"research-408 指令缺关键词 {kw!r}"
 
 

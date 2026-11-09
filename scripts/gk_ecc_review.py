@@ -42,6 +42,9 @@ _SKILL_DIR = SCRIPT_DIR.parent
 _LIT_RE = re.compile(r"`([^`]+)`")
 _CJK_RE = re.compile(r"[\u2e80-\u303f\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\ufe30-\ufe4f\uff00-\uffef]")
 
+_RE_SYM_ANCHOR = re.compile(
+    r"([A-Za-z0-9_./\\-]+\.(?:py|sh|md|json|ts|js|tsx|txt|yaml|yml))::([A-Za-z_][A-Za-z0-9_.]*)")
+
 _VERDICT_ORDER = ("file_missing", "line_over_eof", "line_drift",
                   "literal_missing", "unverifiable", "hit", "ok")
 
@@ -79,6 +82,14 @@ def extract_anchors(text: str) -> list:
         line = lines[ln - 1] if 0 <= ln - 1 < len(lines) else ""
         anchors.append({"ref": m.group(0), "rel": rel, "lo": lo, "hi": hi,
                         "doc_line": ln, "literals": _literals(line, m.group(0))})
+    # 2026-11-09（盲点修复）：`file.ext::symbol` 锚此前对预检完全不可见（iter_anchor_refs
+    #   只认 `file.ext:NNN`）⟹ 符号锚 finding 的 preflight 是空绿。这里补符号锚，
+    #   判决由 classify_anchor 的 symbol 分支做（存在性，不依赖行号）。
+    for m in _RE_SYM_ANCHOR.finditer(text):
+        ln = _line_of(text, m.start())
+        anchors.append({"ref": m.group(0), "rel": m.group(1), "kind": "symbol",
+                        "symbol": m.group(2), "lo": 0, "hi": 0,
+                        "doc_line": ln, "literals": []})
     return anchors
 
 
@@ -117,6 +128,16 @@ def classify_anchor(anchor: dict, target, mode: str = "content") -> dict:
                          % (mode, " | ".join(_ANCHOR_MODES)))
     if target is None:
         return {"verdict": "file_missing"}
+    if anchor.get("kind") == "symbol":
+        sym = str(anchor.get("symbol") or "")
+        try:
+            text = Path(target).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return {"verdict": "ok"} if mode == "existence" else {"verdict": "file_missing"}
+        _parts = [x for x in re.split(r"[.]", sym) if x]
+        if _parts and all(re.search(r"\b" + re.escape(x) + r"\b", text) for x in _parts):
+            return {"verdict": "ok", "symbol": sym}
+        return {"verdict": "literal_missing", "literal": sym}
     if mode == "existence":
         n = _lines_of(target)
         if n is None:                       # 读失败 fail-soft（对齐 scan_title_anchors）

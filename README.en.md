@@ -79,6 +79,20 @@ does not replace any venue's review process.
 - **Cross-review** — review and plan-refinement run through a constrained sub-agent channel with
   token/item budgets, rather than an unconstrained chat call.
 
+### Plan refinement and convergence (brief)
+
+- **Six-arm challenge** — a plan passes `plan_lint`, then six independent perspectives challenge it
+  in parallel and produce structured findings, not free-form chat.
+- **Residual convergence** — each round asks whether the residual still decreases; K consecutive
+  rounds without convergence trigger an early stop and hand the issue to mechanism repair instead
+  of burning budget on plan text.
+- **MoA aggregation** — de-duplicates, weights, and adjudicates the six arms into an executable fix
+  set; aggregation carries pollution provenance, and unverified discounts are reported as unadjusted.
+- **Re-runnable evidence** — round artifacts (ledger/HTML) are persisted and guarded against drift
+  by the doc gates and release preflight.
+- Canonical docs: [Convergence evaluator](references/convergence-evaluator.md) ·
+  [MoA provenance](references/oss-moa-phase-provenance.md).
+
 ### Repository layout
 
 | Path | Purpose |

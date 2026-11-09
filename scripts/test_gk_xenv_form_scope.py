@@ -94,7 +94,7 @@ elif arm == "walkup_find":  # ③ + G-7′ 正臂（宿主形态）：宿主形�
     proj = base / "gk_xenv_registered_proj" / "src"
     proj.mkdir(parents=True)
     nearest = base / "gk_xenv_registered_proj" / ".gatekeeper.state"
-    nearest.write_text("{}", encoding="utf-8")
+    nearest.write_text('{"stage": "STAGE_0"}', encoding="utf-8")
     h.GOVERNED_SCOPES = {"gk_xenv_registered_proj": str(base / "missing.state")}
     t0 = time.time()
     r = h._resolve_state_by_cwd(wsl_base + "/gk_xenv_registered_proj/src")
@@ -240,7 +240,7 @@ class TestWalkUpTermination:
         proj = tmp_path / "reg_proj" / "src"
         proj.mkdir(parents=True)
         nearest = tmp_path / "reg_proj" / ".gatekeeper.state"
-        nearest.write_text("{}", encoding="utf-8")
+        nearest.write_text('{"stage": "STAGE_0"}', encoding="utf-8")
         default = tmp_path / "default.state"
         default.write_text("{}", encoding="utf-8")
         monkeypatch.setattr(h, "SKILL_DIR", tmp_path / "other-skill")

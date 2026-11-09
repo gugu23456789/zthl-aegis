@@ -20,6 +20,8 @@
 #      ACCEPT_JOBS（默认 auto；设 0 关并行）、ACCEPT_BASELINE、
 #      ACCEPT_SUBPROC_FACTOR（每用例峰值外部子进程数 f，默认 1；0 ⟹ 退回旧口径 nproc×2）、
 #      ACCEPT_MIN_FREE_MB（启动前防爆硬闸，默认 800；0 ⟹ 关闭）、
+#      ACCEPT_WATCHDOG（运行期最小看门狗，默认 1；0 ⟹ 关闭）、
+#      ACCEPT_WATCHDOG_WALL_S（墙钟闸，默认 2700）、ACCEPT_WATCHDOG_IDLE_S（日志空闲闸，默认 180）、
 #      ACCEPT_LOCK_FILE（--full 跨会话互斥锁，默认 /tmp/gk-accept-full.lock）、ACCEPT_LOCK_WAIT（默认 600s）、
 #      ACCEPT_REUSE_TTL（复用新鲜全量结果的 TTL，默认 1800s；设 0 关复用）——见 ECC-34EEC2BC12D2
 #
@@ -80,19 +82,18 @@ _BASE_W=""
 _FACTOR="${ACCEPT_SUBPROC_FACTOR:-1}"
 # 非法值（含负数）⟹ 归一为公式缺省 1（fail-safe：不得静默退回无公式的旧口径）。
 case "$_FACTOR" in ''|*[!0-9]*) _FACTOR=1 ;; esac
-if [ -z "${ACCEPT_JOBS:-}" ]; then
-  if [ "$_FACTOR" -gt 0 ] 2>/dev/null; then
-    _BASE_W="$(PYTHONPATH="$SKILL_DIR/scripts" python3 -c "import gk_hub_scheduler as H; print(H.adaptive_workers(1000, subprocess_factor=${_FACTOR}))" 2>/dev/null || true)"
+# f → 并发度数（单源 = `gk_hub_scheduler.adaptive_workers`；缺 `python3` 时回落 `nproc`）。
+_jobs_for_factor() {   # $1 = f（0 ⟹ 旧口径 nproc×2）
+  local _f="$1" _w=""
+  if [ "$_f" -gt 0 ] 2>/dev/null; then
+    _w="$(PYTHONPATH="$SKILL_DIR/scripts" python3 -c "import gk_hub_scheduler as H; print(H.adaptive_workers(1000, subprocess_factor=${_f}))" 2>/dev/null || true)"
   else
-    _BASE_W="$(PYTHONPATH="$SKILL_DIR/scripts" python3 -c 'import gk_hub_scheduler as H; print(H.adaptive_workers(1000))' 2>/dev/null || true)"
+    _w="$(PYTHONPATH="$SKILL_DIR/scripts" python3 -c 'import gk_hub_scheduler as H; print(H.adaptive_workers(1000))' 2>/dev/null || true)"
   fi
-fi
-case "$_BASE_W" in ''|*[!0-9]*) _BASE_W="$(nproc 2>/dev/null || echo 4)" ;; esac
-if [ "$_FACTOR" -gt 0 ] 2>/dev/null; then
-  _DEF_JOBS="$_BASE_W"
-else
-  _DEF_JOBS=$(( _BASE_W * 2 ))
-fi
+  case "$_w" in ''|*[!0-9]*) _w="$(nproc 2>/dev/null || echo 4)" ;; esac
+  if [ "$_f" -gt 0 ] 2>/dev/null; then printf '%s\n' "$_w"; else printf '%s\n' $(( _w * 2 )); fi
+}
+_DEF_JOBS="$(_jobs_for_factor "$_FACTOR")"
 [ "$_DEF_JOBS" -gt 12 ] && _DEF_JOBS=12; [ "$_DEF_JOBS" -lt 1 ] && _DEF_JOBS=1
 JOBS="${ACCEPT_JOBS:-$_DEF_JOBS}"
 # 防爆硬闸（2026-11-08）：空闲内存已低于硬阈值时**拒绝启动**（fail-loud，不静默串行）。
@@ -105,6 +106,24 @@ if [ "${ACCEPT_MIN_FREE_MB:-800}" -gt 0 ] 2>/dev/null; then
   if [ "$_FREE_MB" -gt 0 ] && [ "$_FREE_MB" -lt "${_ACCEPT_MIN_FREE_MB:-800}" ]; then
     echo "[accept] FATAL: 空闲内存 ${_FREE_MB}MB < 防爆硬闸 ${_ACCEPT_MIN_FREE_MB}MB —— 拒绝启动；释放内存或 ACCEPT_MIN_FREE_MB=0 显式关闭" >&2
     exit 2
+  fi
+fi
+# 最小看门狗（2026-11-09，user 裁定「不过度设计」）：只在**运行期**兜三道闸 ——
+#   墙钟 / 日志空闲 / 空闲内存；命中即**整树**击杀（POSIX killpg / Windows taskkill /T /F），
+#   退出码 124/137 由下方既有 FATAL 面报出。
+#   为什么需要：启动闸只拦「开局就低内存」，408 事故是**运行中**被 WSL+openssl 档拖进换页。
+#   阈值**单源**（防多源漂移）：墙钟/空闲**缺省在 gk_watchdog.py**，本脚本只在显式设
+#   `ACCEPT_WATCHDOG_WALL_S/IDLE_S` 时才透传；内存闸与启动前硬闸共用 `ACCEPT_MIN_FREE_MB`。
+#   关闭：ACCEPT_WATCHDOG=0。
+_WD_PREFIX=()
+if [ "${ACCEPT_WATCHDOG:-1}" != "0" ] && [ -f "$SKILL_DIR/scripts/gk_watchdog.py" ]; then
+  if command -v python3 >/dev/null 2>&1; then
+    _WD_LOG="${TMPDIR:-/tmp}/gk-accept-watchdog.$$.log"
+    _WD_EXTRA=()
+    [ -n "${ACCEPT_WATCHDOG_WALL_S:-}" ] && _WD_EXTRA+=(--wall "$ACCEPT_WATCHDOG_WALL_S")
+    [ -n "${ACCEPT_WATCHDOG_IDLE_S:-}" ] && _WD_EXTRA+=(--idle "$ACCEPT_WATCHDOG_IDLE_S")
+    _WD_PREFIX=(python3 "$SKILL_DIR/scripts/gk_watchdog.py" "${_WD_EXTRA[@]}"
+      --min-free-mb "${ACCEPT_MIN_FREE_MB:-800}" --log "$_WD_LOG" --)
   fi
 fi
 # I/O 卫生（2026-09-24；**诚实标注：未单独 A/B**）：pytest 进程自身的 `.pyc` 落 CIFS（本仓在
@@ -285,6 +304,20 @@ else
   fi
 fi
 
+# f 自动分档（2026-11-09）：只在**未显式指定** ACCEPT_SUBPROC_FACTOR / ACCEPT_JOBS 时生效。
+#   口径见 `scripts/gk_accept_factor.py`：全轻 ⟹ 0；重活文件占比 ≥50% ⟹ 3；其余 ⟹ 1。
+#   为什么放在这里：分档要看**实际选中的文件集**（此时 SELECT 才定稿）。
+if [ -z "${ACCEPT_SUBPROC_FACTOR:-}" ] && [ -z "${ACCEPT_JOBS:-}" ]; then
+  _DET="$(python3 "$SKILL_DIR/scripts/gk_accept_factor.py" "${SELECT[@]}" 2>/dev/null || true)"
+  case "$_DET" in ''|*[!0-9]*) _DET="" ;; esac
+  if [ -n "$_DET" ] && [ "$_DET" != "$_FACTOR" ]; then
+    _FACTOR="$_DET"
+    _DEF_JOBS="$(_jobs_for_factor "$_FACTOR")"
+    [ "$_DEF_JOBS" -gt 12 ] && _DEF_JOBS=12; [ "$_DEF_JOBS" -lt 1 ] && _DEF_JOBS=1
+    JOBS="$_DEF_JOBS"
+  fi
+fi
+
 # ── 跑 ────────────────────────────────────────────────────────────────────────
 PYARGS=(-q --tb=no -rfE)
 # 并行对**大子集/全量**都必要（首版只在 --full 加 `-n`，而默认「CLI 面」子集实测 ≈ 全量
@@ -310,9 +343,9 @@ if [ "$_REUSED" = "0" ]; then
   #   多跑一遍纯属浪费一次解释器启动（也会打破「复用/串行化」臂对 STUB 调用数的断言）。
   if [ "$JOBS" != "0" ]; then PYARGS+=( -m "not serial" ); fi
   if [ "${#SELECT[@]}" -gt 0 ]; then
-    OUT="$("$PY" -m pytest "${PYARGS[@]}" "${SELECT[@]}" 2>&1)"
+    OUT="$("${_WD_PREFIX[@]}" "$PY" -m pytest "${PYARGS[@]}" "${SELECT[@]}" 2>&1)"
   else
-    OUT="$("$PY" -m pytest "${PYARGS[@]}" 2>&1)"
+    OUT="$("${_WD_PREFIX[@]}" "$PY" -m pytest "${PYARGS[@]}" 2>&1)"
   fi
   SUM="$(printf '%s\n' "$OUT" | grep -E '[0-9]+ (passed|failed|error)' | tail -1)"
   if [ "$JOBS" != "0" ]; then
@@ -325,10 +358,10 @@ if [ "$_REUSED" = "0" ]; then
     fi
     # 串行段必须**干净环境**（本脚本可能被嵌套在 xdist worker 内调用，见下方复核段同族注释）
     if [ "${#SELECT[@]}" -eq 0 ]; then
-      SER_OUT="$(env -u PYTEST_XDIST_WORKER -u PYTEST_XDIST_WORKER_COUNT -u PYTEST_XDIST_TESTRUNUID \
+      SER_OUT="$("${_WD_PREFIX[@]}" env -u PYTEST_XDIST_WORKER -u PYTEST_XDIST_WORKER_COUNT -u PYTEST_XDIST_TESTRUNUID \
         "$PY" -m pytest -q --tb=no -rfE -m serial 2>&1)" || true
     elif [ "${#_ser_sel[@]}" -gt 0 ]; then
-      SER_OUT="$(env -u PYTEST_XDIST_WORKER -u PYTEST_XDIST_WORKER_COUNT -u PYTEST_XDIST_TESTRUNUID \
+      SER_OUT="$("${_WD_PREFIX[@]}" env -u PYTEST_XDIST_WORKER -u PYTEST_XDIST_WORKER_COUNT -u PYTEST_XDIST_TESTRUNUID \
         "$PY" -m pytest -q --tb=no -rfE -m serial "${_ser_sel[@]}" 2>&1)" || true
     fi
     SER_SUM="$(printf '%s\n' "$SER_OUT" | grep -E '[0-9]+ (passed|failed|error)' | tail -1)"

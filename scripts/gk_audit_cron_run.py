@@ -77,6 +77,7 @@ def run(skill_dir: str, domains, timeout: int, cache_path: Path, alert_path: Pat
         log_path: Path, state_file: str, max_age_days: float = 7.0,
         force: bool = False) -> dict:
     started = time.time()
+    log_path.parent.mkdir(parents=True, exist_ok=True)   # HOME 首次运行无 ~/.gatekeeper
     fp = _fingerprint(skill_dir, state_file)
     cache = _read_cache(cache_path)
     age_days = (time.time() - float(cache.get("ts") or 0)) / 86400.0
@@ -107,7 +108,9 @@ def run(skill_dir: str, domains, timeout: int, cache_path: Path, alert_path: Pat
             v = _verdict(last) if rc == 0 else "rc=%d" % rc
             ok = (rc == 0 and v == "ok")
             if not ok:
-                failed.append("%s(%s)" % (d, v))
+                # 告警标签与旧 bash 文案对齐：剥掉内部判据前缀 `bad:`（`rc=N` 原样保留）。
+                label = v[4:] if v.startswith("bad:") else v
+                failed.append("%s(%s)" % (d, label))
             results[d] = {"rc": rc, "verdict": v, "sec": sec,
                           "bytes": len(out.encode("utf-8")),
                           "last": last[:400]}
@@ -151,6 +154,9 @@ def main(argv=None) -> int:
               home / ".gatekeeper" / "audit-cron.log",
               state_file, a.max_age_days, a.force)
     print(json.dumps(out, ensure_ascii=False))
+    if not out.get("ok"):
+        print("ALERT: audit-cron failed domains=%s"
+              % " ".join(out.get("failed_domains") or []))
     return 0 if out.get("ok") else 1
 
 

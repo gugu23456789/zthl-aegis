@@ -99,6 +99,32 @@ def test_a5_flavor_probe_cached_and_known():
 # --------------------------------------------------------------------------- #
 # B. 源码守卫：gatekeeper-cli.sh 里的同类炸弹
 # --------------------------------------------------------------------------- #
+#: 残差台账（2026-11-09，用户令「不能改的 json 加守护/边界/注释，确保不被误改」）：
+#: key = `sha1(" ".join(line.split()))[:12]`（**整行指纹**，行号漂移不影响）；value = 不改原因。
+#: 纪律：新增/改动任一行 ⟹ 指纹不在集合 ⟹ 必红（强制重新审计）；修好一条 ⟹ 必须删对应键。
+_RESIDUAL_SPLICES = {
+    "3f27f70a3e14": "守卫启动期：SKILL_DIR 已判不可信，不能依赖 $SKILL_DIR/scripts/gk_json.py",
+    "9eaa2e20e648": "守卫启动期：同上（gk_state.py 不可解析分支）",
+    "3b91d5db657d": "discover idle 回显：与 owner/bind 片段拼接，需独立重构（当前路径变量在 JSON 值内）",
+    "8631a703fc57": "discover active 回显（带 warnings）：同上，片段拼接重构面",
+    "0a1f91028747": "discover active 回显：同上，片段拼接重构面",
+    "ff24f8c209b6": "stage 引用回显：$stage/$ref_file 为固定枚举，路径变量只在 [ -f ] 判定里",
+    "9d9583c81f0b": "`|| echo \"{}\"` 字面量兜底：JSON 内无变量（误报）",
+    "2593fac4f1dd": "同上（monitor_scores 兜底）",
+    "77abae1807e3": "ember 失败回显：$_sub 为子命令枚举（非路径）",
+    "82cf8fa33e0c": "rejected_edits 为 state_query 产出的**已转义 JSON 片段**；guidance 经 escape",
+    "d65b7f27d395": "suggestion 文案：$feature_branch/$branch 为 git 分支名（ref-format 禁反斜杠）",
+    "84328efeb3d7": "error 经 gk_json_utils escape；exit_code 数字（路径变量在 escape 命令内，误报）",
+    "31092653b3ed": "message 经 escape；commit/verified 为 sha/布尔（同上，误报）",
+    "3d758844cc10": "precheck 为 helper 产出的 JSON 片段；stderr_tail 经 json-escape",
+    "de99d9f6ee6c": "detail 为 helper 产出的 JSON 片段；stderr_tail 经 json-escape",
+    "e8ead5a6f783": "audit --state 兜底字面量：JSON 内无路径变量（变量在 env 前缀）",
+    "a29b4ca8440c": "audit --memory 兜底字面量：同上",
+    "aca959613119": "audit crossr 兜底字面量：同上",
+    "e582349c21d6": "files 为 --len 数字；signed 布尔（路径变量在 field 命令内，误报）",
+}
+
+
 def test_b1_no_manual_json_splice_with_path_vars():
     r"""守卫①：**禁**手工拼 JSON 且嵌路径变量（Windows 反斜杠 ⟹ `\U` 非法转义）。
 
@@ -107,13 +133,25 @@ def test_b1_no_manual_json_splice_with_path_vars():
     ⟹ 读侧 `json.loads` 抛 `Invalid \escape` ⟹ `d={}` ⟹ `updated` 空
     ⟹ `_pointer_fresh` 返回 False ⟹ reason=**stale**（真因被伪装成过期）。
     正确写法 = `gk_json.py build`（JSON 构造单一事实源）。
+
+    2026-11-09：33 处中已转 14 处；剩余 19 处**逐行指纹入台账**（见 `_RESIDUAL_SPLICES`）。
+    判据从「必须 0」改为「新增/改动任一行必红」—— 不是放宽，而是把「无法一次改完的存量」
+    钉成**不可误改**的审计面；任何新拼接或残差行改动都必须重新审计。
     """
+    import hashlib
     hits = xh.find_manual_json_splices(CLI)
-    assert not hits, (
-        "gatekeeper-cli.sh 存在手工拼 JSON 且嵌路径变量的行（Windows 反斜杠下产出非法 JSON）：\n"
-        + "\n".join(f"  L{n}: {s.strip()[:160]}" for n, s in hits)
-        + "\n修法：改走 python3 \"$SKILL_DIR/scripts/gk_json.py\" build k=v ... （序列化单一事实源）"
-    )
+    got = {hashlib.sha1(" ".join(s.split()).encode("utf-8")).hexdigest()[:12]: (n, s)
+           for n, s in hits}
+    unknown = sorted(k for k in got if k not in _RESIDUAL_SPLICES)
+    missing = sorted(k for k in _RESIDUAL_SPLICES if k not in got)
+    assert not unknown, (
+        "新增/改动的手工拼 JSON 未审计（Windows 反斜杠下可能产出非法 JSON）：\n"
+        + "\n".join(f"  L{got[k][0]}: {got[k][1].strip()[:160]}" for k in unknown)
+        + "\n修法：改走 python3 \"$SKILL_DIR/scripts/gk_json.py\" build k=v ... "
+          "（序列化单一事实源）；确不能改 ⟹ 在本文件 _RESIDUAL_SPLICES 补指纹 + 原因")
+    assert not missing, (
+        "残差台账有已修复/已变更的条目未同步移除（防止台账腐化）：\n  " + "\n  ".join(missing)
+        + "\n修法：删对应 hash（= 一次审阅动作）")
 
 
 def test_b2_no_inline_python_sq_path_injection():

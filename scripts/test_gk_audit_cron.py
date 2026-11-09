@@ -18,6 +18,8 @@ def _sandbox(tmp_path, fail_domain="--docs", cli_body=None):
     sb = tmp_path / "sb"
     (sb / "scripts").mkdir(parents=True)
     shutil.copy(SCRIPT, sb / "scripts" / "gk_audit_cron.sh")
+    # 2026-11-01 起 wrapper 只做编排，内核 = 同目录 gk_audit_cron_run.py ⟹ 沙箱须一并拷贝。
+    shutil.copy(SCRIPTS / "gk_audit_cron_run.py", sb / "scripts" / "gk_audit_cron_run.py")
     body = cli_body if cli_body is not None else (
         'echo "{\\"ok\\":true,\\"audit_mode\\":\\"$2\\"}"\n'
         'if [ "$2" = "%s" ]; then exit 3; fi\n'
@@ -45,9 +47,9 @@ def test_script_syntax_ok():
 
 def test_default_domains_are_deterministic_only():
     """默认不得含 crossr / depth / report（会派 subagent 或跑 gitnexus 全量）。"""
-    src = SCRIPT.read_text(encoding="utf-8")
-    assert "GK_AUDIT_CRON_DOMAINS:-state docs memory" in src
-    default_line = src.split("GK_AUDIT_CRON_DOMAINS:-")[1].split("\n")[0]
+    src = (SCRIPTS / "gk_audit_cron_run.py").read_text(encoding="utf-8")
+    assert 'DEFAULT_DOMAINS = ("state", "docs", "memory")' in src
+    default_line = src.split("DEFAULT_DOMAINS = ")[1].split("\n")[0]
     for heavy in ("crossr", "depth", "report"):
         assert heavy not in default_line, heavy
 

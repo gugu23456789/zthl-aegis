@@ -91,6 +91,39 @@ DEGRADE_SOURCES = ("degrade", "r2-degrade")
 TTL_DEFAULT = 1800
 
 
+@contextlib.contextmanager
+def _budget_lock(state_file: str):
+    """budget-log 跨进程互斥（2026-11-09，修封印链重复 seq 根因）。
+
+    病象：`append` = 「读记录 → 追加行 → `seal_now`（读链尾 → 写 seal → 追加链）」整段
+    **无锁** ⟹ 两个并发 append 各自 seal 同一份账本摘要 ⟹ 链上出现**同 seq 的重复条目**
+    （实测 `seq=1582` 逐字重复；`_verify_chain` 因此判 `seq_mismatch`，advance 被
+    `RAISE_LEDGER_SEAL_INVALID` 拦下）。本锁把「追加行 + 重算封印 + 推链」串行化。
+    载体 = `<state>.budget-log.lock`（独立于 edit-log / state 锁）；`fcntl` 不可用
+    （裸 Windows python）⟹ 降级为无锁（同 `_edit_lock` 的既有口径，由单写者纪律兜）。
+    """
+    lp = Path(str(state_file) + ".budget-log.lock")
+    try:
+        f = open(lp, "a+")
+    except OSError:
+        yield
+        return
+    try:
+        try:
+            import fcntl
+            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+        except Exception:
+            pass
+        yield
+    finally:
+        try:
+            import fcntl
+            fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+        except Exception:
+            pass
+        f.close()
+
+
 def _logical_path(state_file: str) -> Path:
     return Path(str(state_file) + SUFFIX)
 
@@ -371,7 +404,15 @@ def count_unlocks_today(state_file: str) -> int:
 
 
 def record_unlock(state_file: str, operator: str, reason: str, key_dir: str = "") -> dict:
-    """记录一次**人工解锁**（`kind=human_unlock`），供 CAP 抵扣一次提额。
+    """记录一次人工解锁（公开入口；**持 `_budget_lock`**，与 append 同锁串行）。"""
+    if not state_file:
+        return {"ok": False, "error": "UNLOCK_ARG_REQUIRED", "detail": "state required"}
+    with _budget_lock(state_file):
+        return _record_unlock_unlocked(state_file, operator, reason, key_dir)
+
+
+def _record_unlock_unlocked(state_file: str, operator: str, reason: str, key_dir: str = "") -> dict:
+    """记录一次**人工解锁**（调用方**已持锁**），供 CAP 抵扣一次提额。
 
     - 非 LLM：只收人类可核验的 `operator` + `reason`，不接受任何模型分数；
     - append-only：只追加，不改历史、不改额度；写完重算封印（可复算/可验签）；
@@ -399,7 +440,7 @@ def record_unlock(state_file: str, operator: str, reason: str, key_dir: str = ""
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
     except OSError as e:
         return {"ok": False, "error": "UNLOCK_WRITE_FAILED", "detail": str(e)}
-    sealed = seal_now(state_file, key_dir=key_dir)
+    sealed = _seal_now_unlocked(state_file, key_dir=key_dir)
     if not sealed.get("ok", True):
         return {"ok": False, "error": "UNLOCK_SEAL_FAILED", "detail": sealed}
     return {"ok": True, "unlock": rec, "unlocks_today": count_unlocks_today(state_file)}
@@ -968,7 +1009,13 @@ def _sign(digest: str, key_dir: str):
 
 
 def seal_now(state_file: str, key_dir: str = "") -> dict:
-    """重算封印（`append` 后调用，也可单跑）。D3a：同时推进本地封印链（`seq` + `prev_seal`）。"""
+    """重算封印（公开入口；**持 `_budget_lock`**，防并发 seal 产生重复 seq）。"""
+    with _budget_lock(state_file):
+        return _seal_now_unlocked(state_file, key_dir)
+
+
+def _seal_now_unlocked(state_file: str, key_dir: str = "") -> dict:
+    """重算封印（调用方**已持锁**）。D3a：同时推进本地封印链（`seq` + `prev_seal`）。"""
     p = _logical_path(state_file)
     try:
         raw = p.read_bytes() if p.exists() else b""
@@ -1045,7 +1092,41 @@ def verify_seal(state_file: str, key_dir: str = "",
 # ─────────────────────────── 写入（C1/C2/C3）───────────────────────────
 def append(state_file: str, source: str, reason: str = "", eb: dict = None,
            ttl: int = None, key_dir: str = "", cost: int = None) -> dict:
-    """追加一条记录并重算封印。**C3：失败返 `{ok:false}`，不静默吞。**
+    """追加一条记录并重算封印（公开入口；**持 `_budget_lock`** 串行化追加+封印）。"""
+    if not state_file:
+        return {"ok": False, "error": "no_state_file"}
+    with _budget_lock(state_file):
+        return _append_unlocked(state_file, source, reason=reason, eb=eb,
+                                ttl=ttl, key_dir=key_dir, cost=cost)
+
+
+def _rollback_ledger(p, prev_size, sp, prev_seal, cp, prev_chain) -> None:
+    """C3：把账本/封印/链恢复到 append 前状态（调用方持 `_budget_lock`；尽力而为）。"""
+    try:
+        if prev_size:
+            os.truncate(p, prev_size)
+        elif p.exists():
+            p.unlink()
+    except OSError:
+        pass
+    try:
+        if prev_seal is None:
+            if sp.exists():
+                sp.unlink()
+        else:
+            sp.write_bytes(prev_seal)
+        if prev_chain is None:
+            if cp.exists():
+                cp.unlink()
+        else:
+            cp.write_bytes(prev_chain)
+    except OSError:
+        pass
+
+
+def _append_unlocked(state_file: str, source: str, reason: str = "", eb: dict = None,
+                     ttl: int = None, key_dir: str = "", cost: int = None) -> dict:
+    """追加一条记录并重算封印（调用方**已持锁**）。**C3：失败返 `{ok:false}`，不静默吞。**
 
     2026-10-23（账本凭证，owner 裁定「按顺序做」）：
       · `kind` 新增 `charge`（扣款交易）——`from_max` 链**只跟提额行**，扣款/降级不扰动链；
@@ -1134,14 +1215,30 @@ def append(state_file: str, source: str, reason: str = "", eb: dict = None,
             rec["cost"] = int(cost)
         except (TypeError, ValueError):
             pass
+    # C3（2026-11-09）：append + seal 是**一个事务**。失败时回滚账本/封印/链，避免
+    #   「追加行已落盘、封印失效」的半写状态（原实现只返回错误、不回滚）。
+    _p = _logical_path(state_file)
     try:
-        with open(_logical_path(state_file), "a", encoding="utf-8", newline="\n") as f:
+        _prev_size = _p.stat().st_size
+    except OSError:
+        _prev_size = 0
+    _sp = _seal_path(state_file)
+    _cp = _chain_path(_sp)
+    try:
+        _prev_seal = _sp.read_bytes() if _sp.exists() else None
+        _prev_chain = _cp.read_bytes() if _cp.exists() else None
+    except OSError:
+        _prev_seal = _prev_chain = None
+    try:
+        with open(_p, "a", encoding="utf-8", newline="\n") as f:
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
     except OSError as e:
-        return {"ok": False, "error": "append_failed: %s" % e}
-    st = seal_now(state_file, key_dir=key_dir)
+        _rollback_ledger(_p, _prev_size, _sp, _prev_seal, _cp, _prev_chain)
+        return {"ok": False, "error": "append_failed: %s" % e, "rolled_back": True}
+    st = _seal_now_unlocked(state_file, key_dir=key_dir)
     if not st.get("ok"):
-        return {"ok": False, "error": st.get("error"), "record": rec}
+        _rollback_ledger(_p, _prev_size, _sp, _prev_seal, _cp, _prev_chain)
+        return {"ok": False, "error": st.get("error"), "record": rec, "rolled_back": True}
     return {"ok": True, "record": rec, "seal": {"mode": st.get("mode"), "sha256": st.get("sha256")}}
 
 

@@ -143,3 +143,37 @@ def test_arm56_anchor_existence_extra_roots(tmp_path):
     assert str(ext) in [str(x) for x in (rep.get("roots") or [])], rep.get("roots")
     hit = [x for x in (rep.get("drifted") or []) if x.get("doc") == "ext-plan.md"]
     assert hit and hit[0]["verdict"] == "line_over_eof", hit
+
+
+def test_symbol_anchor_preflight(tmp_path):
+    """盲点修复：`file.py::symbol` 锚必须被预检看见，且缺失符号判 literal_missing。"""
+    import gk_ecc_review as er
+    root = tmp_path / "repo"
+    (root / "scripts").mkdir(parents=True)
+    (root / "scripts" / "gk_finding.py").write_text(
+        "def family_view(state_file):\n    return {}\n", encoding="utf-8")
+    pkg = tmp_path / "pkg.md"
+    pkg.write_text("`scripts/gk_finding.py::family_view`\n", encoding="utf-8")
+    rep = er.review(str(pkg), roots=[str(root)])
+    sym = [a for a in rep["anchors"] if a.get("kind") == "symbol"]
+    assert sym and sym[0]["verdict"] == "ok", rep["anchors"]
+
+    pkg2 = tmp_path / "pkg2.md"
+    pkg2.write_text("`scripts/gk_finding.py::not_a_symbol`\n", encoding="utf-8")
+    rep2 = er.review(str(pkg2), roots=[str(root)])
+    sym2 = [a for a in rep2["anchors"] if a.get("kind") == "symbol"]
+    assert sym2 and sym2[0]["verdict"] == "literal_missing", rep2["anchors"]
+
+
+def test_symbol_anchor_class_method(tmp_path):
+    """点分符号 `Class.method`：类与方法两段都存在即 ok（不要求字面连续）。"""
+    import gk_ecc_review as er
+    root = tmp_path / "repo"
+    (root / "scripts").mkdir(parents=True)
+    (root / "scripts" / "gk_agent_edit.py").write_text(
+        "class _StateLedger:\n    def allowed(self):\n        return 1\n", encoding="utf-8")
+    pkg = tmp_path / "pkg.md"
+    pkg.write_text("`scripts/gk_agent_edit.py::_StateLedger.allowed`\n", encoding="utf-8")
+    rep = er.review(str(pkg), roots=[str(root)])
+    sym = [a for a in rep["anchors"] if a.get("kind") == "symbol"]
+    assert sym and sym[0]["verdict"] == "ok", rep["anchors"]

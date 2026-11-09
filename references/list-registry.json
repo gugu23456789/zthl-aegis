@@ -1,0 +1,733 @@
+{
+  "_generated": true,
+  "_generator": "scripts/gk_list_registry.py",
+  "schema": 1,
+  "scope": "scripts/*.py 顶层裁决面常量（集合/构造调用）+ scripts|references 清单文件 + references/*.md 白名单基线章节；测试代码不计",
+  "entries": [
+    {
+      "id": "_accept_baseline",
+      "kind": "baseline",
+      "file": "scripts/_accept_baseline.txt",
+      "symbol": "<file>",
+      "line": 1,
+      "referenced_by": [
+        "scripts/gk_doc_align.py",
+        "scripts/gk_list_registry.py",
+        "scripts/gk_moa_aggregate.py",
+        "scripts/pre_tool_hook.py"
+      ],
+      "failure_mode": "fail-closed（缺失 → 无基线，失败全计 NEW）",
+      "exported": false
+    },
+    {
+      "id": "_accept_location_exempt",
+      "kind": "exemption",
+      "file": "scripts/_accept_location_exempt.txt",
+      "symbol": "<file>",
+      "line": 1,
+      "referenced_by": [
+        "scripts/gk_list_registry.py"
+      ],
+      "failure_mode": "fail-closed（缺失 → 无位置依赖豁免）",
+      "exported": false
+    },
+    {
+      "id": "check_tool_cfg._KNOWN_UNREACHABLE",
+      "kind": "exemption",
+      "file": "scripts/check_tool_cfg.py",
+      "symbol": "_KNOWN_UNREACHABLE",
+      "line": 165,
+      "referenced_by": [],
+      "failure_mode": "fail-open（豁免类；命中即跳过对应检查）",
+      "exported": false
+    },
+    {
+      "id": "gk_audit_depth._SKIP_MODULE",
+      "kind": "exemption",
+      "file": "scripts/gk_audit_depth.py",
+      "symbol": "_SKIP_MODULE",
+      "line": 46,
+      "referenced_by": [],
+      "failure_mode": "fail-open（豁免类；命中即跳过对应检查）",
+      "exported": false
+    },
+    {
+      "id": "gk_audit_depth._SKIP_SCRIPT",
+      "kind": "exemption",
+      "file": "scripts/gk_audit_depth.py",
+      "symbol": "_SKIP_SCRIPT",
+      "line": 48,
+      "referenced_by": [],
+      "failure_mode": "fail-open（豁免类；命中即跳过对应检查）",
+      "exported": false
+    },
+    {
+      "id": "gk_bash_static_scan._P8_TMP_EXEMPT",
+      "kind": "exemption",
+      "file": "scripts/gk_bash_static_scan.py",
+      "symbol": "_P8_TMP_EXEMPT",
+      "line": 44,
+      "referenced_by": [],
+      "failure_mode": "fail-open（豁免类；命中即跳过对应检查）",
+      "exported": false
+    },
+    {
+      "id": "gk_bashpy_loader._DEV_SOURCE_DIRS",
+      "kind": "registry",
+      "file": "scripts/gk_bashpy_loader.py",
+      "symbol": "_DEV_SOURCE_DIRS",
+      "line": 51,
+      "referenced_by": [
+        "scripts/_red_attacks.py",
+        "scripts/gk_plugin_manifest.py",
+        "scripts/gk_swe_rb_loader.py"
+      ],
+      "failure_mode": "registry（登记/状态类；不直接决定放行）",
+      "exported": false
+    },
+    {
+      "id": "gk_bench_relevance.KNOWN_ECC",
+      "kind": "exemption",
+      "file": "scripts/gk_bench_relevance.py",
+      "symbol": "KNOWN_ECC",
+      "line": 29,
+      "referenced_by": [],
+      "failure_mode": "fail-open（豁免类；命中即跳过对应检查）",
+      "exported": false
+    },
+    {
+      "id": "gk_credit_ledger._BASELINE_SIGN_KEYS",
+      "kind": "baseline",
+      "file": "scripts/gk_credit_ledger.py",
+      "symbol": "_BASELINE_SIGN_KEYS",
+      "line": 170,
+      "referenced_by": [],
+      "failure_mode": "baseline（缺失 → 对照面失效）",
+      "exported": false
+    },
+    {
+      "id": "gk_doc_align.KNOWN_UNIMPLEMENTED",
+      "kind": "exemption",
+      "file": "scripts/gk_doc_align.py",
+      "symbol": "KNOWN_UNIMPLEMENTED",
+      "line": 79,
+      "referenced_by": [],
+      "failure_mode": "fail-open（豁免类；命中即跳过对应检查）",
+      "exported": false
+    },
+    {
+      "id": "gk_doc_align._ARM_EXEMPT_CTX",
+      "kind": "exemption",
+      "file": "scripts/gk_doc_align.py",
+      "symbol": "_ARM_EXEMPT_CTX",
+      "line": 1559,
+      "referenced_by": [],
+      "failure_mode": "fail-open（豁免类；命中即跳过对应检查）",
+      "exported": false
+    },
+    {
+      "id": "gk_doc_align._ARM_NAME_EXEMPT",
+      "kind": "exemption",
+      "file": "scripts/gk_doc_align.py",
+      "symbol": "_ARM_NAME_EXEMPT",
+      "line": 1562,
+      "referenced_by": [],
+      "failure_mode": "fail-open（豁免类；命中即跳过对应检查）",
+      "exported": false
+    },
+    {
+      "id": "gk_doc_align._FORCE_TEACH_EXEMPT",
+      "kind": "exemption",
+      "file": "scripts/gk_doc_align.py",
+      "symbol": "_FORCE_TEACH_EXEMPT",
+      "line": 1814,
+      "referenced_by": [],
+      "failure_mode": "fail-open（豁免类；命中即跳过对应检查）",
+      "exported": false
+    },
+    {
+      "id": "gk_doc_align._NODE_CLAIM_SKIP_DOCS",
+      "kind": "exemption",
+      "file": "scripts/gk_doc_align.py",
+      "symbol": "_NODE_CLAIM_SKIP_DOCS",
+      "line": 705,
+      "referenced_by": [],
+      "failure_mode": "fail-open（豁免类；命中即跳过对应检查）",
+      "exported": false
+    },
+    {
+      "id": "gk_edit_gate._RE_PROTECTED_PATH",
+      "kind": "exemption",
+      "file": "scripts/gk_edit_gate.py",
+      "symbol": "_RE_PROTECTED_PATH",
+      "line": 46,
+      "referenced_by": [],
+      "failure_mode": "fail-open（豁免类；命中即跳过对应检查）",
+      "exported": false
+    },
+    {
+      "id": "gk_evidence.GOVERNED_SEARCH_HOSTS",
+      "kind": "registry",
+      "file": "scripts/gk_evidence.py",
+      "symbol": "GOVERNED_SEARCH_HOSTS",
+      "line": 121,
+      "referenced_by": [],
+      "failure_mode": "registry（登记/状态类；不直接决定放行）",
+      "exported": false
+    },
+    {
+      "id": "gk_evidence.PRIOR_ART_HOSTS",
+      "kind": "registry",
+      "file": "scripts/gk_evidence.py",
+      "symbol": "PRIOR_ART_HOSTS",
+      "line": 118,
+      "referenced_by": [
+        "scripts/gk_list_registry.py",
+        "scripts/pre_tool_hook.py",
+        "scripts/subagent_runner.py"
+      ],
+      "failure_mode": "fail-closed（唯一出网口白名单）",
+      "exported": false
+    },
+    {
+      "id": "gk_finding._MIRROR_IGNORE_FIELDS",
+      "kind": "exemption",
+      "file": "scripts/gk_finding.py",
+      "symbol": "_MIRROR_IGNORE_FIELDS",
+      "line": 3386,
+      "referenced_by": [],
+      "failure_mode": "fail-open（豁免类；命中即跳过对应检查）",
+      "exported": false
+    },
+    {
+      "id": "gk_finding._REPORT_ALLOWED",
+      "kind": "allowlist",
+      "file": "scripts/gk_finding.py",
+      "symbol": "_REPORT_ALLOWED",
+      "line": 87,
+      "referenced_by": [],
+      "failure_mode": "fail-closed（准入类；缺失/空集 → 能力不可用或被拒）",
+      "exported": false
+    },
+    {
+      "id": "gk_git_workflow_check._MERGE_INTEGRITY_KNOWN_SELF",
+      "kind": "exemption",
+      "file": "scripts/gk_git_workflow_check.py",
+      "symbol": "_MERGE_INTEGRITY_KNOWN_SELF",
+      "line": 316,
+      "referenced_by": [],
+      "failure_mode": "fail-open（豁免类；命中即跳过对应检查）",
+      "exported": false
+    },
+    {
+      "id": "gk_git_workflow_check._PROTECTED",
+      "kind": "exemption",
+      "file": "scripts/gk_git_workflow_check.py",
+      "symbol": "_PROTECTED",
+      "line": 48,
+      "referenced_by": [],
+      "failure_mode": "fail-open（豁免类；命中即跳过对应检查）",
+      "exported": false
+    },
+    {
+      "id": "gk_host_paths.HOST_CONFIG_ROOTS",
+      "kind": "registry",
+      "file": "scripts/gk_host_paths.py",
+      "symbol": "HOST_CONFIG_ROOTS",
+      "line": 105,
+      "referenced_by": [],
+      "failure_mode": "registry（登记/状态类；不直接决定放行）",
+      "exported": false
+    },
+    {
+      "id": "gk_json_utils._READY_DIRS",
+      "kind": "registry",
+      "file": "scripts/gk_json_utils.py",
+      "symbol": "_READY_DIRS",
+      "line": 171,
+      "referenced_by": [],
+      "failure_mode": "registry（登记/状态类；不直接决定放行）",
+      "exported": false
+    },
+    {
+      "id": "gk_l0_prefetch._PROTECTED_RE",
+      "kind": "exemption",
+      "file": "scripts/gk_l0_prefetch.py",
+      "symbol": "_PROTECTED_RE",
+      "line": 64,
+      "referenced_by": [],
+      "failure_mode": "fail-open（豁免类；命中即跳过对应检查）",
+      "exported": false
+    },
+    {
+      "id": "gk_mcp_loader.CAP_WHITELIST",
+      "kind": "allowlist",
+      "file": "scripts/gk_mcp_loader.py",
+      "symbol": "CAP_WHITELIST",
+      "line": 51,
+      "referenced_by": [],
+      "failure_mode": "fail-closed（准入类；缺失/空集 → 能力不可用或被拒）",
+      "exported": false
+    },
+    {
+      "id": "gk_mcp_loader.SCOPE_WHITELIST",
+      "kind": "allowlist",
+      "file": "scripts/gk_mcp_loader.py",
+      "symbol": "SCOPE_WHITELIST",
+      "line": 50,
+      "referenced_by": [],
+      "failure_mode": "fail-closed（准入类；缺失/空集 → 能力不可用或被拒）",
+      "exported": false
+    },
+    {
+      "id": "gk_monitor_api.ALLOWED_BASES",
+      "kind": "allowlist",
+      "file": "scripts/gk_monitor_api.py",
+      "symbol": "ALLOWED_BASES",
+      "line": 98,
+      "referenced_by": [
+        "scripts/gk_list_registry.py"
+      ],
+      "failure_mode": "fail-closed（域名投毒 / SSRF 拒绝）",
+      "exported": false
+    },
+    {
+      "id": "gk_node_guard._ROUTES",
+      "kind": "registry",
+      "file": "scripts/gk_node_guard.py",
+      "symbol": "_ROUTES",
+      "line": 54,
+      "referenced_by": [
+        "scripts/_red_attacks.py",
+        "scripts/gk_audit_state.py",
+        "scripts/gk_doc_align.py",
+        "scripts/gk_self_check.py"
+      ],
+      "failure_mode": "registry（登记/状态类；不直接决定放行）",
+      "exported": false
+    },
+    {
+      "id": "gk_node_guard._SAFETY",
+      "kind": "exemption",
+      "file": "scripts/gk_node_guard.py",
+      "symbol": "_SAFETY",
+      "line": 261,
+      "referenced_by": [
+        "scripts/gk_doc_align.py",
+        "scripts/gk_self_check.py"
+      ],
+      "failure_mode": "fail-open（豁免类；命中即跳过对应检查）",
+      "exported": false
+    },
+    {
+      "id": "gk_package_integrity.MONITOR_ROUTES",
+      "kind": "registry",
+      "file": "scripts/gk_package_integrity.py",
+      "symbol": "MONITOR_ROUTES",
+      "line": 174,
+      "referenced_by": [],
+      "failure_mode": "registry（登记/状态类；不直接决定放行）",
+      "exported": false
+    },
+    {
+      "id": "gk_paper_facts.PAPER_FACTS_SKIP",
+      "kind": "exemption",
+      "file": "scripts/gk_paper_facts.py",
+      "symbol": "PAPER_FACTS_SKIP",
+      "line": 46,
+      "referenced_by": [],
+      "failure_mode": "fail-open（豁免类；命中即跳过对应检查）",
+      "exported": true
+    },
+    {
+      "id": "gk_paper_spec.KNOWN_CHECKERS",
+      "kind": "exemption",
+      "file": "scripts/gk_paper_spec.py",
+      "symbol": "KNOWN_CHECKERS",
+      "line": 37,
+      "referenced_by": [],
+      "failure_mode": "fail-open（豁免类；命中即跳过对应检查）",
+      "exported": true
+    },
+    {
+      "id": "gk_phase_probe.KNOWN_STRIDES_BY_FINGERPRINT",
+      "kind": "exemption",
+      "file": "scripts/gk_phase_probe.py",
+      "symbol": "KNOWN_STRIDES_BY_FINGERPRINT",
+      "line": 471,
+      "referenced_by": [],
+      "failure_mode": "fail-open（豁免类；命中即跳过对应检查）",
+      "exported": true
+    },
+    {
+      "id": "gk_plan_lint._SKIP_DIRS",
+      "kind": "exemption",
+      "file": "scripts/gk_plan_lint.py",
+      "symbol": "_SKIP_DIRS",
+      "line": 229,
+      "referenced_by": [
+        "scripts/gk_repo_index.py"
+      ],
+      "failure_mode": "fail-open（豁免类；命中即跳过对应检查）",
+      "exported": false
+    },
+    {
+      "id": "gk_plugin_manifest._DEV_SOURCE_DIRS",
+      "kind": "registry",
+      "file": "scripts/gk_plugin_manifest.py",
+      "symbol": "_DEV_SOURCE_DIRS",
+      "line": 31,
+      "referenced_by": [
+        "scripts/_red_attacks.py",
+        "scripts/gk_bashpy_loader.py",
+        "scripts/gk_swe_rb_loader.py"
+      ],
+      "failure_mode": "registry（登记/状态类；不直接决定放行）",
+      "exported": false
+    },
+    {
+      "id": "gk_public_bridge.REMOTE_ALLOW",
+      "kind": "allowlist",
+      "file": "scripts/gk_public_bridge.py",
+      "symbol": "REMOTE_ALLOW",
+      "line": 46,
+      "referenced_by": [
+        "scripts/gk_list_registry.py"
+      ],
+      "failure_mode": "fail-closed（非白名单远端拒绝推送）",
+      "exported": false
+    },
+    {
+      "id": "gk_red_intel._DENY_EXT",
+      "kind": "denylist",
+      "file": "scripts/gk_red_intel.py",
+      "symbol": "_DENY_EXT",
+      "line": 36,
+      "referenced_by": [],
+      "failure_mode": "fail-closed（拒绝类；缺失 → 危险面失去拦截）",
+      "exported": false
+    },
+    {
+      "id": "gk_repo_index._HIDDEN_SKIP",
+      "kind": "exemption",
+      "file": "scripts/gk_repo_index.py",
+      "symbol": "_HIDDEN_SKIP",
+      "line": 47,
+      "referenced_by": [],
+      "failure_mode": "fail-open（豁免类；命中即跳过对应检查）",
+      "exported": false
+    },
+    {
+      "id": "gk_repo_index._SKIP_DIRS",
+      "kind": "exemption",
+      "file": "scripts/gk_repo_index.py",
+      "symbol": "_SKIP_DIRS",
+      "line": 45,
+      "referenced_by": [
+        "scripts/gk_plan_lint.py"
+      ],
+      "failure_mode": "fail-open（豁免类；命中即跳过对应检查）",
+      "exported": false
+    },
+    {
+      "id": "gk_repo_index._SKIP_EXT",
+      "kind": "exemption",
+      "file": "scripts/gk_repo_index.py",
+      "symbol": "_SKIP_EXT",
+      "line": 46,
+      "referenced_by": [],
+      "failure_mode": "fail-open（豁免类；命中即跳过对应检查）",
+      "exported": false
+    },
+    {
+      "id": "gk_role_regions.ROLE_ALLOWED_REGIONS",
+      "kind": "allowlist",
+      "file": "scripts/gk_role_regions.py",
+      "symbol": "ROLE_ALLOWED_REGIONS",
+      "line": 21,
+      "referenced_by": [
+        "scripts/gk_list_registry.py",
+        "scripts/subagent_runner.py"
+      ],
+      "failure_mode": "fail-closed（未知角色回落 reporter/evidence）",
+      "exported": false
+    },
+    {
+      "id": "gk_route_center.DEV_WORKTREE_ROOTS",
+      "kind": "registry",
+      "file": "scripts/gk_route_center.py",
+      "symbol": "DEV_WORKTREE_ROOTS",
+      "line": 354,
+      "referenced_by": [
+        "scripts/gk_apply_worktree_cli.py",
+        "scripts/gk_doc_align.py",
+        "scripts/gk_host_paths.py",
+        "scripts/gk_list_registry.py",
+        "scripts/gk_session_identity.py"
+      ],
+      "failure_mode": "fail-closed（worktree 目录扫描；空集 → 找不到 worktree）",
+      "exported": false
+    },
+    {
+      "id": "gk_route_center.SEARCH_DIRS",
+      "kind": "registry",
+      "file": "scripts/gk_route_center.py",
+      "symbol": "SEARCH_DIRS",
+      "line": 105,
+      "referenced_by": [
+        "scripts/gk_doc_align.py",
+        "scripts/gk_list_registry.py"
+      ],
+      "failure_mode": "fail-closed（plan 发现金字塔；空集 → 找不到计划）",
+      "exported": false
+    },
+    {
+      "id": "gk_route_center.WORKTREE_ROUTES",
+      "kind": "registry",
+      "file": "scripts/gk_route_center.py",
+      "symbol": "WORKTREE_ROUTES",
+      "line": 369,
+      "referenced_by": [
+        "scripts/gk_list_registry.py",
+        "scripts/gk_worktree_reclaim.py"
+      ],
+      "failure_mode": "fail-closed（route 形态不匹配 → worktree 不可见）",
+      "exported": false
+    },
+    {
+      "id": "gk_sdk_gate_align.ALLOWED_AUDITS",
+      "kind": "allowlist",
+      "file": "scripts/gk_sdk_gate_align.py",
+      "symbol": "ALLOWED_AUDITS",
+      "line": 23,
+      "referenced_by": [],
+      "failure_mode": "fail-closed（准入类；缺失/空集 → 能力不可用或被拒）",
+      "exported": false
+    },
+    {
+      "id": "gk_sdk_gate_align.ALLOWED_TIERS",
+      "kind": "allowlist",
+      "file": "scripts/gk_sdk_gate_align.py",
+      "symbol": "ALLOWED_TIERS",
+      "line": 22,
+      "referenced_by": [],
+      "failure_mode": "fail-closed（准入类；缺失/空集 → 能力不可用或被拒）",
+      "exported": false
+    },
+    {
+      "id": "gk_self_check._EXEMPT8",
+      "kind": "exemption",
+      "file": "scripts/gk_self_check.py",
+      "symbol": "_EXEMPT8",
+      "line": 2128,
+      "referenced_by": [
+        "scripts/gk_list_registry.py"
+      ],
+      "failure_mode": "计数≠8 直接 FAIL（注册表被静默删改即红）",
+      "exported": false
+    },
+    {
+      "id": "gk_self_check._EXEMPT_WG_MARK",
+      "kind": "exemption",
+      "file": "scripts/gk_self_check.py",
+      "symbol": "_EXEMPT_WG_MARK",
+      "line": 2124,
+      "referenced_by": [],
+      "failure_mode": "fail-open（豁免类；命中即跳过对应检查）",
+      "exported": false
+    },
+    {
+      "id": "gk_state_patch._TOP_DENY",
+      "kind": "denylist",
+      "file": "scripts/gk_state_patch.py",
+      "symbol": "_TOP_DENY",
+      "line": 232,
+      "referenced_by": [
+        "scripts/gk_list_registry.py"
+      ],
+      "failure_mode": "fail-closed（顶层键拒写）",
+      "exported": false
+    },
+    {
+      "id": "gk_state_route.DEV_WORKTREE_ROOTS",
+      "kind": "registry",
+      "file": "scripts/gk_state_route.py",
+      "symbol": "DEV_WORKTREE_ROOTS",
+      "line": 66,
+      "referenced_by": [
+        "scripts/gk_apply_worktree_cli.py",
+        "scripts/gk_doc_align.py",
+        "scripts/gk_host_paths.py",
+        "scripts/gk_list_registry.py",
+        "scripts/gk_route_center.py"
+      ],
+      "failure_mode": "fail-closed（state 根扩展；空集 → 只认技能仓默认根）",
+      "exported": false
+    },
+    {
+      "id": "gk_swe_rb_loader._DEV_SOURCE_DIRS",
+      "kind": "registry",
+      "file": "scripts/gk_swe_rb_loader.py",
+      "symbol": "_DEV_SOURCE_DIRS",
+      "line": 34,
+      "referenced_by": [
+        "scripts/_red_attacks.py",
+        "scripts/gk_bashpy_loader.py",
+        "scripts/gk_plugin_manifest.py"
+      ],
+      "failure_mode": "registry（登记/状态类；不直接决定放行）",
+      "exported": false
+    },
+    {
+      "id": "gk_watch.SKIP_DIRS",
+      "kind": "exemption",
+      "file": "scripts/gk_watch.py",
+      "symbol": "SKIP_DIRS",
+      "line": 43,
+      "referenced_by": [],
+      "failure_mode": "fail-open（豁免类；命中即跳过对应检查）",
+      "exported": false
+    },
+    {
+      "id": "gk_worker._SAFE_BUILTINS",
+      "kind": "exemption",
+      "file": "scripts/gk_worker.py",
+      "symbol": "_SAFE_BUILTINS",
+      "line": 83,
+      "referenced_by": [],
+      "failure_mode": "fail-open（豁免类；命中即跳过对应检查）",
+      "exported": false
+    },
+    {
+      "id": "meta-routing-protocol.路由白名单基线",
+      "kind": "baseline",
+      "file": "references/meta-routing-protocol.md",
+      "symbol": "## 路由白名单基线",
+      "line": 142,
+      "referenced_by": [
+        "scripts/gk_doc_align.py",
+        "scripts/gk_list_registry.py"
+      ],
+      "failure_mode": "fail-loud（2026-11-09 起：缺失/空单元格入 WARN）",
+      "exported": false
+    },
+    {
+      "id": "oss-export-whitelist",
+      "kind": "allowlist",
+      "file": "references/oss-export-whitelist.json",
+      "symbol": "<file>",
+      "line": 1,
+      "referenced_by": [
+        "scripts/gk_doc_align.py",
+        "scripts/gk_docgen_facts.py",
+        "scripts/gk_list_registry.py",
+        "scripts/gk_phase_probe.py",
+        "scripts/gk_red_keyleak.py"
+      ],
+      "failure_mode": "fail-open（文件不可读 → 空排除面，不误伤）",
+      "exported": false
+    },
+    {
+      "id": "oss_scrub._WHITELIST_REL",
+      "kind": "allowlist",
+      "file": "scripts/oss_scrub.py",
+      "symbol": "_WHITELIST_REL",
+      "line": 45,
+      "referenced_by": [],
+      "failure_mode": "fail-closed（准入类；缺失/空集 → 能力不可用或被拒）",
+      "exported": true
+    },
+    {
+      "id": "pack_release.EXCLUDE_DIRS",
+      "kind": "registry",
+      "file": "scripts/pack_release.py",
+      "symbol": "EXCLUDE_DIRS",
+      "line": 31,
+      "referenced_by": [
+        "scripts/gk_red_keyleak.py"
+      ],
+      "failure_mode": "registry（登记/状态类；不直接决定放行）",
+      "exported": false
+    },
+    {
+      "id": "pre_tool_hook.MCP_EGRESS_ALLOWLIST",
+      "kind": "allowlist",
+      "file": "scripts/pre_tool_hook.py",
+      "symbol": "MCP_EGRESS_ALLOWLIST",
+      "line": 1029,
+      "referenced_by": [
+        "scripts/gk_list_registry.py"
+      ],
+      "failure_mode": "fail-closed（域外 BLOCK；与 PRIOR_ART_HOSTS 同源）",
+      "exported": false
+    },
+    {
+      "id": "pre_tool_hook._PROMPT_PRONE_HOSTS",
+      "kind": "registry",
+      "file": "scripts/pre_tool_hook.py",
+      "symbol": "_PROMPT_PRONE_HOSTS",
+      "line": 3787,
+      "referenced_by": [],
+      "failure_mode": "registry（登记/状态类；不直接决定放行）",
+      "exported": false
+    },
+    {
+      "id": "pre_tool_hook._SELF_EXEMPT_NAMES",
+      "kind": "exemption",
+      "file": "scripts/pre_tool_hook.py",
+      "symbol": "_SELF_EXEMPT_NAMES",
+      "line": 1619,
+      "referenced_by": [],
+      "failure_mode": "fail-open（豁免类；命中即跳过对应检查）",
+      "exported": false
+    },
+    {
+      "id": "pre_tool_hook._TRUST_ROOT_SCRIPTS",
+      "kind": "exemption",
+      "file": "scripts/pre_tool_hook.py",
+      "symbol": "_TRUST_ROOT_SCRIPTS",
+      "line": 2352,
+      "referenced_by": [
+        "scripts/gk_list_registry.py",
+        "scripts/gk_self_check.py"
+      ],
+      "failure_mode": "fail-open（豁免脚本内容扫描；仅 hook 自指入口）",
+      "exported": false
+    },
+    {
+      "id": "subagent_runner.PROTECTED_REGIONS",
+      "kind": "exemption",
+      "file": "scripts/subagent_runner.py",
+      "symbol": "PROTECTED_REGIONS",
+      "line": 1599,
+      "referenced_by": [],
+      "failure_mode": "fail-open（豁免类；命中即跳过对应检查）",
+      "exported": false
+    },
+    {
+      "id": "subagent_runner.REPO_ROOTS",
+      "kind": "registry",
+      "file": "scripts/subagent_runner.py",
+      "symbol": "REPO_ROOTS",
+      "line": 764,
+      "referenced_by": [
+        "scripts/gk_host_paths.py",
+        "scripts/gk_paper_review.py",
+        "scripts/gk_project_register.py",
+        "scripts/gk_route_center.py"
+      ],
+      "failure_mode": "registry（登记/状态类；不直接决定放行）",
+      "exported": false
+    },
+    {
+      "id": "subagent_runner._PRIOR_ART_HOSTS",
+      "kind": "registry",
+      "file": "scripts/subagent_runner.py",
+      "symbol": "_PRIOR_ART_HOSTS",
+      "line": 1195,
+      "referenced_by": [],
+      "failure_mode": "registry（登记/状态类；不直接决定放行）",
+      "exported": false
+    }
+  ]
+}

@@ -35,7 +35,8 @@ def _reg(tmp_path: Path, obj, name: str = "reg.json") -> str:
 
 
 def _ids(state_path: str) -> list:
-    d = json.loads(Path(state_path).read_text(encoding="utf-8"))
+    import gk_json_utils as gju
+    d = gju.read_state_file(state_path)   # WAL-aware（register 经 update_state 落 WAL）
     return [e["id"] for e in d["gate_data"]["narrow_tasks"]]
 
 

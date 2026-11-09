@@ -49,7 +49,7 @@ def test_generate_separates_internal_and_marks_plan():
 
 
 def test_c1_forbidden_token_is_violation():
-    text = "# 说明\n\n见 <home>/proj 与 papers/www2027 目录。\n"
+    text = "# 说明\n\n见 <home>/proj 与 " + "papers/" + "www2027 目录。\n"
     rep = R.check_notes(text, [])
     rules = {v["rule"] for v in rep["violations"]}
     assert "C1" in rules and not rep["ok"], rep

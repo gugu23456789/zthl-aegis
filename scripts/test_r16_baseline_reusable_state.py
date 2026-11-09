@@ -46,53 +46,14 @@ sys.path.insert(0, str(SCRIPT_DIR))
 STATUS_FN = "_gitnexus_baseline_status"
 ENSURE_FN = "_gitnexus_ensure_baseline"
 
-# ── 夹具：真实样本逐字（来源文件见模块 docstring；行号为样本内相对位置）──
-_IDENTITY = (
-    '索引记录的分析器运行身份: {"schemaVersion":4,"cliVersion":"1.6.12",'
-    '"build":{"kind":"distribution","canonicalization":"gitnexus-analyzer-build-v2"}}\n'
-    '当前分析器运行身份: {"schemaVersion":4,"cliVersion":"1.6.12",'
-    '"build":{"kind":"distribution","canonicalization":"gitnexus-analyzer-build-v2"}}\n'
-)
-
-FRESH = (
-    "\n  GitNexus Status (1.6.12)\n"
-    "仓库: <home>\\.trae\\skills\\spz-gatekeeper-r-sequence\n"
-    "分支: master\n"
-    "索引时间: 2026/9/21 21:57:08\n"
-    "索引提交: 59dfa5b\n"
-    "当前提交: 59dfa5b\n"
-    + _IDENTITY +
-    "索引内容：与覆盖的全部 558 个文件一致\n"
-    "状态: ✅ 已是最新\n"
-)
-
-# ⚠ 本样本**没有** `索引内容` 行 —— 这正是「内容一致、仅 commit 落后」的判据面。
-COMMIT_BEHIND = (
-    "\n  GitNexus Status (1.6.12)\n"
-    "仓库: <home>\\.trae\\skills\\spz-gatekeeper-r-sequence\n"
-    "分支: master\n"
-    "索引时间: 2026/9/21 19:33:28\n"
-    "索引提交: ebcd3f1\n"
-    "当前提交: 59dfa5b\n"
-    + _IDENTITY +
-    "状态: ⚠️ 已过期（重新运行 gitnexus analyze）\n"
-)
-
-CONTENT_DIFF = (
-    "\n  GitNexus Status (1.6.12)\n"
-    "仓库: <home>\\.trae\\skills\\spz-gatekeeper-r-sequence\n"
-    "分支: master\n"
-    "索引时间: 2026/9/21 19:33:28\n"
-    "索引提交: ebcd3f1\n"
-    "当前提交: ebcd3f1\n"
-    + _IDENTITY +
-    "索引内容：2 个已修改，0 个新增，0 个已删除\n"
-    "  已修改: references/subagent-context.json\n"
-    "  已修改: references/subagent-context.json.sig\n"
-    "状态: ⚠️ 已过期（重新运行 gitnexus analyze）\n"
-)
-
-EMPTY = ""  # 探测失败（超时 / 硬崩）⟹ 判 `unavailable`
+# ── 夹具模式（2026-11-01 起 `status --json` 是唯一判据面）────────────────────
+# 原三份中文文本样本已被结构化 JSON 取代（语言无关）。内容差异用 `incompleteReasons`；
+# commit-behind 的 reusable 判据用**真实临时 git 仓**（只改非代码文件 ⟹ diff 计数 0）。
+FRESH = "fresh"
+COMMIT_BEHIND = "commit_behind"
+CONTENT_DIFF = "content_diff"
+EMPTY = "empty"
+NOT_INDEXED = "not_indexed"
 
 
 def _wsl(p) -> str:
@@ -103,6 +64,21 @@ def _wsl(p) -> str:
     return s
 
 
+_RE_BASH_STR = re.compile(r"'[^']*'|\"(?:[^\"\\]|\\.)*\"")
+
+
+def _brace_delta(line: str) -> int:
+    """行内花括号净增量 —— 先剥离引号字符串与注释再计数。
+
+    原实现直接 `line.count("{") - line.count("}")` 被字面量击穿：函数体内的
+    `if not line.startswith("{"):`（解析 status --json 时跳过 banner 行）使 depth
+    恒 +1 ⟹ 抽取越过文件尾。本文件与 `test_r16_status_consumers._brace_delta` 同判据。
+    """
+    s = _RE_BASH_STR.sub("", line)
+    s = s.split("#", 1)[0]
+    return s.count("{") - s.count("}")
+
+
 def _extract_function(src: str, name: str) -> str:
     """按花括号配对抽取 `name() { ... }` 全文；找不到 → AssertionError（= 修前形态即红）。"""
     lines = src.splitlines()
@@ -110,18 +86,55 @@ def _extract_function(src: str, name: str) -> str:
     assert start is not None, f"{name} 未定义"
     depth = 0
     for i in range(start, len(lines)):
-        depth += lines[i].count("{") - lines[i].count("}")
+        depth += _brace_delta(lines[i])
         if depth == 0:
             return "\n".join(lines[start:i + 1])
     raise AssertionError(f"{name} 花括号不配对（抽取失败）")
 
 
-def _probe_status(tmp_path: Path, status_text: str) -> str:
-    """抽取真 `_gitnexus_baseline_status` 体 + 桩 `_run_gitnexus` 回放样本 → 返回三态之一。"""
+def _probe_status(tmp_path: Path, mode: str) -> str:
+    """建真实临时 git 仓 + JSON status 样本，驱动真 `_gitnexus_baseline_status`。
+
+    · fresh      → index/current 同提交；
+    · commit_behind → index 落后 c1、current=c2，且 c1→c2 只改非代码文件 ⟹ diff 计数 0；
+    · content_diff  → `incompleteReasons` 非空 ⟹ stale；
+    · empty      → 探测器无输出 ⟹ unavailable。
+    """
     tmp_path.mkdir(parents=True, exist_ok=True)
-    body = _extract_function(CLI.read_text(encoding="utf-8"), STATUS_FN)
+    repo = tmp_path / "repo"
+    repo.mkdir(exist_ok=True)
+
+    def g(*a):
+        return subprocess.run(["git", "-C", str(repo), *a], capture_output=True,
+                              text=True, check=True).stdout.strip()
+
+    g("init", "-q")
+    g("config", "user.email", "t@t")
+    g("config", "user.name", "t")
+    (repo / "a.py").write_text("print(1)\n", encoding="utf-8")
+    g("add", "a.py")
+    g("commit", "-qm", "c1")
+    c1 = g("rev-parse", "HEAD")
+    (repo / "README.md").write_text("doc\n", encoding="utf-8")
+    g("add", "README.md")
+    g("commit", "-qm", "c2")
+    c2 = g("rev-parse", "HEAD")
+
+    text = ""
+    if mode == FRESH:
+        text = json.dumps({"index": {"commit": c2, "incompleteReasons": []},
+                           "current": {"commit": c2}})
+    elif mode == COMMIT_BEHIND:
+        text = json.dumps({"index": {"commit": c1, "incompleteReasons": []},
+                           "current": {"commit": c2}})
+    elif mode == CONTENT_DIFF:
+        text = json.dumps({"index": {"commit": c1,
+                                     "incompleteReasons": ["content mismatch"]},
+                           "current": {"commit": c1}})
+    elif mode == NOT_INDEXED:
+        text = json.dumps({"error": "not-indexed"})
     w = _wsl(tmp_path)
-    (tmp_path / "status.txt").write_text(status_text, encoding="utf-8")
+    (tmp_path / "status.txt").write_text(text, encoding="utf-8")
     h = tmp_path / "probe.sh"
     h.write_text("\n".join([
         "#!/usr/bin/env bash",
@@ -130,7 +143,7 @@ def _probe_status(tmp_path: Path, status_text: str) -> str:
         ': > "$GK_DBG_LOG"',
         "_run_gitnexus() { cat \"%s/status.txt\"; }" % w,
         "",
-        body,
+        _extract_function(CLI.read_text(encoding="utf-8"), STATUS_FN),
         "",
         'printf "OUT=%%s\\n" "$(%s "%s/repo")"' % (STATUS_FN, w),
     ]), encoding="utf-8", newline="\n")
@@ -196,30 +209,24 @@ def test_arm1_commit_behind_only_yields_reusable(tmp_path):
 
 
 def test_arm1b_content_count_edge_cases(tmp_path):
-    """[RED] 内容计数边界 + 无索引对照：全零 → `reusable`；非零 → `stale`；无索引 → `stale`。
+    """[RED] 内容计数边界 + 无索引对照：commit-behind → `reusable`；有 incompleteReasons → `stale`；
+    无索引 → `unavailable`（**不得**进 reusable）。
 
     ① 全零计数是**落刀前预检实测抓到的坑**（已留痕）：内容差异判据若用**全角括号分组**
     `（a|b）`，分组退化为字面/歧义 ⟹ `0 个已修改，0 个新增，0 个已删除`（= 内容一致）
     被误判 `stale`（逐支打印实证：`DIFF_ZERO hits: P3`）。故判据改写为**三条显式并列**，
-    本臂即该修正的钉子。
-    ②【对照行】无索引（`Repository not indexed`）**不得**进 `reusable` —— 无索引就没有
+    本臂即该修正的钉子。2026-11-01 起 status 判据走 JSON（`incompleteReasons`）。
+    ②【对照行】无索引（`not-indexed`）**不得**进 `reusable` —— 无索引就没有
     "内容一致"可言（R3）；同表断言，红先义务由①承担。
     """
-    all_zero = (
-        "索引提交: ebcd3f1\n"
-        "当前提交: 59dfa5b\n"
-        "索引内容：0 个已修改，0 个新增，0 个已删除\n"
-        "状态: ⚠️ 已过期（重新运行 gitnexus analyze）\n"
-    )
-    got = _probe_status(tmp_path, all_zero)
-    assert got == "reusable", f"全零计数 = 内容一致，应判 reusable，实得 {got!r}"
+    got = _probe_status(tmp_path, COMMIT_BEHIND)
+    assert got == "reusable", f"commit-behind+内容一致，应判 reusable，实得 {got!r}"
 
     diff = _probe_status(tmp_path / "b", CONTENT_DIFF)
-    assert diff == "stale", f"非零计数必须 stale（不得被新态吞并），实得 {diff!r}"
+    assert diff == "stale", f"有 incompleteReasons 必须 stale（不得被新态吞并），实得 {diff!r}"
 
-    not_indexed = "Repository not indexed. Run: gitnexus analyze\n"
-    ni = _probe_status(tmp_path / "c", not_indexed)
-    assert ni == "stale", f"无索引不得进 reusable（R3 对照行），实得 {ni!r}"
+    ni = _probe_status(tmp_path / "c", NOT_INDEXED)
+    assert ni == "unavailable", f"无索引不得进 reusable（R3 对照行），实得 {ni!r}"
 
 
 # ── 臂 2 ──────────────────────────────────────────────────────────────────────

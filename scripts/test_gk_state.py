@@ -27,7 +27,7 @@ class TestReadState:
         """Normal read returns state dict."""
         result = _read_state(tmp_state)
         assert "r_phase" in result
-        assert result["r_phase"] == "ECO-SCAN"
+        assert result["r_phase"] == "ECO-RESEARCH"
         assert "_checksum_warning" not in result
     
     def test_happy_path_with_checksum(self, tmp_state_with_checksum):

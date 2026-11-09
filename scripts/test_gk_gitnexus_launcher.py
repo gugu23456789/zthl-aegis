@@ -366,3 +366,34 @@ def test_non_analyze_subcommand_does_not_set_device(monkeypatch):
     monkeypatch.delenv("GITNEXUS_EMBEDDING_DEVICE", raising=False)
     env = gx._build_env("status")
     assert "GITNEXUS_EMBEDDING_DEVICE" not in env
+
+def test_residual_evidence_detects_store_artifacts(tmp_path, monkeypatch):
+    """store 侧残态判据：lbug.wal / dirty-recovery 命中 ⟹ residual=True（不看 stderr）。"""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    store_root = tmp_path / "store"
+    store = store_root / "repo-hash"
+    store.mkdir(parents=True)
+    (store / "meta.json").write_text(json.dumps({"repoPath": str(repo)}), encoding="utf-8")
+    (store / "lbug.wal").write_text("x", encoding="utf-8")
+    (store / "lbug.wal.dirty-recovery").write_text("x", encoding="utf-8")
+    monkeypatch.setenv("GITNEXUS_STORAGE_ROOT", str(store_root))
+    r = gx.residual_evidence(str(repo))
+    assert r["residual"] is True, r
+    assert "lbug.wal" in r["artifacts"] and "lbug.wal.dirty-recovery" in r["artifacts"], r
+    assert r["store"] == str(store), r
+
+
+def test_residual_evidence_clean_store(tmp_path, monkeypatch):
+    """健康索引（仅 meta，无 wal/dirty/meta 残态键）⟹ residual=False（零额外代价）。"""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    store_root = tmp_path / "store"
+    store = store_root / "repo-hash"
+    store.mkdir(parents=True)
+    (store / "meta.json").write_text(json.dumps({"repoPath": str(repo)}), encoding="utf-8")
+    monkeypatch.setenv("GITNEXUS_STORAGE_ROOT", str(store_root))
+    r = gx.residual_evidence(str(repo))
+    assert r["residual"] is False, r
+    assert r["artifacts"] == [], r
+

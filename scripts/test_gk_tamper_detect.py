@@ -28,14 +28,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import gk_doc_align as gda
 import gk_route_center as grc
 
-# XENV-FORM（2026-09-27，环境性 failed 清单）：字面 Windows 路径在规范 runner（WSL 侧
-# 隔离 venv）下不可达 ⟹ `git clone`/`copytree` 必败（实测 clone exit 128，本文件
-# 11 臂红/错）。改为**宿主自适应**（真目录在 `/mnt/c/…`；Windows 宿主原样命中）。
-REAL = Path(r"c:\Users\HP\.trae\skills\spz-gatekeeper-r-sequence")
-if not REAL.is_dir():
-    _mnt = Path("<home>/.trae/skills/spz-gatekeeper-r-sequence")
-    if _mnt.is_dir():
-        REAL = _mnt
+# XENV-FORM（2026-09-27，环境性 failed 清单）：被测树 = 本测试所在仓（worktree 内运行时
+# 复制 worktree 自身，而非硬编码主树 —— 否则 worktree 的修复对该臂不可见）。
+REAL = Path(__file__).resolve().parent.parent
 SCRIPT_DIR = Path(__file__).resolve().parent
 
 

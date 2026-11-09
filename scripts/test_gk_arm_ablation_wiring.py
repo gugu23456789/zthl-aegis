@@ -28,6 +28,7 @@ import gk_moa_aggregate as M  # noqa: E402
 import gk_moa_judge  # noqa: E402
 
 CLI = SCRIPT_DIR.parent / "gatekeeper-cli.sh"
+PAYLOAD = SCRIPT_DIR / "gk_monitor_payload.py"
 PLAN = "/p/docs/plans/x-plan.md"
 
 
@@ -73,11 +74,8 @@ def test_arm_observables_cache_from_usage():
 # ── 2) 派发写入（真跑 CLI 落库载荷）────────────────────────────────────────
 
 def _hist_region() -> str:
-    """落库段：`GK_HMAC_VALID=` 锚 → python -c 收尾行（列 0 的 `"`）末。"""
-    txt = CLI.read_text(encoding="utf-8")
-    i = txt.index("GK_HMAC_VALID=")
-    j = txt.index('\n"', i) + 1
-    return txt[i:txt.index("\n", j + 1)]
+    """落库载荷：2026-11-04 起由 `gatekeeper-cli.sh` 内联块**逐字下沉**到脚本式模块。"""
+    return PAYLOAD.read_text(encoding="utf-8")
 
 
 def _ecc(task):
@@ -87,23 +85,16 @@ def _ecc(task):
 
 
 def _run_payload(tmp_path, ecc, extra_env=None):
-    """抽取落库载荷、代入状态/技能路径、喂合成 ECC 真跑，返回写后的 state（复用 §18.1 手法）。"""
-    txt = CLI.read_text(encoding="utf-8")
-    i = txt.index("GK_HMAC_VALID=")
-    src = txt[i:txt.index('\n"', i) + 1]
-    body = src.split('python3 -c "', 1)[1]
-    sd = str(CLI.parent).replace("\\", "/")
+    """真跑下沉后的落库载荷模块（stdin = ECC JSON），返回写后的 state。"""
     state = tmp_path / ".gatekeeper.state"
     state.write_text('{"gate_data":{}}', encoding="utf-8")
     out = tmp_path / "sub-1.json"
     out.write_text(json.dumps(ecc, ensure_ascii=False), encoding="utf-8")
-    body = (body.replace("$SKILL_DIR", sd)
-                .replace("$STATE_FILE", str(state).replace("\\", "/"))
-                .replace("$GK_DBG_LOG", str(tmp_path / "dbg.log").replace("\\", "/")))
     env = dict(os.environ, GK_TASK=ecc.get("task", ""), GK_HMAC_VALID="skip",
-               GK_OUTPUT_FILE=str(out), GK_REPORT_FILE=str(tmp_path / "sub-1.md"))
+               GK_OUTPUT_FILE=str(out), GK_REPORT_FILE=str(tmp_path / "sub-1.md"),
+               GK_PY_SCRIPTS=str(SCRIPT_DIR), GK_PY_STATE=str(state))
     env.update(extra_env or {})
-    r = subprocess.run([sys.executable, "-c", body], input=json.dumps(ecc),
+    r = subprocess.run([sys.executable, str(PAYLOAD)], input=json.dumps(ecc),
                        capture_output=True, text=True, env=env, timeout=90)
     assert r.returncode == 0, (r.returncode, r.stdout[-800:], r.stderr[-800:])
     return json.loads(state.read_text(encoding="utf-8"))

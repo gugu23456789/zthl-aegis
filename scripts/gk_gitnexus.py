@@ -581,6 +581,64 @@ def _last_code_commit_ts(repo_dir: str) -> float:
         return 0.0
 
 
+def _chosen_meta(repo_dir: str):
+    """选出与 `repo_dir` 归属一致的 `meta.json` 及其目录（外置存储根优先，其次仓内）。
+
+    单源：`fast_status` 与 `residual_evidence` 共用本函数 ⟹ 不得各自再写一份
+    「meta 候选 + repoPath 比对」逻辑（防 A1 类双实现漂移）。
+    → `(meta_path, meta_dict)`；未命中 ⟹ `(None, None)`。
+    """
+    repo_abs = os.path.realpath(repo_dir)
+    for c in _meta_candidates(repo_dir):
+        try:
+            if not c.is_file():
+                continue
+            d = json.loads(c.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        rp = str(d.get("repoPath") or "")
+        if rp:
+            try:
+                same = os.path.realpath(_to_wsl(rp)) == repo_abs
+            except Exception:
+                same = False
+            if not same:
+                continue
+        return c, d
+    return None, None
+
+
+def residual_evidence(repo_dir: str) -> dict:
+    """索引目录的**残态证据**（不 spawn、只读文件）。
+
+    动机（2026-11-09 实测）：`_gx_analyze_embeddings` 原只按 analyze 的 **stderr 文本**
+    判残态 ⟹ 实测 store 已留下 `lbug.wal` + `lbug.wal.dirty-recovery`（中断 analyze 的
+    标准残态），但 stderr 无关键词 ⟹ 守卫误判「无残态」并拒绝 `--drop-embeddings`
+    ⟹ 基线永久 `stale`。本函数把判据扩到**索引目录自身**（与 stderr 并集）。
+
+    判据（任一命中 ⟹ residual）：
+      · `lbug.wal` 存在（正常收尾应 checkpoint 后消失）
+      · `lbug.wal.dirty-recovery` 存在（analyze 被中断）
+      · `meta.json` 的 `incrementalInProgress` / `embeddingCheckpoint` 非空
+        （老版本 gitnexus 把残态记在 meta；新版本落 sidecar，故两处都看）
+    ⚠ **不**把 `incompleteReasons` 计入：它只表示「需要重建」，首试 analyze 可自愈，
+       计进来会把普通 stale 误判成残态 ⟹ 白付 40min 级全量重嵌（违背 owner 裁定）。
+    """
+    meta, d = _chosen_meta(repo_dir)
+    if meta is None:
+        return {"ok": True, "residual": False, "store": "", "artifacts": [],
+                "reason": "store_not_found"}
+    store = meta.parent
+    arts = []
+    for name in ("lbug.wal", "lbug.wal.dirty-recovery"):
+        if (store / name).exists():
+            arts.append(name)
+    for key in ("incrementalInProgress", "embeddingCheckpoint"):
+        if d.get(key):
+            arts.append("meta:" + key)
+    return {"ok": True, "residual": bool(arts), "store": str(store), "artifacts": arts}
+
+
 def fast_status(repo_dir: str) -> str:
     """**零 spawn** 的新鲜度判定（→ current|reusable|stale|unavailable）。
 
@@ -598,25 +656,7 @@ def fast_status(repo_dir: str) -> str:
         return "unavailable"
     if not head:
         return "unavailable"
-    repo_abs = os.path.realpath(repo_dir)
-    chosen = None
-    for c in _meta_candidates(repo_dir):
-        try:
-            if not c.is_file():
-                continue
-            d = json.loads(c.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            continue
-        rp = str(d.get("repoPath") or "")
-        if rp:
-            try:
-                same = os.path.realpath(_to_wsl(rp)) == repo_abs
-            except Exception:
-                same = False
-            if not same:
-                continue
-        chosen = d
-        break
+    _meta, chosen = _chosen_meta(repo_dir)
     if chosen is None:
         return "unavailable"
     if chosen.get("incompleteReasons"):
@@ -960,6 +1000,15 @@ def main(argv=None) -> int:
                 cwd = rest[i + 1]
         print(fast_status(cwd or os.getcwd()))
         return 0
+    if av[0] == "residual-evidence":
+        cwd = ""
+        rest = av[1:]
+        for i, a in enumerate(rest):
+            if a == "--cwd" and i + 1 < len(rest):
+                cwd = rest[i + 1]
+        r = residual_evidence(cwd or os.getcwd())
+        print(json.dumps(r, ensure_ascii=False))
+        return 0 if r.get("residual") else 3
     if av[0] == "prune":
         # 手动维护入口：`gk_gitnexus.py prune [--max-gb N] [--ttl-days D] [--dry-run]`
         _opt = {"max_gb": None, "ttl_days": None, "dry": False}

@@ -1,11 +1,12 @@
 {
   "_comment": "红先测试模版登记表（单一事实源）。2026-09-23 用户裁定「扩展红先测试模版」。本表只登记**形态**（怎么写出一个会红的臂），不登记**具体断言**——具体断言由 family 的 test_first/verify_cmd/anchor 填入。消费方 = scripts/gk_red_arm_gen.py（**唯一实现**，禁第二份模版名清单）；漂移由 gk_doc_align.py 的 red_arm_templates 检查项守护。",
   "_source": "本表 5 个形态全部取自 2026-09-23 本会话**实际写出并跑到红**的臂（非设想）：A/B/C/C1/C3 落刀时的臂。",
-  "version": 1,
+  "version": 2,
   "placeholders_common": ["{target}", "{anchor}", "{expected}", "{verify_cmd}"],
   "templates": [
     {
       "id": "source-absence",
+      "keywords": ["源码缺席", "缺席", "must_have", "must_absent", "函数体", "结构变更", "source-absence"],
       "desc": "源码形态缺席臂：断言「落刀后必须存在的串」在**函数体**内存在／「必须消失的串」不存在。配『HEAD 计数』对照行 ⟹ 落刀前必红。",
       "when": "改动是**源码结构**变更（新增分支/撤掉裸调用/改接线）时",
       "placeholders": ["{target}", "{func}", "{must_have}", "{must_absent}", "{head_count_cmd}"],
@@ -13,6 +14,7 @@
     },
     {
       "id": "func-boundary-slice",
+      "keywords": ["函数边界", "切片", "函数体", "长度解耦", "boundary-slice"],
       "desc": "函数边界切片辅助：从 `<fn>() {` 切到下一个**列 0** 的 `}`（bash）或 `\\ndef `（python）。根治「固定字符窗口」随函数增长而假红。",
       "when": "臂的判据面是「某函数体内的一条串」时（与函数长度必须解耦）",
       "placeholders": ["{func}"],
@@ -20,6 +22,7 @@
     },
     {
       "id": "api-absent",
+      "keywords": ["API 缺席", "模块不存在", "import", "新增函数", "新增子命令", "api-absent"],
       "desc": "API 缺席臂：单测直接调「尚未存在的函数/子命令」⟹ AttributeError / rc≠0 ⟹ 落刀前必红。",
       "when": "新增 python 函数或 CLI 子命令时（最廉价的红先）",
       "placeholders": ["{module}", "{symbol}", "{call_args}"],
@@ -27,6 +30,7 @@
     },
     {
       "id": "fail-loud-rc",
+      "keywords": ["fail-loud", "非零退出", "退出码", "rc", "拒绝", "报错"],
       "desc": "功能臂（真跑 CLI）：断言 rc 与关键串。用于「超限/非法输入必须 fail-loud」一类判据。",
       "when": "判据是**行为**（退出码 + 可读错误）而非源码形态时",
       "placeholders": ["{cli}", "{argv}", "{expect_rc}", "{expect_substr}"],
@@ -34,6 +38,7 @@
     },
     {
       "id": "negative-arm",
+      "keywords": ["负臂", "负样本", "反例", "不得", "越界", "negative-arm"],
       "desc": "负臂：断言**禁令成立**（不得越界/不得下放/不得重复计费）。防「实现顺手扩大授权面」。",
       "when": "任何安全/边界落刀都必须配一条——只测正臂等于没测边界",
       "placeholders": ["{target}", "{forbidden}", "{why}"],
@@ -41,6 +46,7 @@
     },
     {
       "id": "guard-rejects-key",
+      "keywords": ["拒键", "写面", "禁止键", "set-top", "set-nested", "guard-rejects"],
       "desc": "写面拒键臂（2026-10-04 扩 §19.7 host-3）：向某**写面**（如 `set-nested`/`append-list`）投递**禁键** ⟹ 断言 fail-loud（`ok is False` + 文案含关键词）；**必配负臂**：合规键（如同级索引键）**须仍放行**，防判据退化成「全禁」。",
       "when": "落刀是「某写面**不得**接受某些键」时（授权面 / 写面白名单收口）",
       "placeholders": ["{write_fn}", "{forbidden_key}", "{allowed_key}", "{kw}"],
@@ -48,6 +54,7 @@
     },
     {
       "id": "audit-flags-combination",
+      "keywords": ["审计", "旗标", "组合", "参数组合", "flags", "audit"],
       "desc": "审计组合旗标臂（2026-10-04 扩 §18.2 判据 9）：向**只读审计**投递「违规**字段组合**」的台账 ⟹ 断言 `FAIL` + detail 含旗标词；**必配** escape 标签臂（合法出口 → 放行）与零回归臂（不相关组合 / 未终态 → 不误伤）。",
       "when": "落刀是「某字段组合须被判违规」时（如『终态 + 无据 + 非显式标签』＝洗白形状）",
       "placeholders": ["{audit_fn}", "{bad_entry}", "{escape_entry}", "{flag}"],
@@ -55,6 +62,7 @@
     },
     {
       "id": "contract-impl-set-equality",
+      "keywords": ["契约", "实现", "集合等价", "两侧", "set-equality", "一致"],
       "desc": "契约↔实现集合等价臂（2026-10-04 扩 §2.3 P0）：正本含**枚举契约**（rc 表 / 状态集合 / 命令集合）时，臂须断言「契约宣告集合 == 实现产者集合」（**集合相等**，非『表存在』『实现含 N 处』）。反模式 = 只测一侧 ⟹ 漏掉任一产者即假绿（本批 rc=3 四产者无表行无臂即此类）。",
       "when": "落刀面是「某张枚举表须与实现**逐项等价**」时（rc 表 / 允许集 / 命令注册表）",
       "placeholders": ["{contract_seg_fn}", "{src_fn}", "{declared_re}", "{produced_re}"],
@@ -62,6 +70,7 @@
     },
     {
       "id": "fixture-truth-behavior",
+      "keywords": ["夹具", "真值", "真实 git", "负样本", "fixture", "行为臂"],
       "desc": "夹具真值行为臂（2026-10-04 扩 §3-T2 P0）：计划声称「某判据已落刀」时，臂须**真跑**被测入口（真 git 夹具 + **构造先验**期望值，禁回读被测输出），并配 **≥2 必失败负样本** 与 **元判据**（对夹具施加已知篡改 ⟹ 期望断言必须失败；若仍绿 = 判据同源恒过 = 判据本身不合格）。反模式 = 静态串断言（『含某串』/『函数存在』）冒充行为臂。",
       "when": "计划/文书声称某**行为**判据「已落刀」，而现有臂只是静态串断言时",
       "placeholders": ["{target}", "{env_fn}", "{run_fn}", "{prior}", "{negative1}", "{tamper}"],
@@ -69,6 +78,7 @@
     },
     {
       "id": "gate-load-bearing",
+      "keywords": ["空转", "闸机", "承重", "load-bearing", "无效闸", "gate"],
       "desc": "空转闸机臂（2026-10-04 扩 `BLUE-FAT-FISH-IDLE-GATE` / `ECC-2C7BEBA09A84`）：对**已知违规输入**真跑被测闸门，断言判决**可判定且命中该违规**（detail 含旗标词），并对**合规输入**断言相反判决 ⟹ 好/坏两输入判决**必须不同**。治「真·空转」三类：① 硬编码假证据（判决恒定 ⟹ 差异臂红）；② 检测器正则恒不触发（坏样本不命中 ⟹ 正控臂红）；③ 检查器未接线（判据在源码却不可达 ⟹ 接线臂红）。",
       "when": "落刀是「新增或修改一个**闸门 / 检查器 / 检测器**」时（防纸老虎：判据在源码、却结构性不可达 / 未接线 / 被魔法串旁路）",
       "placeholders": ["{gate_fn}", "{bad_input}", "{good_input}", "{flag}", "{gate_name}", "{agg_fn}"],
@@ -76,6 +86,7 @@
     },
     {
       "id": "timeout-arm",
+      "keywords": ["超时", "timeout", "墙钟", "挂起", "阻塞", "具名错误"],
       "desc": "超时臂（2026-10-29）：用**替身命令**（sleep）注入被测 runner 的可配置入口，断言①有限时间内返回、②报**具名**超时错误、③不再无界阻塞。治「子进程调用点无 timeout ⟹ 挂了也不知道」（实测：`moa-aggregate --chain --from-plan` 派发无界阻塞，外层只见空回执）。",
       "when": "新增/修改任何**外部命令或子进程**调用点（`subprocess` / `bash <cli>` / 网络派发）时",
       "placeholders": ["{target}", "{runner_fn}", "{stub_env}", "{expect_error}", "{max_s}"],
@@ -83,16 +94,82 @@
     },
     {
       "id": "single-source-wiring",
+      "keywords": ["单源", "接线", "wiring", "单一事实源", "重复实现", "收敛"],
       "desc": "单源接线臂（2026-10-29）：静态断言两个消费者都**真的引用**共享实现（如 `adaptive_workers`），且旧的各自计算标记已消失。治「docstring 声称一律挂单源，实际各算各的」（实测：`gk_hub_scheduler` 声称 accept/redfirst 均挂，两个 `.sh` 却各自 `nproc×2`）。",
       "when": "把某策略/常数从多处自算**收敛到单一源**时（含只改文档承诺、未接线的情形）",
       "placeholders": ["{target}", "{consumer_a}", "{consumer_b}", "{shared_symbol}", "{old_marker}"],
       "body": "def test_{target}_uses_single_source():\n    for name in (\"{consumer_a}\", \"{consumer_b}\"):\n        txt = (SCRIPT_DIR / name).read_text(encoding=\"utf-8\")\n        assert \"{shared_symbol}\" in txt, \"%s 未接单一源\" % name\n        assert \"{old_marker}\" not in txt, \"%s 仍有旧的自算路径\" % name"
+    },
+    {
+      "id": "fail-open-to-fail-loud",
+      "keywords": ["fail-open", "fail-loud", "静默", "缺失", "基线", "单元格", "不可核对", "loud", "WARN"],
+      "desc": "fail-open → fail-loud 臂（2026-11-09）：输入/基线/章节/单元格缺失或为空时，检查器必须给 WARN/FAIL 并写明原因，不得静默 PASS。取自 ⑦ 路由白名单基线：v0.9.4 删掉章节后检查假绿约一周。",
+      "when": "把「不可核对」通道改成 fail-loud（meta / 基线章节 / 表格单元格 / 常量缺失）时",
+      "placeholders": ["{target}", "{checker}", "{missing_input}", "{expected_status}"],
+      "body": "def test_{target}_missing_{missing_input}_is_loud(tmp_path):\n    tree = _tree(tmp_path, {missing_input}=None)\n    r = {checker}(str(tree))\n    assert r[\"status\"] == \"{expected_status}\", r\n    assert \"{missing_input}\" in r[\"detail\"], \"不可核对必须写明原因\""
+    },
+    {
+      "id": "generated-artifact-sync",
+      "keywords": ["生成", "generated", "--check", "漂移", "drift", "登记表", "registry", "自动生成", "同步"],
+      "desc": "生成物同步臂（2026-11-09）：登记表/文档由生成器产出时，① `--check` 必须与源码同步；② 篡改源后 `--check` 必须非零。手写登记表会漂移成第二份白名单，故只守生成物。",
+      "when": "新增自动生成器 / 登记表 / 文档快照，需要防「源改了生成物没改」时",
+      "placeholders": ["{target}", "{gen}", "{tamper_file}"],
+      "body": "def test_{target}_artifact_in_sync():\n    r = _run([sys.executable, \"{gen}\", \"--check\"])\n    assert r.returncode == 0, r.stdout + r.stderr\n\n\ndef test_{target}_drift_is_red(tmp_path):\n    tree = _copy_tree(tmp_path)\n    _tamper(tree / \"{tamper_file}\")\n    r = _run([sys.executable, str(tree / \"{gen}\"), \"--root\", str(tree), \"--check\"])\n    assert r.returncode != 0, \"篡改源后生成物未漂移（假绿）\""
+    },
+    {
+      "id": "required-subset-registry",
+      "keywords": ["高风险", "required", "子集", "subset", "删除", "静默移除", "登记项"],
+      "desc": "高风险子集保留臂（2026-11-09）：登记表可增不可静默删——硬钉一组高风险 id，缺任一即红。防「优化时顺手删掉关键白名单条目」。",
+      "when": "登记表/清单表新增或重构，需要防关键条目被静默移除时",
+      "placeholders": ["{target}", "{registry}", "{required_id}"],
+      "body": "def test_{target}_keeps_{required_id}():\n    d = json.loads(Path(\"{registry}\").read_text(encoding=\"utf-8\"))\n    ids = {e[\"id\"] for e in d[\"entries\"]}\n    assert \"{required_id}\" in ids, \"高风险登记项被静默移除\""
+    },
+    {
+      "id": "cross-copy-equality",
+      "keywords": ["双副本", "cross-copy", "两份", "副本", "一致", "差分", "单边"],
+      "desc": "双副本一致臂（2026-11-09）：同一常量/白名单在两处代码副本必须逐值相等；单副本被篡改时差分即红。取自 DEV_WORKTREE_ROOTS 双副本与 ⑦ 的 ⑤ 检查。",
+      "when": "同一白名单/常量存在两份代码副本（历史拆分 / 运行时镜像）时",
+      "placeholders": ["{target}", "{const}", "{copy_a}", "{copy_b}"],
+      "body": "def test_{target}_{const}_copies_equal():\n    a = _const_values(\"{copy_a}\", \"{const}\")\n    b = _const_values(\"{copy_b}\", \"{const}\")\n    assert a and b, \"双副本必须都可解析（空集不得冒充一致）\"\n    assert a == b, \"单副本篡改: %s vs %s\" % (sorted(a), sorted(b))"
+    },
+    {
+      "id": "consumer-wiring",
+      "keywords": ["消费方", "consumer", "referenced_by", "接线", "wiring", "无人调用", "建表"],
+      "desc": "消费方接线臂（2026-11-09）：登记表每条必须有生产消费方（源文件真引用该符号），防「建表即绿、无人调用」。这是 single-source-wiring 的登记表侧对偶。",
+      "when": "新增登记表 / 白名单 / 配置常量，需要证明它真的被生产代码消费时",
+      "placeholders": ["{target}", "{symbol}", "{consumer}"],
+      "body": "def test_{target}_{symbol}_has_consumer():\n    src = Path(\"{consumer}\").read_text(encoding=\"utf-8\")\n    assert \"{symbol}\" in src, \"登记项无生产消费方（建表即绿）\""
+    },
+    {
+      "id": "empty-vs-missing-loud",
+      "keywords": ["空值", "empty", "缺失", "missing", "单元格", "不可核对"],
+      "desc": "空值与缺失双 loud 臂（2026-11-09）：不可核对有两种形态——键不存在、键存在但为空；两形态都必须非 PASS。只测一种会把另一种留成 fail-open。",
+      "when": "检查器对「缺失」已 loud，但尚未证明「空值」也 loud（或反之）时",
+      "placeholders": ["{target}", "{checker}", "{key}"],
+      "body": "def test_{target}_{key}_empty_and_missing_are_loud(tmp_path):\n    for broken in (\"missing\", \"empty\"):\n        tree = _tree(tmp_path, {key}=broken)\n        r = {checker}(str(tree))\n        assert r[\"status\"] != \"PASS\", broken + \": 不可核对不得 PASS\""
+    },
+    {
+      "id": "snapshot-pollution-guard",
+      "keywords": ["基线", "baseline", "快照", "snapshot", "污染", "tmp", "临时", "测试产物"],
+      "desc": "快照污染臂（2026-11-09）：基线快照不得含测试临时路径/测试产物名。实测 `_accept_baseline.txt` 被 snapshot 测试写成一条 `.../Temp/pytest-of-*/test_zz_fail.py`，基线从此失去对照意义。",
+      "when": "基线/快照由测试或 `--snapshot` 重建之后（防临时产物入库）",
+      "placeholders": ["{baseline}", "{forbidden}"],
+      "body": "def test_snapshot_{baseline}_has_no_test_artifacts():\n    text = Path(\"{baseline}\").read_text(encoding=\"utf-8\")\n    assert \"{forbidden}\" not in text, \"基线快照被测试产物污染（tmp 路径不得入库）\""
+    },
+    {
+      "id": "tamper-flip-detector",
+      "keywords": ["篡改", "tamper", "检测器", "detector", "翻红", "变异", "mutation"],
+      "desc": "篡改翻红臂（2026-11-09）：在隔离副本上篡改被保护对象，断言检测器状态非 PASS。正臂证明「正常时绿」，本臂证明「被篡改时红」——只测前者等于没测检测器。",
+      "when": "新增/修改检测器、白名单校验、基线比对器时",
+      "placeholders": ["{target}", "{detector}", "{tamper_file}", "{marker}"],
+      "body": "def test_{target}_tamper_flips_{marker}(tmp_path):\n    tree = _copy_tree(tmp_path)\n    _tamper(tree / \"{tamper_file}\", \"{marker}\")\n    r = {detector}(str(tree))\n    assert r[\"status\"] != \"PASS\", \"篡改未被检出（检测器漏检）\""
     }
   ],
   "_templates_extended_20261029": "新增 timeout-arm（超时臂）与 single-source-wiring（单源接线臂）两形态 —— 取自 2026-10-29 本会话 `test_gk_moa_chain_from_plan.py`（派发超时/具名错误）与 `test_gk_accept_cli.py`（adaptive_workers 单源接线）**实际写出并跑绿**的臂；如实标注：timeout 臂是落刀后补写（非严格红先），single-source 臂为静态机检臂。",
   "_templates_extended_20261004": "新增 guard-rejects-key（写面拒键臂）与 audit-flags-combination（审计组合旗标臂）两形态 —— 来自 §19.7 host-3 与 §18.2 判据 9 的实际落刀（非设想）；消费方 `scripts/test_gk_host_write_surface.py` / `scripts/test_gk_ecc_closure_basis.py`。",
   "_templates_extended_20261004b": "再增 contract-impl-set-equality（契约↔实现集合等价臂，来自 §2.3 rc 表 P0）与 fixture-truth-behavior（夹具真值行为臂，来自 §3-T2 判据载体 P0）两形态 —— 取自本会话**实际落刀**（`scripts/test_gk_receive_check.py` 臂 ⑬–⑰ / `scripts/test_agent_cli_wiring.py` T2 三臂），非设想。",
   "_templates_extended_20261004c": "再增 gate-load-bearing（空转闸机臂）—— 来自并发红队 finding `ECC-2C7BEBA09A84`（family `BLUE-FAT-FISH-IDLE-GATE`：A1-A3 真·空转 / B1-B4 纸老虎 / C1-C2 后门魔法串）三类攻击源；与 c9 v3 加固红先臂（`scripts/test_gk_ecc_closure_basis.py`：坏组合→FAIL + 好输入→PASS + `register-only` escape）**实际落刀**同形（非设想）。新增维度 = **差异断言**（好/坏判决须不同 ⟹ 治硬编码假证据 / 恒不触发）与**接线臂**（闸门须被聚合入口真调用 ⟹ 治未接线 / 纸老虎）—— 此二者为本族特有，`audit-flags-combination` 不含。",
+  "_templates_extended_20261109": "大幅刷新（12→20 形态）：新增 fail-open-to-fail-loud / generated-artifact-sync / required-subset-registry / cross-copy-equality / consumer-wiring / empty-vs-missing-loud / snapshot-pollution-guard / tamper-flip-detector —— 全部取自 2026-11-09 本会话**实际写红再转绿**的臂（⑦ 路由基线 fail-loud 7 臂、自动清单登记表 4 臂、_accept_baseline 污染实证）。同时为全部条目补 keywords（分类器**只读本表**，禁第二份形态清单）与 when/desc 非空守护。",
   "finding_arms": [
     {
       "finding": "ECC-42B4A6E15927",
@@ -112,10 +189,10 @@
     },
     {
       "finding": "ECC-4805712A0A98",
-      "note": "探针迁移后指针/措辞未同步（跨仓双源）：`scripts/gk_model_probe.py` 仍以论文仓记录副本（已冻结）的 `CANDIDATE_STRIDES` 为「同集」源（迁移后那份只是记录副本）⟹ 指针须改指技能仓正本 `gk_phase_probe.py::CANDIDATE_STRIDES`；D 计划 §1.1/§2/§4 措辞与状态同步。臂 ×1（model_probe_pointer 源码形态）",
+      "note": "探针迁移后指针/措辞未同步（跨仓双源）：`scripts/gk_model_probe.py` 仍以论文仓记录副本（已冻结）的 `CANDIDATE_STRIDES` 为「同集」源（迁移后那份只是记录副本）⟹ 指针须改指技能仓正本 `gk_phase_probe.py::CANDIDATE_STRIDES`；D 计划 §1.1/§2/§4 措辞与状态同步。臂 ×1（test_model_probe_has_no_private_paper_source 源码形态；2026-11-09 按实际用例名更新）",
       "test_file": "scripts/test_gk_model_probe.py",
-      "shape_k": "model_probe_pointer",
-      "full_k": "model_probe_pointer",
+      "shape_k": "test_model_probe_has_no_private_paper_source",
+      "full_k": "test_model_probe_has_no_private_paper_source",
       "expect": "red"
     },
     {
@@ -282,8 +359,8 @@
       "finding": "ECC-DCC2B8B80AAC",
       "note": "`monitor --subagent` 落库块的内联 python 载荷（bash 双引号内）含反引号 ⟹ 运行期触发命令替换（病象 `json.dump: command not found` / `command substitution: syntax error near unexpected token '||'`，与 ECC-084E37B42CFB 同病象串但不同源）。修法 = 注释内反引号改为裸词。静态臂（源码字面不变量）",
       "test_file": "scripts/test_gk_eval_injection.py",
-      "shape_k": "monitor_history_payload_has_no_backticks",
-      "full_k": "monitor_history_payload_has_no_backticks",
+      "shape_k": "test_monitor_history_payload_is_file_not_inline",
+      "full_k": "test_monitor_history_payload_is_file_not_inline",
       "expect": "red"
     },
     {

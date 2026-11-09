@@ -47,14 +47,14 @@ description: "ZTHL Aegis — deterministic governance harness for AI agents. Rou
 <!-- GK-FACTS:START（由 scripts/gk_docgen_facts.py 生成，勿手改） -->
 | 事实 | 值 | 来源（可复算） |
 |:--|:--|:--|
-| CLI 行数 | 12545 | `wc -l gatekeeper-cli.sh` |
+| CLI 行数 | 12566 | `wc -l gatekeeper-cli.sh` |
 | CLI 命令数 | 52 | `^_CMD_REG[` 计数 |
 | 红队站点 | 16 | `gk_chain.py` 的 `Step("RED-*")` |
 | 自检检查函数 | 39 | `gk_self_check.py` 的 `def check_*` |
 | references 公开 md | 22 | `git ls-files references/*.md`（顶层，扣除导出排除面） |
 | 子代理角色 | 9 | `subagent_runner.ROLE_TOOLS` |
 | hook R0 门禁 | Gate R0.1–R0.20（20 个） | `pre_tool_hook.py` 的 `Gate R0.N` |
-| 红队向量 | 156 | `references/red-vectors.json` |
+| 红队向量 | 166 | `references/red-vectors.json` |
 | 情报源 | 24 | `references/red-intel-sources.json` |
 | 解释器解析 | `scripts/py_resolve.sh`（发现式，无绝对路径） | `scripts/py_resolve.sh` |
 <!-- GK-FACTS:END -->
@@ -131,7 +131,7 @@ description: "ZTHL Aegis — deterministic governance harness for AI agents. Rou
 | 插件加载安全网 | `references/plugin-loading-test-framework.md` | 新增按需加载插件 |
 | 序列节点安全网 | `references/sequence-node-safety-net-template.md` | 新增/强化序列节点 |
 | 标准维护模块 | `references/standard-maintenance-module.md`（实存能力 + 未接线缺口表；约定本身失效时的发现→归属→修复→回归） | 改标准/模板/维护约定 |
-| 红先测试模版 | `references/red-arm-templates.json` + `scripts/gk_red_arm_gen.py` | 写红先臂 |
+| 红先测试模版 | `references/red-arm-templates.json` + `scripts/gk_red_arm_gen.py` | 写红先臂；`classify` 自动判复用/新增，`scaffold` 出骨架，`promote` 红→绿回灌 |
 | 红队向量登记 | `references/red-vectors.json` + `scripts/gk_red_vectors.py` | 加/改/复核向量 |
 | 红队情报准入 | `references/red-intel-sources.json` + `scripts/gk_red_intel.py` | 红队联网检索 |
 

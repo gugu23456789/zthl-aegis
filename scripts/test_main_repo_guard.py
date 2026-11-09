@@ -38,8 +38,21 @@ def _cli() -> str:
 
 
 def _guard_lines(src: str) -> list:
+    """两处**调用点**（2026-11-04 起判定收敛为单源 `_main_repo_hit`）。"""
     return [ln.strip() for ln in src.splitlines()
-            if "_MAIN_REPO_WIN_RE" in ln and ln.strip().startswith("if ")]
+            if ln.strip().startswith("if _main_repo_hit ")]
+
+
+def _helper_body(src: str) -> str:
+    """抽取 `_main_repo_hit() { ... }` 全文（fail-closed 臂住在函数体内）。"""
+    lines = src.splitlines()
+    start = next((i for i, l in enumerate(lines)
+                  if l.startswith("_main_repo_hit() {")), None)
+    assert start is not None, "_main_repo_hit 未定义"
+    for i in range(start + 1, len(lines)):
+        if lines[i] == "}":
+            return "\n".join(lines[start:i + 1])
+    raise AssertionError("_main_repo_hit 花括号不配对（抽取失败）")
 
 
 def _guard_body(cond: str) -> str:
@@ -92,16 +105,19 @@ class TestGuardSites:
     def test_both_have_rg_missing_arm(self):
         conds = _guard_lines(_cli())
         assert len(conds) == 2, "站点数须为 2，否则本断言会空跑通过"
-        for cond in conds:
-            assert '-z "$RG"' in cond, f"缺 fail-closed 臂（rg 缺位即静默失效）: {cond}"
+        body = _helper_body(_cli())
+        assert '[ -z "$RG" ]' in body, (
+            "单源判定缺 fail-closed 臂（rg 缺位即静默失效）: %r" % body[:200])
 
     def test_both_fail_closed_when_rg_missing(self, tmp_path):
         repo = tmp_path / "repo"
         (repo / "src").mkdir(parents=True)
         conds = _guard_lines(_cli())
         assert len(conds) == 2
+        helper = _helper_body(_cli())
         for i, cond in enumerate(conds):
-            script = (_resolved(str(repo)) + 'path="%s/src/main.cpp"\n' % repo
+            script = (_resolved(str(repo)) + helper + "\n"
+                      + 'path="%s/src/main.cpp"\n' % repo
                       + "real_path=\"$path\"\nRG=''\n"
                       + f"if {_guard_body(cond)}; then echo BLOCK; else echo ALLOW; fi\n")
             assert _run(script, f"norgg{i}") == "BLOCK", cond
@@ -115,10 +131,12 @@ class TestGuardSites:
         rg = _run('RG=$(command -v rg 2>/dev/null || true); printf %s "$RG"\n', "rgpath2")
         if not rg:
             pytest.skip("本机（bash 侧）无 rg，正负两臂无法判")
+        helper = _helper_body(_cli())
         for i, cond in enumerate(conds):
             for path, expect, tag in ((str(repo / "src" / "main.cpp"), "BLOCK", "pos"),
                                       (wt, "ALLOW", "neg")):
-                script = (_resolved(str(repo)) + f'path="{path}"\nreal_path="$path"\n'
+                script = (_resolved(str(repo)) + helper + "\n"
+                          + f'path="{path}"\nreal_path="$path"\n'
                           + f'RG="{rg}"\n'
                           + f"if {_guard_body(cond)}; then echo BLOCK; else echo ALLOW; fi\n")
                 assert _run(script, f"{tag}{i}") == expect, cond

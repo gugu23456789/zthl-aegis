@@ -94,15 +94,29 @@ def _check_only_bare(sb: Path, name: str, extra_env: dict | None = None):
         capture_output=True, text=True, timeout=180, env=env)
 
 
+def _payload(out: str) -> dict:
+    """取输出里的 JSON 回包（gate 提示行可能排在 JSON 之后 ⟹ 不能只取末行）。"""
+    best = {}
+    for ln in out.strip().splitlines():
+        ln = ln.strip()
+        if not ln.startswith("{"):
+            continue
+        try:
+            d = json.loads(ln)
+        except ValueError:
+            continue
+        if isinstance(d, dict):
+            best = d
+    return best
+
+
 def _preflight(out: str) -> dict:
-    """取 CLI 末行 JSON 的 `preflight` 块（`plan_path`/`hint` 等）。"""
-    d = json.loads(out.strip().splitlines()[-1])
-    return d.get("preflight") or {}
+    """取 CLI JSON 回包的 `preflight` 块（`plan_path`/`hint` 等）。"""
+    return _payload(out).get("preflight") or {}
 
 
 def _missing(out: str) -> list:
-    d = json.loads(out.strip().splitlines()[-1])
-    return (d.get("preflight") or {}).get("missing") or []
+    return (_payload(out).get("preflight") or {}).get("missing") or []
 
 
 def test_g4c_missing_surfaces_pointcheck_and_seal(tmp_path):

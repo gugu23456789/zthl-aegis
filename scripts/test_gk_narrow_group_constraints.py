@@ -156,7 +156,8 @@ class TestGroupConstraints:
         out, rc = nr.register(str(st), str(reg))
         assert rc == 0 and out["registered"] is True, out
         assert out["constraints"]["ok"] is True
-        d = json.loads(st.read_text(encoding="utf-8"))
+        import gk_json_utils as gju
+        d = gju.read_state_file(str(st))   # WAL-aware
         assert len(d["gate_data"]["narrow_tasks"]) == 6
 
     def test_check_groups_replays_registered_plan(self, tmp_path):
@@ -232,7 +233,8 @@ class TestG2Derivation:
         assert out["derivation"] == {"ok": True, "mode": "derived",
                                      "g2_union": [3, 4, 5],
                                      "chunks": [[3], [4, 5]]}
-        d = json.loads(st.read_text(encoding="utf-8"))
+        import gk_json_utils as gju
+        d = gju.read_state_file(str(st))   # WAL-aware
         g2 = [e["covers"] for e in d["gate_data"]["narrow_tasks"]
               if e.get("group") == "G2"]
         assert g2 == [[3], [4, 5]], "派生 covers 必须落盘（单源），不得只存推导过程"

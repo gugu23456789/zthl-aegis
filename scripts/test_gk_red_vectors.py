@@ -111,7 +111,7 @@ def test_stale_ttl_and_missing_verified_at():
 
 def test_coverage_reports_every_station():
     cov = V.coverage(_reg())
-    assert len(cov) == 22
+    assert len(cov) == 23
     assert cov["RED-SURFACE"]["dynamic_only"] is True
     assert cov["RED-REPORT"]["exempt"] is True
     assert all(v["vectors"] > 0 or v["dynamic_only"] or v["exempt"] for v in cov.values())

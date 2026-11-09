@@ -111,14 +111,12 @@ def test_code_fix_next_is_directly_executable():
     该占位符字样，那不是可执行契约；契约是「下发的那一行里不能再有占位符」。
     """
     seg = _code_fix_seg()
-    # 回显串是 `echo "{\"ok\":true,…,\"next\":\"…\"}"` ⟹ 源码里是**转义引号**形态，
-    # 故按字面 `\"next\":\"` 切分（原用 `"next":"` 正则匹配不到 ⟹ 会**假红**）。
-    # 2026-09-23（会话入口落刀后即踩）：本函数现在**有两处** `next`（`--session` 分支的
-    # `next` 在前）⟹ 按裸 `"next":"` 取**首个**会取到会话串、本臂假红。改为**锚定 code-fix
-    # 回显的专属前导**（`narrow_task_file` 紧邻 `next`），判据强度不变。
-    _mark = '\\"narrow_task_file\\":\\"$_task_file\\",\\"next\\":\\"'
-    assert _mark in seg, f"cmd_apply_worktree 未回 code-fix next 串：{seg[-600:]}"
-    nxt = seg.split(_mark, 1)[1].split('\\"')[0]
+    # 2026-11-04 起回包由 `gk_json.py build` 构造 ⟹ 判据落在 builder 实参
+    # （`narrow_task_file="$_task_file" next="…"`），不再有手写 JSON 转义字面量。
+    assert 'narrow_task_file="$_task_file"' in seg, (
+        f"cmd_apply_worktree 未回 code-fix narrow_task_file：{seg[-600:]}")
+    tail = seg[seg.index('narrow_task_file="$_task_file"'):]
+    nxt = tail.split('next="', 1)[1].split('"', 1)[0]
     assert "<narrow-task>" not in nxt, (
         f"next 串仍留字面量占位符 ⟹ 仍要人工拼接（用户明令堵掉）：{nxt}")
     assert "--task-file " in nxt, f"next 串未带 --task-file（仍要手工喂任务）：{nxt}"
@@ -284,7 +282,7 @@ def test_batch_enforces_disjoint_allowed_paths():
 def test_single_dispatch_exposes_allowed_paths():
     """单发回显须带 `allowed_paths`（批量互斥门的唯一数据源）。"""
     seg = _code_fix_seg()
-    assert '\\"allowed_paths\\":$_ap_esc' in seg, "单发回显未透出 allowed_paths ⟹ 互斥门无数据源"
+    assert '"allowed_paths:=$_ap_esc"' in seg, "单发回显未透出 allowed_paths ⟹ 互斥门无数据源"
 
 
 def test_batch_serial_merge_headsup_present():
@@ -418,7 +416,7 @@ def test_session_mode_never_grants_main_node_budget():
 def test_session_mode_returns_base_state_file_and_truthful_note():
     """臂⑮（甲）：回包 `state_file` = **base** state；note 说明「worktree 归主树 state」。"""
     seg = _code_fix_seg()
-    assert '"state_file\\":\\"$_s_st' in seg, "回包缺 base `state_file` ⟹ 使用者不知 CLI 该指哪个 state"
+    assert 'state_file="$_s_st"' in seg, "回包缺 base `state_file` ⟹ 使用者不知 CLI 该指哪个 state"
     assert "主树 state" in seg, (
         "缺「归主树 state」说明 ⟹ 使用者会以为还要自己 export STATE_FILE")
     assert "就近 .gatekeeper.state" not in seg, "旧虚假 note 未清除（ECC-B9395FC8E23C）"

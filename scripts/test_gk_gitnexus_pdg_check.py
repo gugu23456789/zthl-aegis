@@ -53,7 +53,8 @@ def test_cypher_multi_line_json(monkeypatch):
         returncode = 0
         stdout = out
         stderr = ""
-    monkeypatch.setattr(subprocess, "run", lambda *a, **k: R())
+    monkeypatch.setattr(gx.gk_gitnexus, "run_raw",
+                        lambda *a, **k: (True, out, "", False))
     d = gx._cypher("MATCH () RETURN count() AS c", "fake")
     assert "error" not in d
     assert d["row_count"] == 1
@@ -69,7 +70,8 @@ def test_cypher_warn_after_result(monkeypatch):
         returncode = 0
         stdout = out
         stderr = ""
-    monkeypatch.setattr(subprocess, "run", lambda *a, **k: R())
+    monkeypatch.setattr(gx.gk_gitnexus, "run_raw",
+                        lambda *a, **k: (True, out, "", False))
     d = gx._cypher("MATCH () RETURN count() AS c", "fake")
     assert "error" not in d
     assert d["row_count"] == 1
@@ -85,31 +87,24 @@ def test_cypher_multiple_json_blocks(monkeypatch):
         returncode = 0
         stdout = out
         stderr = ""
-    monkeypatch.setattr(subprocess, "run", lambda *a, **k: R())
+    monkeypatch.setattr(gx.gk_gitnexus, "run_raw",
+                        lambda *a, **k: (True, out, "", False))
     d = gx._cypher("MATCH () RETURN count() AS c", "fake")
     assert d["row_count"] == 1
 
 
 def test_cypher_no_json_pure_text(monkeypatch):
     """纯文本输出（无 JSON）→ error 不崩溃。"""
-    import subprocess
-    class R:
-        returncode = 0
-        stdout = "变更：1 个文件\n风险等级：low\n"
-        stderr = ""
-    monkeypatch.setattr(subprocess, "run", lambda *a, **k: R())
+    monkeypatch.setattr(gx.gk_gitnexus, "run_raw",
+                        lambda *a, **k: (True, "变更：1 个文件\n风险等级：low\n", "", False))
     d = gx._cypher("MATCH () RETURN count() AS c", "fake")
     assert "error" in d
 
 
 def test_cypher_non_dict_json(monkeypatch):
     """JSON 数组结果 → error 不崩溃。"""
-    import subprocess
-    class R:
-        returncode = 0
-        stdout = "[1, 2, 3]\n"
-        stderr = ""
-    monkeypatch.setattr(subprocess, "run", lambda *a, **k: R())
+    monkeypatch.setattr(gx.gk_gitnexus, "run_raw",
+                        lambda *a, **k: (True, "[1, 2, 3]\n", "", False))
     d = gx._cypher("MATCH () RETURN count() AS c", "fake")
     assert "error" in d
 
@@ -122,7 +117,8 @@ def test_cypher_unicode_chinese(monkeypatch):
         returncode = 0
         stdout = out
         stderr = ""
-    monkeypatch.setattr(subprocess, "run", lambda *a, **k: R())
+    monkeypatch.setattr(gx.gk_gitnexus, "run_raw",
+                        lambda *a, **k: (True, out, "", False))
     d = gx._cypher("MATCH () RETURN count() AS c", "fake")
     assert d["row_count"] == 1
     assert "风险等级" in d["markdown"]
@@ -136,7 +132,8 @@ def test_cypher_brace_in_markdown(monkeypatch):
         returncode = 0
         stdout = out
         stderr = ""
-    monkeypatch.setattr(subprocess, "run", lambda *a, **k: R())
+    monkeypatch.setattr(gx.gk_gitnexus, "run_raw",
+                        lambda *a, **k: (True, out, "", False))
     d = gx._cypher("MATCH () RETURN count() AS c", "fake")
     assert d["row_count"] == 1
 
@@ -191,7 +188,8 @@ def test_count_multi_column_table(monkeypatch):
         returncode = 0
         stdout = out
         stderr = ""
-    monkeypatch.setattr(subprocess, "run", lambda *a, **k: R())
+    monkeypatch.setattr(gx.gk_gitnexus, "run_raw",
+                        lambda *a, **k: (True, out, "", False))
     n = gx._count("MATCH () RETURN count() AS c", "fake")
     assert n == 1234
 
@@ -204,7 +202,8 @@ def test_count_no_digit_none(monkeypatch):
         returncode = 0
         stdout = out
         stderr = ""
-    monkeypatch.setattr(subprocess, "run", lambda *a, **k: R())
+    monkeypatch.setattr(gx.gk_gitnexus, "run_raw",
+                        lambda *a, **k: (True, out, "", False))
     assert gx._count("MATCH () RETURN count() AS c", "fake") is None
 
 
@@ -241,7 +240,8 @@ def test_cypher_error_on_nonzero(monkeypatch):
         returncode = 1
         stdout = ""
         stderr = "boom"
-    monkeypatch.setattr(subprocess, "run", lambda *a, **k: R())
+    monkeypatch.setattr(gx.gk_gitnexus, "run_raw",
+                        lambda *a, **k: (False, "", "boom", False))
     d = gx._cypher("MATCH (n) RETURN n", "fake")
     assert "error" in d
 

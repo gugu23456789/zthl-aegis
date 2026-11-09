@@ -53,7 +53,7 @@ def test_allow_configured_interpreter():
     """配好的解释器放行 —— 用 hook._ACCEPT_PY，不硬编码路径。
 
     2026-11-08 维修：原写死 `/opt/venv/bin/python`，但本机隔离 venv 已迁到
-    `/opt/spz-py312`（`scripts/_accept_py.local` 的 wsl 行）⟹ 测试期望与门禁实际互相矛盾。
+    `/opt/<venv>`（`scripts/_accept_py.local` 的 wsl 行）⟹ 测试期望与门禁实际互相矛盾。
     """
     assert hook._pytest_wrong_interpreter(
         "%s -m pytest scripts -q" % hook._ACCEPT_PY) is None

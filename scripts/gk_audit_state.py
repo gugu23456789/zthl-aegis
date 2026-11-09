@@ -428,12 +428,12 @@ def check_state_file(state_path: str, skill_dir: str = _SKILL_DIR) -> dict:
     #     口径与 `gk_json_utils.view_bank_actions` 同源（禁第二份过滤实现）。
     try:
         from gk_json_utils import view_bank_actions as _view_bank
-        _ba = _view_bank(gd)
+        _ba = _view_bank(gd, state_file)
     except Exception:
         _ba = []
     checks.append({"field": "bank_actions_view",
                    "declared": "bank=%d" % len(_ba),
-                   "replay": "projection: rejected_edits[source=bank] (no on-disk bank_actions)",
+                   "replay": "projection: rejected_edits[source=bank] + rejected-edits-journal (no on-disk bank_actions)",
                    "match": True, "entries": _ba[-5:]})
 
     # 7b. subagent_reports — C3③（ECC-3BECE9FAD12A）：报告文件 ↔ history 条目只读对账

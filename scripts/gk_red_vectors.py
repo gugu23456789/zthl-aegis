@@ -247,6 +247,7 @@ def stamp(reg: dict, ids, today: str, path: str = "") -> dict:
 
 # 站点 → 观察面（station 级 surface；逐向量细化留给后续人工，不臆造）
 STATION_SURFACE = {
+    "RED-GOV": "治理面（额度银行|路径归一化|安全并发）",
     "RED-SCOPE": ".gatekeeper.state 敏感字段 / 未签名决议 / 审计日志缺失",
     "RED-SURFACE": "gatekeeper-cli.sh::_CMD_REG（命令面 / gate_level / side_effects）",
     "RED-CONSTRAINTS": "PROTECTED_REGION / gate_level / 永久拒绝门",

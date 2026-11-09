@@ -1287,10 +1287,10 @@ except Exception:
         #   该错误的修法**不是**"建域化 state"（域 state 可能已存在，冲突点是取舍），
         #   故单列 fix 文案，避免把用户引向错误动作。
         if [ "$_dom_err" = "STATE_DOMAIN_EXPLICIT_CONFLICT" ]; then
-          echo "{\"ok\":false,\"error\":\"STATE_DOMAIN_EXPLICIT_CONFLICT\",\"domain\":\"$_dom\",\"state_file\":\"$STATE_FILE\",\"fix\":\"去掉显式 STATE_FILE（让域绑定生效），或显式 GK_STATE_DOMAIN_ROUTE=0 声明放弃域解析\"}"
+          python3 "$SKILL_DIR/scripts/gk_json.py" build ok=false error=STATE_DOMAIN_EXPLICIT_CONFLICT domain="$_dom" state_file="$STATE_FILE" fix="去掉显式 STATE_FILE（让域绑定生效），或显式 GK_STATE_DOMAIN_ROUTE=0 声明放弃域解析"
           return 1
         fi
-        echo "{\"ok\":false,\"error\":\"$_dom_err\",\"domain\":\"$_dom\",\"fix\":\"建域化 state（骨架可克隆自 $_DEFAULT_STATE_FILE），或移除计划 META 的 state_domain，或 GK_STATE_DOMAIN_ROUTE=0 关闭域解析\"}"
+        python3 "$SKILL_DIR/scripts/gk_json.py" build ok=false error="$_dom_err" domain="$_dom" fix="建域化 state（骨架可克隆自 $_DEFAULT_STATE_FILE），或移除计划 META 的 state_domain，或 GK_STATE_DOMAIN_ROUTE=0 关闭域解析"
         return 1
       fi
       if [ -z "$_dom_state" ]; then
@@ -1313,7 +1313,7 @@ except Exception:
           # 是**构造性 no-op**（原写法看似"清理"实则空转，判据同为空真）。语义上也不该清：
           # 本进程**没有**指针通道，既未建立绑定，也无权删除**他进程**的绑定。故此处保持
           # "本进程不写不删"，由 J14 断言**指针原样保留**（而非断言"不存在"）。
-          echo "{\"ok\":false,\"error\":\"STATE_DOMAIN_EXPLICIT_CONFLICT\",\"domain\":\"$_dom\",\"state_file\":\"$STATE_FILE\",\"domain_state\":\"$_dom_state\",\"fix\":\"去掉显式 STATE_FILE（让域绑定生效），或显式 GK_STATE_DOMAIN_ROUTE=0 声明放弃域解析\"}"
+          python3 "$SKILL_DIR/scripts/gk_json.py" build ok=false error=STATE_DOMAIN_EXPLICIT_CONFLICT domain="$_dom" state_file="$STATE_FILE" domain_state="$_dom_state" fix="去掉显式 STATE_FILE（让域绑定生效），或显式 GK_STATE_DOMAIN_ROUTE=0 声明放弃域解析"
           return 1
         fi
       else
@@ -1792,7 +1792,7 @@ d['_checksum']=hashlib.sha256(gd.encode()).hexdigest()[:16]
 dump_state(os.environ['GK_PY_STATE'], d)
 # 2026-11-06（用户令「加个校验」）：**写后回读校验**。本函数 stderr 被 2>/dev/null 吞掉，
 #   载荷一旦语法错（如双引号提前闭合 shell 串）会**静默不落盘**（实测 p_meta 冻结丢失）。
-#   回读 gate_data 与写前规范形比对；不一致 ⟹ 落旁挂 `<state>.write-error`（不被吞）+ rc=3。
+#   回读 gate_data 与写前规范形比对；不一致 ⟹ 落旁挂 <state>.write-error（不被吞）+ rc=3。
 _back=json.load(open(os.environ['GK_PY_STATE'],encoding='utf-8'))
 if json.dumps(_back.get('gate_data',{}),sort_keys=True)!=gd:
     with open(os.environ['GK_PY_STATE']+'.write-error','a',encoding='utf-8') as _ef:
@@ -2082,11 +2082,10 @@ _ctx_inject_probe() {
   if command -v flock >/dev/null 2>&1; then
     exec {_pf_fd}>"$_pf_lk" 2>/dev/null || _pf_fd=""
     if [ -n "$_pf_fd" ]; then
-      # **非阻塞**抢共享锁（2026-10-30）：原 `flock -s -w 5` 是**阻塞排队** —— 写者一连持有 5s
-      #   时每个读者都陪着等满，探测是高频路径（每次派发前一次）⟹ 读者成了写者的放大器。
-      #   写者持锁只在「发布」的毫秒级窗口内 ⟹ 非阻塞 + 一次 10ms 退避重试够用；
-      #   仍失败（写者确实在发布）⟹ fail-open 读：这种情形下读到的可能是旧配对，但**不会挂死**。
-      flock -s -n "$_pf_fd" 2>/dev/null || { sleep 0.01; flock -s -n "$_pf_fd" 2>/dev/null || true; }
+      # **有界阻塞**（2026-11-09 AV-9 实测）：非阻塞 + 10ms 重试在 6 写者串行时几乎总是
+      #   错过共享锁 ⟹ fail-open 读到「新 JSON + 旧 .sig」⟹ 偶发 sig_invalid。改为最多等 1s：
+      #   写者「重建+重签+发布」的临界区一旦结束即放行；1s 仍拿不到才 fail-open（不挂死）。
+      flock -s -w 1 "$_pf_fd" 2>/dev/null || true
     fi
   fi
   if [ -f "$ctx_file" ] && [ -f "$ctx_sig" ]; then
@@ -2891,6 +2890,21 @@ print("commit_behind %s %s" % (ic, cc))
     *) echo "unavailable"; return 0 ;;
   esac
 }
+_gx_store_residual_evidence() {  # <dir> → 0 = store 有残态证据；1 = 无/不可判
+  # 2026-11-09（实测盲点）：原残态判据只看 analyze 的 stderr 文本；store 已留下
+  #   `lbug.wal` + `lbug.wal.dirty-recovery` 时 stderr 可能无关键词 ⟹ 误判「无残态」
+  #   ⟹ 拒绝 `--drop-embeddings` ⟹ 基线永久 stale。本函数把判据扩到索引目录自身。
+  # 单源：目录判定归 `gk_gitnexus.residual_evidence`（禁第二份路径/文件名清单）。
+  local dir="${1:-}" _sr _out _rc=1
+  _sr=$(_gx_store_root_for_node "$(_gx_node_probe win 2>/dev/null)")
+  _out=$(GITNEXUS_STORAGE_ROOT="$_sr" python3 "$SKILL_DIR/scripts/gk_gitnexus.py" \
+           residual-evidence --cwd "$dir" 2>/dev/null | tr -d '\r' || true)
+  case "$_out" in
+    *'"residual": true'*) _rc=0 ;;
+  esac
+  [ -n "$_out" ] && echo "[gx-selfheal] store-residual: $_out" >> "$GK_DBG_LOG" 2>/dev/null
+  return "$_rc"
+}
 _gx_analyze_embeddings() {  # <dir> → 0 = analyze 后 status 可复用（current|reusable）；非 0 = 仍不可复用
   # 语义搜索基线的**单一事实源**：凡走 `analyze --embeddings` 一律经此（禁各处直调）。
   # 2026-09-19 ECC-4BDBA3605F47 残留态自愈：lbug 里已存旧 CodeEmbedding 行时，新一遍
@@ -2951,14 +2965,21 @@ _gx_analyze_embeddings() {  # <dir> → 0 = analyze 后 status 可复用（curre
   _gx_st=$(_gitnexus_baseline_status "$dir")
   if [ "$_gx_st" = "current" ] || [ "$_gx_st" = "reusable" ]; then
     _gx_ok=0
-  elif grep -qiE "primary key|constraint|incrementalInProgress|embeddingCheckpoint|already exists|invalid ELF" "$_gx_errf" 2>/dev/null; then
-    echo "[gx-selfheal] 检测到残态证据 → 重试 --drop-embeddings $(date -u +%FT%TZ)" >> "$GK_DBG_LOG"
-    GK_GX_DIR="$dir" GK_GX_TIMEOUT="${GK_GX_ANALYZE_TIMEOUT:-600}" \
-      _run_gitnexus analyze --embeddings --drop-embeddings >/dev/null 2>>"$GK_DBG_LOG" || true
-    _gx_st=$(_gitnexus_baseline_status "$dir")
-    { [ "$_gx_st" = "current" ] || [ "$_gx_st" = "reusable" ]; } && _gx_ok=0
   else
-    echo "[gx-selfheal] 复验未过但**无残态证据** → 不付全量重嵌（status=$_gx_st）$(date -u +%FT%TZ)" >> "$GK_DBG_LOG"
+    # 残态证据 = **并集**：analyze stderr 关键词 ∪ 索引目录自身（lbug.wal / dirty-recovery /
+    #   meta 残态标记）。原实现只有前者 ⟹ store 残态被漏判（2026-11-09 实测盲点）。
+    local _gx_res=1
+    grep -qiE "primary key|constraint|incrementalInProgress|embeddingCheckpoint|already exists|invalid ELF" "$_gx_errf" 2>/dev/null && _gx_res=0
+    _gx_store_residual_evidence "$dir" && _gx_res=0
+    if [ "$_gx_res" = "0" ]; then
+      echo "[gx-selfheal] 检测到残态证据（stderr|store）→ 重试 --drop-embeddings $(date -u +%FT%TZ)" >> "$GK_DBG_LOG"
+      GK_GX_DIR="$dir" GK_GX_TIMEOUT="${GK_GX_ANALYZE_TIMEOUT:-600}" \
+        _run_gitnexus analyze --embeddings --drop-embeddings >/dev/null 2>>"$GK_DBG_LOG" || true
+      _gx_st=$(_gitnexus_baseline_status "$dir")
+      { [ "$_gx_st" = "current" ] || [ "$_gx_st" = "reusable" ]; } && _gx_ok=0
+    else
+      echo "[gx-selfheal] 复验未过但**无残态证据** → 不付全量重嵌（status=$_gx_st）$(date -u +%FT%TZ)" >> "$GK_DBG_LOG"
+    fi
   fi
   [ "$_gx_errf" = "/dev/null" ] || rm -f "$_gx_errf" 2>/dev/null || true
   # 结果落 marker：成功 ⟹ 30min 冷静期；失败 ⟹ 只记 5min（见上方注释）
@@ -4201,7 +4222,7 @@ cmd_guard_edit() {
     #   调用方 `_cli_gate_ok` 只按 rc 判故无感，但任何按 JSON 解析的消费点会拿到空对象）。
     printf '%s\n' "[guard-edit] blocked rc=$_eg_rc: $_eg_out" >>"$GK_DBG_LOG" 2>/dev/null || true
     _eg_reason=$(printf '%s' "$_eg_out" | python3 "$SKILL_DIR/scripts/gk_json_utils.py" field reason --default '' 2>/dev/null || echo "")
-    echo "{\"allowed\":false,\"reason\":\"${_eg_reason:-GATE_BLOCK}\",\"worktree\":\"$(json_val "$STATE_FILE" worktree "")\"}"
+    python3 "$SKILL_DIR/scripts/gk_json.py" build allowed=false reason="${_eg_reason:-GATE_BLOCK}" worktree="$(json_val "$STATE_FILE" worktree "")"
     return 1
   fi
   # PROTECTED_REGION guard — line-level when target_line, file-level otherwise
@@ -4522,8 +4543,8 @@ cmd_monitor() {
   if [ -n "$role_override" ]; then
     local _valid_roles _role_py
     _role_py=$(_subagent_py_real)
-    _valid_roles=$(env -u STATE_FILE "$_role_py" -c \
-      "import sys; sys.path.insert(0, '${SKILL_DIR}/scripts'); import gk_role_regions as s; print('|'.join(sorted(s.ROLE_ALLOWED_REGIONS)))" \
+    _valid_roles=$(PYTHONPATH="$SKILL_DIR/scripts" env -u STATE_FILE "$_role_py" -c \
+      "import gk_role_regions as s; print('|'.join(sorted(s.ROLE_ALLOWED_REGIONS)))" \
       2>/dev/null || true)
     if [ -z "$_valid_roles" ]; then
       echo '{"ok":false,"error":"ROLE_TABLE_UNREADABLE","hint":"无法从 scripts/gk_role_regions.py 读取 ROLE_ALLOWED_REGIONS；修解释器后重试（该模块无第三方依赖，不需要 openai）"}'
@@ -4545,8 +4566,8 @@ cmd_monitor() {
   if [ "$mode" = "--subagent" ] && [ "$role_override" = "research-408" ]; then
     if [ -z "${_role_py:-}" ]; then _role_py=$(_subagent_py_real); fi
     local _frame
-    _frame=$(printf '%s' "$stage" | env -u STATE_FILE "$_role_py" -c \
-      "import sys; sys.path.insert(0, '${SKILL_DIR}/scripts'); from gk_advance import classify_research_frame as c; print(c(sys.stdin.read()).get('frame',''))" \
+    _frame=$(printf '%s' "$stage" | PYTHONPATH="$SKILL_DIR/scripts" env -u STATE_FILE "$_role_py" -c \
+      "import sys; from gk_advance import classify_research_frame as c; print(c(sys.stdin.read()).get('frame',''))" \
       2>/dev/null || true)
     if [ -z "$_frame" ]; then
       echo '{"ok":false,"error":"FRAME_UNREADABLE","hint":"无法调用 gk_advance.classify_research_frame；修解释器/依赖后重试"}'
@@ -6688,7 +6709,7 @@ print('{\"ok\":true,\"pid\":%d}' % p.pid)
       job_no_agent=$(echo "$job_meta" | python3 "$SKILL_DIR/scripts/gk_json_utils.py" field no_agent --bool-tf --default-invalid '' 2>/dev/null)
       job_prompt=$(echo "$job_meta" | python3 "$SKILL_DIR/scripts/gk_json_utils.py" field prompt --default '' 2>/dev/null)
       if [ -n "$job_script" ] && [ "$job_no_agent" = "true" ]; then
-        [ -f "${SKILL_DIR}/$job_script" ] || { echo "{\"ok\":false,\"error\":\"script not found: $job_script\"}"; return 1; }
+        [ -f "${SKILL_DIR}/$job_script" ] || { python3 "$SKILL_DIR/scripts/gk_json.py" build ok=false error="script not found: $job_script"; return 1; }
         # 与 cron_scheduler._run_job 同源：按扩展名派发（.py → python3；其余 → bash）。
         case "$job_script" in
           *.py) python3 "${SKILL_DIR}/$job_script" 2>/dev/null || echo '{"ok":false,"error":"script run failed"}' ;;
@@ -6829,23 +6850,6 @@ print(json.dumps({"ok": True, "provider": sys.argv[1], "env_var": sys.argv[2],
                   "key_file": sys.argv[3], "file_persisted": sys.argv[4] == "1",
                   "session_env": True, "note": sys.argv[5]}, ensure_ascii=False))' \
     "$provider" "$env_var" "$_kf" "$( [ "$_file_ok" = true ] && echo 1 || echo 0 )" "$_note"
-}
-
-# 2026-11-04（方案 C：**不锁单一平台**）：主仓命中判定收成**单源**。
-#   病象（实测）：`_main_repo_resolve` 解析失败时 `_MAIN_REPO_*_RE` 为空，而
-#   `rg -qi ""` **命中一切** ⟹ 任何路径都被判成主仓 ⟹ `MAIN_WORKTREE` 假拦
-#   （跨平台调用/换机后 python 解析不到主仓即全量误拦）。
-#   判据：RG 缺位 ⟹ fail-closed(0)；两形态正则**各自非空才判**，任一命中 ⟹ 0。
-_main_repo_hit() {
-  local _p="${1:-}"
-  [ -z "$RG" ] && return 0
-  if [ -n "$_MAIN_REPO_WIN_RE" ] && printf '%s' "$_p" | "$RG" -qi "$_MAIN_REPO_WIN_RE"; then
-    return 0
-  fi
-  if [ -n "$_MAIN_REPO_WSL_RE" ] && printf '%s' "$_p" | "$RG" -qi "$_MAIN_REPO_WSL_RE"; then
-    return 0
-  fi
-  return 1
 }
 
 # 2026-11-04（方案 C：**不锁单一平台**）：主仓命中判定收成**单源**。
@@ -7255,7 +7259,7 @@ cmd_paper_review() {
   case "$load_src" in
     builtin|dev) : ;;
     tampered|missing|error)
-      echo "{\"ok\":false,\"error\":\"paper-review 加载安全网拦截: source=$load_src（$(echo "$load_json" | python3 "$SKILL_DIR/scripts/gk_json_utils.py" field detail --default '' 2>/dev/null)）\",\"exit_code\":2,\"usage\":\"paper-review --venue fse|www [--track T] --papers-dir <dir> [--local|--subagent]\"}"
+      python3 "$SKILL_DIR/scripts/gk_json.py" build ok=false error="paper-review 加载安全网拦截: source=$load_src（$(echo "$load_json" | python3 "$SKILL_DIR/scripts/gk_json_utils.py" field detail --default '' 2>/dev/null)）" exit_code=2 usage="paper-review --venue fse|www [--track T] --papers-dir <dir> [--local|--subagent]"
       return 2 ;;
   esac
   [ -z "$mode" ] && mode="--local"
@@ -8488,10 +8492,10 @@ cmd_pre_check() {
       #   （F-REV-63 排查靠它：看清"读到哪个 state、为何"，而非静默读错账）。
       if [ "${1:-}" = "--show-state" ]; then
         if ! _conv_state_path; then
-          echo "{\"ok\":false,\"error\":\"${_CONV_ERR:-STATE_ROUTE_FAILED}\",\"base_state\":\"${STATE_FILE}\"}"
+          python3 "$SKILL_DIR/scripts/gk_json.py" build ok=false error="${_CONV_ERR:-STATE_ROUTE_FAILED}" base_state="${STATE_FILE}"
           return 1
         fi
-        echo "{\"ok\":true,\"resolved_state\":\"${_CONV_STATE}\",\"base_state\":\"${STATE_FILE}\"}"
+        python3 "$SKILL_DIR/scripts/gk_json.py" build ok=true resolved_state="${_CONV_STATE}" base_state="${STATE_FILE}"
         return 0
       fi
       # 子计划2 §3 判据 4：无 state ⟹ {"ok":false,"error":"no_active_plan"}（不 panic）
@@ -8822,7 +8826,7 @@ cmd_search() {
   esac
 
   # 步骤 4：检索（gitnexus 语义 → rg 文本兜底；bridge 无索引 ⟹ 直接 rg）
-  local results gn_available=false
+  local results="" gn_available=false
   local gn_repo
   # F-REV-71（2026-09-16）：repo 名改由**单源推导**（复用上方 Layer 1 已解析的 `search_path`）
   #   —— 原 gatekeeper 分支硬编码 `spz_gatekeeper`（**不在 registry** ⟹ 恒报找不到 ⟹ 静默退化为 rg）。
@@ -8843,8 +8847,12 @@ cmd_search() {
     fi
   fi
 
-  # Fallback: rg text search
-  if [ "$gn_available" = "false" ] || [ -z "$results" ]; then
+  # 文本检索（2026-11-09 修盲区）：`--file` 指定 = 明确要文本面 ⟹ **始终跑 rg** 并与
+  #   GitNexus 结果并集；原逻辑只在 GitNexus 无命中时才回落 ⟹ 图上有任何模糊 [process]
+  #   命中，docs/plans/*.md 正文即不可见（计划正本检索盲区）。
+  #   未指定 `--file` 时保持原行为（零回归）。
+  local rg_text=""
+  if [ -n "$file_pattern" ] || [ "$gn_available" = "false" ] || [ -z "$results" ]; then
     local rg_args=(-n --no-heading)
     [ -n "$file_pattern" ] && rg_args+=(--glob "$file_pattern")
     # bridge repo: plan docs are gitignored by design, add --no-ignore to find them
@@ -8855,16 +8863,29 @@ cmd_search() {
       local gk_results sk_results
       gk_results=$(cd "$(_resolve_repo_path gatekeeper)" 2>/dev/null && "$RG" "${rg_args[@]}" "$pattern" . 2>/dev/null | head -20 || echo "")
       sk_results=$(cd "$(_resolve_repo_path skill)" 2>/dev/null && "$RG" "${rg_args[@]}" "$pattern" . 2>/dev/null | head -20 || echo "")
-      results=""
-      [ -n "$gk_results" ] && results+="$(echo "$gk_results" | sed "s|^|[gatekeeper:${expected_hash:-15309a63}] |")"
-      [ -n "$sk_results" ] && { [ -n "$results" ] && results+=$'\n'; results+="$(echo "$sk_results" | sed "s|^|[skill:${SKILL_REPO_HASH}] |")"; }
+      rg_text=""
+      [ -n "$gk_results" ] && rg_text+="$(echo "$gk_results" | sed "s|^|[gatekeeper:${expected_hash:-15309a63}] |")"
+      [ -n "$sk_results" ] && { [ -n "$rg_text" ] && rg_text+=$'\n'; rg_text+="$(echo "$sk_results" | sed "s|^|[skill:${SKILL_REPO_HASH}] |")"; }
     else
-      results=$(cd "$search_path" 2>/dev/null && "$RG" "${rg_args[@]}" "$pattern" . 2>/dev/null | head -30 || echo "")
+      rg_text=$(cd "$search_path" 2>/dev/null && "$RG" "${rg_args[@]}" "$pattern" . 2>/dev/null | head -30 || echo "")
     fi
   fi
 
   local match_count=0
   [ -n "$results" ] && match_count=$(echo "$results" | wc -l)
+  [ -n "$rg_text" ] && match_count=$((match_count + $(echo "$rg_text" | wc -l)))
+  if [ -n "$rg_text" ]; then
+    if [ -n "$results" ]; then
+      # `--file` 时 rg 在前 ⟹ `--line` 的上下文加载取首行 file:line 才能命中
+      if [ -n "$file_pattern" ]; then
+        results="$rg_text"$'\n'"--- gitnexus ---"$'\n'"$results"
+      else
+        results="$results"$'\n'"--- rg text ---"$'\n'"$rg_text"
+      fi
+    else
+      results="$rg_text"
+    fi
+  fi
 
   # If --line specified, show surrounding context (precise context loading)
   if [ -n "$line_range" ] && [ -n "$results" ]; then
@@ -8881,7 +8902,7 @@ cmd_search() {
     fi
   fi
 
-  echo "{\"repo\":\"${repo}\",\"path\":\"${search_path}\",\"repo_hash\":\"${expected_hash:-${SKILL_REPO_HASH}}\",\"pattern\":\"${pattern}\",\"matches\":${match_count},\"results\":$(echo "${results:-}" | python3 "$SKILL_DIR/scripts/gk_json_utils.py" escape 2>/dev/null || echo '""')}"
+  python3 "$SKILL_DIR/scripts/gk_json.py" build repo="$repo" path="$search_path" repo_hash="${expected_hash:-${SKILL_REPO_HASH}}" pattern="$pattern" "matches:=${match_count:-0}" "results:=$(echo "${results:-}" | python3 "$SKILL_DIR/scripts/gk_json_utils.py" escape 2>/dev/null || echo '""')"
 }
 
 # ── release-check: GitHub release version scanner ──
@@ -9303,7 +9324,7 @@ PY
     # （worktree 无自带 state）⟹ 原样复制会得到空壳、`max=0` ⟹ 会话拿到**零预算**却看不出原因。
     # 故先退到默认 state；两者都缺 ⟹ **fail-loud**（绝不静默发一个 0 预算的会话）。
     [ -f "$_s_st" ] || _s_st="$_DEFAULT_STATE_FILE"
-    [ -f "$_s_st" ] || { echo "{\"ok\":false,\"error\":\"源 state 不存在（无域化基线可复制）\",\"resolved\":\"$state_override$STATE_FILE\",\"default\":\"$_DEFAULT_STATE_FILE\"}"; return 1; }
+    [ -f "$_s_st" ] || { python3 "$SKILL_DIR/scripts/gk_json.py" build ok=false error="源 state 不存在（无域化基线可复制）" resolved="$state_override$STATE_FILE" default="$_DEFAULT_STATE_FILE"; return 1; }
     # 根默认（2026-09-25 上提）：`GATEKEEPER_WORKTREE_ROOT` 自解析已**上提到模式分派之前**
     # （本函数开头：`--session`/`--code-fix`/plain 三路共用同一单点）⟹ 此处**不再重复**
     # （禁第二实现）；显式传入的 env 仍优先（上提块只在空值时派生）。
@@ -9324,7 +9345,7 @@ PY
         --get gate_data.edit_budget.max --default 0 2>/dev/null)
     # 设计 D 登记点①（2026-09-30）：会话 worktree 派发成功 ⟹ 记一条 claim（paths = 该 worktree 目录）。
     _gk_claim_register "$session" "$_s_wt" "session" "session" "$_s_wt"
-    echo "{\"ok\":true,\"session\":\"$session\",\"worktree\":\"$_s_wt\",\"branch\":\"$_s_branch\",\"state_file\":\"$_s_st\",\"bound_worktrees_extra\":true,\"budget\":{\"isolation\":\"per-session\",\"max\":${_s_max:-0}},\"note\":\"会话 worktree 归**主树 state**（hook 按 _resolve_state_by_target_path 自动治理，无需设 env）；编辑预算按会话分片 gate_data.edit_budget.sessions.<sid>（--session <name> 仅人可读标签）；CLI 命令请前置 STATE_FILE=$_s_st\",\"next\":\"STATE_FILE=$_s_st bash $SKILL_DIR/gatekeeper-cli.sh state\"}"
+    python3 "$SKILL_DIR/scripts/gk_json.py" build ok=true session="$session" worktree="$_s_wt" branch="$_s_branch" state_file="$_s_st" bound_worktrees_extra=true budget.isolation="per-session" "budget.max:=${_s_max:-0}" note="会话 worktree 归**主树 state**（hook 按 _resolve_state_by_target_path 自动治理，无需设 env）；编辑预算按会话分片 gate_data.edit_budget.sessions.<sid>（--session <name> 仅人可读标签）；CLI 命令请前置 STATE_FILE=$_s_st" next="STATE_FILE=$_s_st bash $SKILL_DIR/gatekeeper-cli.sh state"
     return 0
   fi
   # ── T7 处置链闭环出口（--close-out，2026-10-16，finding ECC-21AB384F03A9 / C 计划 §3 T7）─────
@@ -9549,7 +9570,7 @@ PY
     #   但要让它有**相位/打分**，须透传 `GK_STRIDE` / `GK_ARM_GOLD`；此处按**引用**透传
     #   （`\$` 保持字面量），由调用方 shell 求值 —— 避免把任意 gold JSON 内插进本 echo 的 JSON 串
     #   破坏结构。未设 ⟹ 空 ⟹ 下游具名 UNKNOWN（零回归）。
-    echo "{\"ok\":true,\"finding\":\"$fid\",\"family\":\"$_fam_name\",\"worktree\":\"$_wt\",\"tier\":\"$_tier\",\"state_file\":\"$_wt_state\",\"allowed_paths\":$_ap_esc,\"narrow_task\":$_nt_esc,\"narrow_task_file\":\"$_task_file\",\"next\":\"STATE_FILE=$_wt_state SUBAGENT_TIER=$_tier GK_STRIDE=\$GK_STRIDE GK_ARM_GOLD=\$GK_ARM_GOLD bash $SKILL_DIR/gatekeeper-cli.sh monitor --subagent --role coder --tools $_fix_tools --task-file $_task_file\"}"
+    python3 "$SKILL_DIR/scripts/gk_json.py" build ok=true finding="$fid" family="$_fam_name" worktree="$_wt" tier="$_tier" state_file="$_wt_state" "allowed_paths:=$_ap_esc" "narrow_task:=$_nt_esc" narrow_task_file="$_task_file" next="STATE_FILE=$_wt_state SUBAGENT_TIER=$_tier GK_STRIDE=\$GK_STRIDE GK_ARM_GOLD=\$GK_ARM_GOLD bash $SKILL_DIR/gatekeeper-cli.sh monitor --subagent --role coder --tools $_fix_tools --task-file $_task_file"
     return 0
   fi
   [ -z "$family" ] && { echo '{"ok":false,"error":"--family <F> required"}'; return 2; }
@@ -10753,7 +10774,7 @@ cmd_audit() {
       # 路径参数化 (原 heredoc 硬编码 /mnt/c/...) + 持久化走 _state_write
       # (原 `['audit_docs_result']=$docs_result` 字面量嵌入——JSON 含引号破坏 python -c, 同 --state 修复)
       local _tmp_docs; _tmp_docs=$(mktemp)
-      local docs_result; docs_result=$(SKILL_DIR="$(_gk_py_path "$SKILL_DIR")" python3 "$SKILL_DIR/scripts/gk_audit_docs.py" 2>>"$GK_DBG_LOG" || echo "{\"docs_checks\":[],\"summary\":{\"total\":0,\"matches\":0,\"failures\":1,\"heredoc_error\":\"$(tail -3 "$GK_DBG_LOG" 2>/dev/null | tr '\n' ' ' | head -c 200)\"}}")
+      local docs_result; docs_result=$(SKILL_DIR="$(_gk_py_path "$SKILL_DIR")" python3 "$SKILL_DIR/scripts/gk_audit_docs.py" 2>>"$GK_DBG_LOG" || python3 "$SKILL_DIR/scripts/gk_json.py" build "docs_checks:=[]" summary.total=0 summary.matches=0 summary.failures=1 heredoc_error="$(tail -3 "$GK_DBG_LOG" 2>/dev/null | tr '\n' ' ' | head -c 200)")
       # Persist docs result for RED report consumption (2026-08-20: 改 _state_write, 同 --state)
       echo "$docs_result" > "$_tmp_docs"
       GK_PY_TMP="$(_gk_py_path "$_tmp_docs")" _state_write "d.setdefault('gate_data',{})['audit_docs_result']=json.load(open(os.environ['GK_PY_TMP']))"
@@ -10770,7 +10791,7 @@ cmd_audit() {
       # Phase 4c-4f (2026-08-20): CLI 接线 — gk_audit_state.py 扩展检查链
       # (check_hint/check_self/check_hook/check_red 已在 Phase 4a 实现, run_all 可调)
       local _amode="${1#--}"; shift || true
-      local _aresult; _aresult=$(STATE_FILE="$(_gk_py_path "$STATE_FILE")" SKILL_DIR="$(_gk_py_path "$SKILL_DIR")" python3 "$SKILL_DIR/scripts/gk_audit_state.py" "--$_amode" 2>>"$GK_DBG_LOG" || echo "{\"error\":\"$(tail -3 "$GK_DBG_LOG" 2>/dev/null | tr '\n' ' ' | head -c 200)\"}")
+      local _aresult; _aresult=$(STATE_FILE="$(_gk_py_path "$STATE_FILE")" SKILL_DIR="$(_gk_py_path "$SKILL_DIR")" python3 "$SKILL_DIR/scripts/gk_audit_state.py" "--$_amode" 2>>"$GK_DBG_LOG" || python3 "$SKILL_DIR/scripts/gk_json.py" build error="$(tail -3 "$GK_DBG_LOG" 2>/dev/null | tr '\n' ' ' | head -c 200)")
       echo "{\"ok\":true,\"audit_mode\":\"$_amode\",\"result\":$_aresult}" ;;
     --memory|memory)
       # R-T6 Phase 4b 补课 (2026-08-23): 原 bash heredoc (L4628-4650, 硬编码 ECC 路径)

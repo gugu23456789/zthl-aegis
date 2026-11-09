@@ -15,37 +15,26 @@ import sys
 from pathlib import Path
 
 CLI = Path(__file__).resolve().parent.parent / "gatekeeper-cli.sh"
+PAYLOAD = Path(__file__).resolve().parent / "gk_monitor_payload.py"
 
 
 def _hist_pipeline() -> str:
-    txt = CLI.read_text(encoding="utf-8")
-    i = txt.index("GK_HMAC_VALID=")
-    j = txt.index('\n"', i) + 1
-    k = txt.index("\n", j + 1)
-    return txt[i:k]
+    """落库载荷（2026-11-04 起从 CLI 内联块下沉为脚本式模块）。"""
+    return PAYLOAD.read_text(encoding="utf-8")
 
 
 def _run_payload(tmp_path, ecc: dict, hist: list) -> Path:
-    """抽取落库载荷、代入路径、以给定 history 预置 state，真跑后返回 state 路径。"""
-    txt = CLI.read_text(encoding="utf-8")
-    i = txt.index("GK_HMAC_VALID=")
-    src = txt[i:txt.index('\n"', i) + 1]
-    body = src.split('python3 -c "', 1)[1]
+    """真跑下沉后的落库载荷模块（stdin = ECC JSON），返回 state 路径。"""
     state = tmp_path / ".gatekeeper.state"
     state.write_text(json.dumps({"gate_data": {"subagent_history": hist}}, ensure_ascii=False),
                      encoding="utf-8")
     out = tmp_path / "sub-1.json"
     out.write_text(json.dumps(ecc, ensure_ascii=False), encoding="utf-8")
-    # [ECC-BECE9B3C0F5E] 抽出的 `body` 是 **python 源码** ⟹ 代入的路径须用**正斜杠**：Windows 盘符
-    #   路径 `C:\Users\…` 里的 `\U` 在源码里是**非法 unicode 转义**（SyntaxError: unicodeescape）
-    #   ⟹ 该臂在 Windows 宿主必红。正斜杠在 Windows python 上等价可用。
-    def _pysrc(p):
-        return str(p).replace("\\", "/")
-    body = (body.replace("$SKILL_DIR", _pysrc(CLI.parent)).replace("$STATE_FILE", _pysrc(state))
-                .replace("$GK_DBG_LOG", _pysrc(tmp_path / "dbg.log")))
     env = dict(os.environ, GK_TASK=ecc.get("task", ""), GK_HMAC_VALID="skip",
-               GK_OUTPUT_FILE=str(out), GK_REPORT_FILE=str(tmp_path / "sub-1.md"))
-    r = subprocess.run([sys.executable, "-c", body], input=json.dumps(ecc),
+               GK_OUTPUT_FILE=str(out), GK_REPORT_FILE=str(tmp_path / "sub-1.md"),
+               GK_PY_SCRIPTS=str(Path(__file__).resolve().parent),
+               GK_PY_STATE=str(state))
+    r = subprocess.run([sys.executable, str(PAYLOAD)], input=json.dumps(ecc),
                        capture_output=True, text=True, env=env, timeout=90)
     assert r.returncode == 0, (r.returncode, r.stdout[-600:], r.stderr[-600:])
     return state
@@ -59,9 +48,9 @@ def _ecc(sid: str) -> dict:
 def _hist_max_bytes() -> int:
     """历史裁剪线（**源码单源**）：行为臂按当前线值造数据 —— 禁压线（`GK_STATE_TRIM_KB` 会把
     行为臂跑在生产不存在的配置上）、禁硬编码条数（2026-10-26 抬线 96KB→128KB 后 3×40KB
-    不再越线，该臂即失配变红）。"""
-    m = re.search(r"_HIST_MAX_BYTES=(\d+)", CLI.read_text(encoding="utf-8"))
-    assert m, "CLI 里找不到 _HIST_MAX_BYTES 赋值（裁剪线单源漂移？）"
+    不再越线，该臂即失配变红）。2026-11-04 起常量随载荷下沉到 `gk_monitor_payload.py`。"""
+    m = re.search(r"_HIST_MAX_BYTES=(\d+)", _hist_pipeline())
+    assert m, "载荷模块里找不到 _HIST_MAX_BYTES 赋值（裁剪线单源漂移？）"
     return int(m.group(1))
 
 

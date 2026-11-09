@@ -23,6 +23,12 @@ def _mkstate(tmp_path):
     return str(st)
 
 
+def _read_state(path):
+    """WAL-aware 读（reclaim 经 `update_state` 落 WAL，裸读 checkpoint 会滞后）。"""
+    import gk_json_utils as gju
+    return gju.read_state_file(str(path))
+
+
 def test_read_face_is_single_source_index_entries():
     """arm1（**被调用**）：`_satellite_history_union` 须经 `gk_satellite.index_entries`
     读索引（单源单实现），**不得**直读 `gate_data.satellite_index`。HEAD 必红（直读）。"""
@@ -90,7 +96,7 @@ def test_reclaim_apply_tombstones_and_never_deletes_live_shard(tmp_path):
     r = SAT.reclaim(st, now=1_600_000_000.0, dry_run=False)
     assert r.get("ok") and r.get("dry_run") is False, r
     assert os.path.isfile(shard), "仍有 live 臂却删了整片（单臂过期不得删共享片）"
-    d = json.load(open(st, encoding="utf-8"))
+    d = _read_state(st)
     old = d["gate_data"]["satellite_index"]["b1"]["OLD"]
     assert old.get("reclaimed_ts"), "过期叶子未打墓碑（应留可审计痕迹）"
     new = d["gate_data"]["satellite_index"]["b1"]["NEW"]

@@ -101,16 +101,15 @@ def _extract_block(src: str, start_marker: str, end_marker: str) -> str:
 
 
 # ── 臂 6 ──────────────────────────────────────────────────────────────────────
-def _run_preflight_b(tmp_path: Path, status_value: str):
+def _run_preflight_b(tmp_path: Path, status_value: str, channel: str = "crossrev"):
     """抽取真 preflight B 块 → 以桩驱动；返回 (analyze 调用数, 输出)。
 
     ⚠ 桩 **直接回三/四态值**（`current|stale|unavailable`，或修复后新增的 `reusable`），
     而非回原始 status 文本 —— 否则 `[ "$gn_status" = "stale" ]` 拿整段文本比较恒不等，
     红因会错位到"文本不等于 stale"而非"消费点不认新值"（本文件首轮即踩此坑，留痕）。
 
-    2026-10-27（U3 归因）：B 块的刷新已上抽为单一源 `_gitnexus_refresh_if_stale`（`106516c`）
-    ⟹ 桩里必须一并 source **真 helper** 再桩掉自愈原语 `_gx_analyze_embeddings`（记一次
-    analyze）；否则 helper 未定义 → `command not found` → 判据失焦（假红）。
+    2026-11-02（owner 裁定）后语义分通道：plan-refinement 的 stale 改 **advisory 放行**
+    （不再 analyze）、unavailable 才阻断；crossrev 维持 WARN。故 `channel` 可注入。
     """
     tmp_path.mkdir(parents=True, exist_ok=True)
     src = CLI.read_text(encoding="utf-8")
@@ -125,7 +124,7 @@ def _run_preflight_b(tmp_path: Path, status_value: str):
         'GK_DBG_LOG="%s/dbg.log"' % w,
         'CALLS_FILE="%s/calls.txt"' % w,
         ': > "$GK_DBG_LOG"; : > "$CALLS_FILE"',
-        'channel="crossrev"',
+        'channel="%s"' % channel,
         '_gx_repo_dir_for_current() { echo "%s/repo"; }' % w,
         '%s() { echo "%s"; }' % (STATUS_FN, status_value),
         "_run_gitnexus() { printf '%s\\n' \"$*\" >> \"$CALLS_FILE\"; return 0; }",
@@ -156,16 +155,18 @@ def test_arm6_preflight_reusable_no_analyze_no_degrade(tmp_path):
 
 
 def test_arm6b_preflight_stale_still_analyzes(tmp_path):
-    """[CTRL] 真 content-diff（`stale`）仍必须 analyze 刷新 1 次（收紧条件不得误收）。"""
-    ana, out = _run_preflight_b(tmp_path, "stale")
-    assert len(ana) == 1, f"真 stale 必须刷新 1 次，实测 {ana}"
+    """[CTRL] plan-refinement：stale 改 advisory 放行（2026-11-02 owner 裁定），
+    不再 analyze；必须留痕（不得静默）。"""
+    ana, out = _run_preflight_b(tmp_path, "stale", channel="plan-refinement")
+    assert ana == [], f"stale 已改 advisory，不得再触发 analyze，实跑 {ana}"
+    assert "advisory" in out, f"stale 放行未留痕：{out[:400]}"
 
 
 def test_arm6c_preflight_unavailable_degrades_only(tmp_path):
-    """[CTRL] 探测失败（`unavailable`）→ 不 analyze、只 degrade 警告（不得静默复用旧索引）。"""
-    ana, out = _run_preflight_b(tmp_path, "unavailable")
+    """[CTRL] plan-refinement：unavailable 才阻断（BASELINE_UNAVAILABLE），不 analyze。"""
+    ana, out = _run_preflight_b(tmp_path, "unavailable", channel="plan-refinement")
     assert ana == [], f"探测失败不得 analyze，实测 {ana}"
-    assert "degrade" in out, "探测失败须显式 degrade（不得静默）"
+    assert "BASELINE_UNAVAILABLE" in out, f"unavailable 未显式阻断：{out[:400]}"
 
 
 # ── 臂 7 ──────────────────────────────────────────────────────────────────────

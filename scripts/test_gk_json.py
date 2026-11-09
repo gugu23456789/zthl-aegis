@@ -7,6 +7,8 @@ import io
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).parent))
 
 import gk_json as gj
@@ -59,6 +61,28 @@ class TestBuild:
     def test_float_coerce(self):
         out = gj.cmd_build([("score", "0.75")])
         assert out["value"] == {"score": 0.75}
+
+    def test_nested_key(self):
+        """嵌套键（2026-11-09）：`repo_paths.skill=/x` ⟹ 对象内对象。"""
+        out = gj.cmd_build([("repo_paths.skill", "/x"), ("repo_paths.gatekeeper", "/y")])
+        assert out["value"] == {"repo_paths": {"skill": "/x", "gatekeeper": "/y"}}
+
+    def test_raw_json_fragment(self):
+        """原样片段：CLI 形态 `k:=<json>`（`cmd_build` 收到键尾带冒号）。"""
+        out = gj.cmd_build([("allowed:", '["a","b"]'), ("n:", "3"), ("z:", "null")])
+        assert out["value"] == {"allowed": ["a", "b"], "n": 3, "z": None}
+
+    def test_raw_invalid_json_raises(self):
+        """非法片段必须抛错（绝不产出非法 JSON）。"""
+        with pytest.raises(ValueError):
+            gj.cmd_build([("bad:", "{oops}")])
+
+    def test_windows_path_is_escaped(self):
+        """Windows 路径进 JSON 必须被正确转义（`\\U` 不再是非法转义）。"""
+        import json as _j
+        out = gj.cmd_build([("state_file", r"<home>\.gatekeeper.state")])
+        s = _j.dumps(out["value"], ensure_ascii=False)
+        assert _j.loads(s)["state_file"] == r"<home>\.gatekeeper.state"
 
 
 class TestPretty:

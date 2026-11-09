@@ -236,26 +236,27 @@ def test_read_union_keeps_legacy_inline_leaf(tmp_path):
 
 
 def test_converge_cli_history_segment_calls_center():
-    """静态：CLI history 落库段须**调中枢**且不再直开片文件（唯一写者 = gk_satellite）。"""
-    cli = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "gatekeeper-cli.sh")
-    src = open(cli, encoding="utf-8").read()
+    """静态：history 落库段须**调中枢**且不再直开片文件（唯一写者 = gk_satellite）。
+
+    2026-11-04 起载荷从 CLI 内联块下沉到 `gk_monitor_payload.py` ⟹ 判据面随落点迁移。
+    """
+    src = open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            "gk_monitor_payload.py"), encoding="utf-8").read()
     i = src.index("_hist_evicted=[]")
     seg = src[i:i + 900]
-    assert "gk_satellite" in seg, "CLI history 段未调中枢（第二直写者仍在）"
-    assert "open(_arc,'a'" not in seg, "CLI history 段仍直开片文件（应改调 gk_satellite.append）"
+    assert "gk_satellite" in seg, "history 段未调中枢（第二直写者仍在）"
+    assert "open(_arc,'a'" not in seg, "history 段仍直开片文件（应改调 gk_satellite.append）"
 
 
 def test_converge_cli_history_registers_index_e2e(tmp_path):
-    """e2e：**真跑** CLI history 落库段 ⟹ 片归档 + **索引 leaf 落 state**（in-tx 生效，`gd` 在作用域）。
-    HEAD 必红：落库段不产 `satellite_index` ⟹ KeyError。"""
+    """e2e：真跑下沉后的落库载荷 ⟹ 片归档 + 索引 leaf 落 state（in-tx 生效，`gd` 在作用域）。
+
+    2026-11-04 起载荷为脚本式模块 `scripts/gk_monitor_payload.py`（stdin 读 ECC）。
+    """
     pytest.importorskip("gk_moa_aggregate")  # history_union 单源已闭源 ⟹ 公开面 skip
     import subprocess
     from pathlib import Path
-    CLI = Path(__file__).resolve().parent.parent / "gatekeeper-cli.sh"
-    txt = CLI.read_text(encoding="utf-8")
-    i = txt.index("GK_HMAC_VALID=")
-    src = txt[i:txt.index('\n"', i) + 1]
-    body = src.split('python3 -c "', 1)[1]
+    PAYLOAD = Path(__file__).resolve().parent / "gk_monitor_payload.py"
     state = tmp_path / ".gatekeeper.state"
     big = [{"subagent_id": "old-%d" % k, "batch_id": "bc", "conclusion": "x" * 90000}
            for k in range(3)]
@@ -265,21 +266,10 @@ def test_converge_cli_history_registers_index_e2e(tmp_path):
            "timestamp": "2026-09-28T00:00:00+00:00", "task": "t", "conclusion": "c"}
     out = tmp_path / "sub-1.json"
     out.write_text(json.dumps(ecc, ensure_ascii=False), encoding="utf-8")
-    # [ECC-0A7EBDA60149 附带] Windows：`str(Path)` 的反斜杠落进 `-c` 单引号串会触发
-    #   `\U`/`\t` 转义错误（预存在红）⟹ 统一以正斜杠注入（Python 在 Windows 亦接受）。
-    _slash = lambda p: str(p).replace("\\", "/")  # noqa: E731
-    body = (body.replace("$SKILL_DIR", _slash(CLI.parent))
-                .replace("$STATE_FILE", _slash(state))
-                .replace("$GK_DBG_LOG", _slash(tmp_path / "dbg.log")))
-    # 裁剪线用逃生舱**显式钉死**（2026-11-01 三腿按墙比例放大后默认 800KB ⟹ 90KB 夹具
-    # 不再触发出窗；本臂要验的是「出窗即落片+登记索引」通路，与默认值无关）。
     env = dict(os.environ, GK_TASK="t", GK_HMAC_VALID="skip", GK_STATE_TRIM_KB="64",
                GK_OUTPUT_FILE=str(out), GK_REPORT_FILE=str(tmp_path / "sub-1.md"),
-               # 落库段 body 直接读 `os.environ['GK_PY_SCRIPTS'/'GK_PY_STATE']`
-               # （CLI 平时在 1762 行注入，测试绕过 CLI 入口 ⟹ 须补）
-               GK_PY_SCRIPTS=_slash(CLI.parent / "scripts"),
-               GK_PY_STATE=_slash(state))
-    r = subprocess.run([sys.executable, "-c", body], input=json.dumps(ecc),
+               GK_PY_SCRIPTS=str(PAYLOAD.parent), GK_PY_STATE=str(state))
+    r = subprocess.run([sys.executable, str(PAYLOAD)], input=json.dumps(ecc),
                        capture_output=True, text=True, env=env, timeout=90)
     assert r.returncode == 0, (r.returncode, r.stderr[-600:])
     d = json.loads(state.read_text(encoding="utf-8"))

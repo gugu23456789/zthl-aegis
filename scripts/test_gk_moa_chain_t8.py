@@ -52,7 +52,7 @@ def test_arm1_shape_and_guard_present():
     src = (SCRIPT_DIR / "gk_moa_aggregate.py").read_text(encoding="utf-8")
     assert "redirect_stdout(sys.stderr)" in src, "T8 未接：缺 stdout 污染守卫"
     i = src.index("with contextlib.redirect_stdout(sys.stderr):")
-    seg = src[i:i + 500]
+    seg = src[i:i + 1200]   # chain() 调用本身跨 8 行（含注释）⟹ 窗口过小会截断收尾 print
     assert "print(json.dumps(res, ensure_ascii=False))" in seg, "T8 未接：chain 未改单行"
     assert "indent=2" not in seg, "T8 未接：chain 仍多行（indent=2）"
 

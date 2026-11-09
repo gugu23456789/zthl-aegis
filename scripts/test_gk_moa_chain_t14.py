@@ -84,9 +84,11 @@ def test_chain_integrity_counts_missing(tmp_path, monkeypatch):
 
 # ── ④ 形态臂：CLI 落库面改用单源 `arm_score`（七维派生回填 history）──────────
 def test_cli_writes_arm_score():
-    s = CLI.read_text(encoding="utf-8")
-    assert "arm_score(" in s, "CLI 落库面未用单源 arm_score（history 仍恒 null）"
-    assert "'overall_score':out.get('overall_score')," not in s, "CLI 仍是裸透传"
+    """落库面单源：2026-11-04 起从 CLI 内联块下沉到 gk_monitor_payload.py。"""
+    payload = SCRIPTS / "gk_monitor_payload.py"
+    s = payload.read_text(encoding="utf-8")
+    assert "arm_score(" in s, "落库面未用单源 arm_score（history 仍恒 null）"
+    assert "'overall_score':out.get('overall_score')," not in s, "落库面仍是裸透传"
 
 
 # ── ⑤ 真链（CLI 落库面）：七维-only 臂 ⟹ `overall_score` **派生回填**（禁裸透传 null）──

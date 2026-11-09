@@ -23,6 +23,7 @@ import contextlib
 import base64
 import hashlib
 import json
+import math
 import os
 import re
 import sys
@@ -170,11 +171,46 @@ _REALPATH_CACHE: dict = {}
 _READY_DIRS: set = set()
 
 
+def _env_lock_timeout() -> float:
+    """取锁预算（`GK_STATE_LOCK_TIMEOUT` 注入，2026-11-05 bench-nightly 归因）。
+
+    非法/非正/非有限（空串、`abc`、`0`、`-1`、`None`、`nan`/`inf`）一律回落
+    `LOCK_TIMEOUT` —— **不允许**用 env 关掉超时（`timeout=0` 只能由调用方显式传）。
+    """
+    raw = os.environ.get("GK_STATE_LOCK_TIMEOUT")
+    if raw is None:
+        return LOCK_TIMEOUT
+    try:
+        v = float(raw)
+    except (TypeError, ValueError):
+        return LOCK_TIMEOUT
+    if not math.isfinite(v) or v <= 0:
+        return LOCK_TIMEOUT
+    return v
+
+
+def _canonical_host_path(s) -> str:
+    """把 `C:/...` 与 `/mnt/c/...` 折叠成**宿主原生**同一形态（C5 双形态双锁修复）。
+
+    WSL：盘符 → `/mnt/<drive>`；Windows：`/mnt/<drive>` → 盘符。仅用于**锁键**（含锁文件路径），
+    不改 state/ledger 的读写路径；`realpath` 前先折叠，确保两种拼法命中同一把锁。
+    """
+    t = str(s).replace("\\", "/")
+    if os.name == "nt":
+        if t.startswith("/mnt/") and len(t) >= 7 and t[6] == "/":
+            t = t[5].upper() + ":" + t[6:]
+    else:
+        if len(t) >= 3 and t[1] == ":" and t[2] == "/":
+            t = "/mnt/" + t[0].lower() + t[2:]
+    return os.path.normcase(os.path.normpath(t))
+
+
 def _lock_key(path) -> str:
     s = str(path)
     k = _REALPATH_CACHE.get(s)
     if k is None:
-        k = os.path.realpath(s)
+        s2 = _canonical_host_path(s)
+        k = _canonical_host_path(os.path.realpath(s2))
         _REALPATH_CACHE[s] = k
     return k
 
@@ -281,13 +317,15 @@ def _win_lock_wait(fd: int, timeout: float) -> None:
 
 
 @contextlib.contextmanager
-def state_lock(path, timeout: float = LOCK_TIMEOUT):
+def state_lock(path, timeout=None):
     """跨进程 state 排他锁（**可重入**）。唯一锁持有者 = python（选项 A，2026-09-25）。
 
     POSIX → `fcntl.flock`；Windows → `msvcrt.locking`（[ECC-CA93145A1E67]：原式在非 POSIX
     **退化为无锁** ⟹ 并发 `set-nested`/`append-list` 读-改-写丢写，Windows 实测 6 进程仅 3~4 落地）。
     仅当两者皆不可用（罕见平台）才无锁 —— 与升级前行为一致，不新增失败面。
     """
+    if timeout is None:
+        timeout = _env_lock_timeout()
     key = _lock_key(path)
     ent = _LOCKS.get(key)
     if ent is not None:                       # 本进程已持锁 ⟹ 只加深度（防自锁）
@@ -652,7 +690,47 @@ def _projection_cap() -> int:
         return BANK_PROJECTION_CAP
 
 
-def view_bank_actions(gd: dict) -> list:
+def _journal_bank_actions(state_file: str) -> list:
+    """从 append-only journal 读 `source=="bank"` 事件（C1 审计读面修复）。
+
+    背景：live `rejected_edits` 有界（`REJECTED_CAP=120`），出窗事件落
+    `<state>.rejected-edits-journal.jsonl`（append-only）；原 `view_bank_actions` 只读 live
+    ⟹ 审计投影会把已出窗的 bank 阻断读成 0。本函数读 journal（含轮转 `-1`）补齐读面，
+    **不新增第三份账**、不改写盘。
+    """
+    try:
+        from gk_advance import REJECTED_JOURNAL_SUFFIX as _SUF
+    except Exception:
+        _SUF = ".rejected-edits-journal.jsonl"
+    out = []
+    for suf in (_SUF, _SUF + "-1"):
+        p = Path(str(state_file) + suf)
+        if not p.exists():
+            continue
+        try:
+            lines = p.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            continue
+        for line in lines:
+            if not line.strip():
+                continue
+            try:
+                e = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(e, dict) or e.get("source") != "bank":
+                continue
+            out.append({"kind": "monitor_local_block",
+                        "stage": e.get("stage", ""),
+                        "transition": e.get("to_stage", ""),
+                        "score": e.get("score"),
+                        "ts": e.get("timestamp", ""),
+                        "forced": str(e.get("outcome") or "") == "forced",
+                        "journal": True})
+    return out
+
+
+def view_bank_actions(gd: dict, state_file: str = "") -> list:
     """`bank_actions` 的**读时投影**（T3，2026-11-01）：从事件流过滤 `source=="bank"`。
 
     背景：事件单写后 `bank_actions` 不再落盘（唯一正本 = `gate_data.rejected_edits`）；
@@ -683,6 +761,8 @@ def view_bank_actions(gd: dict) -> list:
                     "score": e.get("score"),
                     "ts": e.get("timestamp", ""),
                     "forced": str(e.get("outcome") or "") == "forced"})
+    if state_file:
+        return _journal_bank_actions(state_file) + out
     return out[-_projection_cap():]
 
 

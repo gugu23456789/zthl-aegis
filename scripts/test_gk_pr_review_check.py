@@ -144,7 +144,8 @@ class TestRunGx:
             returncode = 0
             stdout = out
             stderr = ""
-        monkeypatch.setattr(subprocess, "run", lambda *a, **k: R())
+        monkeypatch.setattr(pr.gk_gitnexus, "run_raw",
+                        lambda *a, **k: (True, out, "", False))
         d = pr._run_gx(["impact", "x", "-r", "r"])
         assert d == {"d1": [{"x": 1}, {"x": 2}], "byDepth": {"1": ["a"], "2": ["b"]}}
 
@@ -155,7 +156,8 @@ class TestRunGx:
             returncode = 0
             stdout = out
             stderr = ""
-        monkeypatch.setattr(subprocess, "run", lambda *a, **k: R())
+        monkeypatch.setattr(pr.gk_gitnexus, "run_raw",
+                        lambda *a, **k: (True, out, "", False))
         d = pr._run_gx(["detect-changes", "-s", "compare"])
         assert d == {"raw": out}
 

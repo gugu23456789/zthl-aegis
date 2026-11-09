@@ -18,7 +18,7 @@
 | 6 | `cmd_apply_worktree` | ─── apply-worktree: worktree 申请—分发入口（F7/R9 子集，2026-09-22）─── | `fid="" family="" codefix="0" tier="" dry` | - |
 | 7 | `cmd_attribution` | attribution | `input_file="${1:-}"` | - |
 | 8 | `cmd_audit` | [write_guard 裁决 2026-09-06 EXEMPT] 写入仅于持久化域 --state/--docs（b | `scope="${1:-state}"` | - |
-| 9 | `cmd_balance` | balance (DeepSeek API balance query, MiMo 无此 endpoint) | `api_key="${API_KEY}"` | - |
+| 9 | `cmd_balance` | balance (DeepSeek API balance query, MiMo 无此 endpoint) | `_gk_xtrace=0` | - |
 | 10 | `cmd_calibrate` | calibrate | `_esub="calibrate"` | - |
 | 11 | `cmd_check_changes` | cmd_check-changes (文档变更触发器: 统计未提交/未推送改动) | `threshold=2 repo="" type="all"` | - |
 | 12 | `cmd_ci_diagnose` | ci-diagnose (轻量: 仅 list + fetch, 无 LLM) | `run_id="" gh_token="${GITHUB_TOKEN:-${GH` | - |
@@ -39,21 +39,21 @@
 | 27 | `cmd_model_probe` | model-probe（W2A 模型版本探针：钉 stride/相位周期，alias 不可作版本判据） | `out rc` | W2A §6.1 / §6.3(3) F1b（ECC-75F6A2BB7F2B） |
 | 28 | `cmd_monitor` | PRM MONITOR: structural (--local) + semantic (--api → v4-fla | `mode="--local" stage="" api_key="${API_K` | --align = 委托 doc-align 插件（gk_doc_align.py 单一实现；F-REV-42 完成 2026-09-01 收敛）。0 API  |
 | 29 | `cmd_node_guard` | guard-edit (bridge upgrade: CRITICAL_MODULE / CRITICAL_CONFI | `node="" pid="" ctx_json="" check_only=fa` | - |
-| 30 | `cmd_paper_review` | paper-review (论文写作投稿前置模拟评审插件 — 2026-08-28，域 7 专项；投稿前自检，非同行审稿) | `venue="" track="" papers_dir="" mode="" ` | 多会议评审准则档案（按 venue 归档，档案随私仓保留）—— 轨道政策 |
+| 30 | `cmd_paper_review` | paper-review (论文写作投稿前置模拟评审插件 — 2026-08-28，域 7 专项；投稿前自检，非同行审稿 | `venue="" track="" papers_dir="" mode="" ` | 多会议评审准则档案（按 venue 归档，档案随私仓保留）—— 轨道政策 |
 | 31 | `cmd_phase_probe` | phase-probe（相位扫描探针：密集 sweep × 每 stride 置换检验 + Bonferroni） | `out rc` | W2A P2 §6（一次密集 sweep）；ECC-42B4A6E15927 |
 | 32 | `cmd_plan_lint` | plan-lint（计划写入安全网 PW-SN 确定性机检） | `out rc` | references/plan-writing-safety-net.md（七轨对位表机检列） |
 | 33 | `cmd_plan_refinement` | plan refinement | `target="" task="" source_docs="" check_o` | - |
 | 34 | `cmd_pr_score` | pr-score (C9: PR-SCORE 双盲评分锚定, 2026-09-06) | `_sub="${1:-}"` | - |
 | 35 | `cmd_pre_check` | ─── pre-check (WASM pre-check: delegate to project's wasm-pr | `subcmd="$1"; shift` | - |
 | 36 | `cmd_project_register` | project-register（治理范围注册表自动化入库门禁 — 域 5） | `out rc` | 2026-08-28-security-hardening-assessment.md §5.2（自动化管控流程）。 |
-| 37 | `cmd_push` | [write_guard 裁决 2026-09-06 EXEMPT] _state_write 仅于真实 push 三次 | `action="" repo="" remote="origin" branch` | - |
+| 37 | `cmd_push` | push | `action="" repo="" remote="origin" branch` | - |
 | 38 | `cmd_reflect` | reflect (T41) | `stage="${1:-}"` | SkillOpt arXiv:2605.23904 §3.5 (rejected edits as negative feedback) |
 | 39 | `cmd_release_check` | ── release-check: GitHub release version scanner ── | `timeout=10` | MPR Standing Plan §场景1 — 外部参考项目冲击分析 |
 | 40 | `cmd_replay` | replay (D8: decision replay from advance log) | `_mode="legacy" _phase=""` | - |
 | 41 | `cmd_resolve` | resolve (human final resolution after appeal/escalate) | `gate="${1:-}" resolution="${2:-}" reason` | - |
 | 42 | `cmd_search` | ─── search (T43+: repo-routed search with precise context lo | `pattern="" repo="" file_pattern="" line_` | - |
-| 43 | `cmd_self_check` | self-check (system diagnostics) | `issues=0 checks=""` | - |
-| 44 | `cmd_set_key` | set-key (standardized API key management) | `provider="${1:-}" key="${2:-}"` | - |
+| 43 | `cmd_self_check` | self-check (system diagnostics) | `issues=0 checks="" _sc_tests=""` | - |
+| 44 | `cmd_set_key` | set-key (standardized API key management) | `provider="${1:-}" key="${2:-}" _kf="" _f` | - |
 | 45 | `cmd_stage_detail` | stage-detail | `stage="$1" ref_file=""` | - |
 | 46 | `cmd_state` | state | `_force=false _curr` | - |
 | 47 | `cmd_state_patch` | ─── state-patch — gate_data 统一证据写入（S7/S8 2026-09-05 实装）─── | `_stk="${2:-}" _stv="${3:-}"` | - |
@@ -230,7 +230,6 @@
 
 ### cmd_push
 **Usage**: `gatekeeper-cli.sh push <args>`
-**Purpose**: [write_guard 裁决 2026-09-06 EXEMPT] _state_write 仅于真实 push 三次失败后（L5085 落 push_failures 供
 
 ### cmd_reflect
 **Usage**: `gatekeeper-cli.sh reflect <args>`
@@ -257,41 +256,8 @@
 **Purpose**: ─── search (T43+: repo-routed search with precise context loading) ───
 
 ### cmd_self_check
-**Usage**: `gatekeeper-cli.sh self-check [--tests quick|full|skip] [--full|--quick|--skip-tests]`
+**Usage**: `gatekeeper-cli.sh self-check <args>`
 **Purpose**: self-check (system diagnostics)
-
-Test-leg tiers (2026-11-01) — pick the tier that matches the occasion, do not rely on "default = small":
-
-| Tier | What runs | Use for | Cost (this host) |
-|:--|:--|:--|:--|
-| `quick` (default) | 22-file fast subset, `-n <cores>` via xdist, result cached by `HEAD + tests fingerprint` | interactive / agent health checks, audit chain L8 | ~30 s cold, ~8 s warm |
-| `full` | every `scripts/test_*.py`, timeout 1800 s | CI, pre-release, "prove it green" | ~10 min |
-| `skip` | no test leg (env checks only) | red-team evidence collection, nested runs, latency-critical calls | ~6 s |
-
-Env equivalent: `GK_SELFCHECK_TESTS=quick|full|skip` (children forced to `skip` to forbid recursion).
-Other knobs: `GK_SELFCHECK_TESTS_TTL=<s>` (test-result cache, `0` = off),
-`GK_SELFCHECK_SCAN_TTL=<s>` (repo AST-scan cache), `GK_SELFCHECK_GITNEXUS_PROBE=cli` (deep probe).
-
-Check #39 `state_ownership` compares the **top-level** `state.worktree` field with the current worktree
-root (`git rev-parse --show-toplevel`) — the same field the startup ownership scan reads
-(`gk_state_route._load_worktree`, projection `worktree/r_phase/stage`; `proj.worktree` is **not** read).
-A copied state keeps the **source** worktree path, which makes the startup ownership scan "correct" the
-state to the source tree's state (and its phase) → domain routing `MISMATCH`. Report-only by default;
-`self-check --repair-worktree` (env `GK_SELFCHECK_REPAIR_WORKTREE=1`) rewrites the field and recomputes
-the checksum.
-
-**Interpreter resolution** (single source `scripts/py_resolve.sh`; shared by self-check, monitor
-subagents and the sandbox wrapper) — no absolute venv path ships with the source:
-
-1. `GK_PYTHON` → 2. `SUAGENT_PYTHON` → 3. `ACCEPT_PY` → 4. `scripts/_accept_py.local`
-   (machine-local pin, gitignored) → 5. repo `.venv` (`bin/python*` / `Scripts/python.exe`) →
-   6. `GK_PY_GLOBS` (default `/opt/*/bin/python`, `:`-separated, discovery only) →
-   7. `python3` / `python` on `PATH`.
-
-A WSL venv and a Windows venv are **peers**: whichever is present and satisfies the requirement wins.
-`py_resolve.sh pytest` only returns an interpreter that can `import pytest` (self-check tests leg);
-if none qualifies it falls back to the best `any` interpreter and the test leg reports an explicit
-SKIP with the reason — never a silent green.
 
 ### cmd_set_key
 **Usage**: `gatekeeper-cli.sh set-key <args>`

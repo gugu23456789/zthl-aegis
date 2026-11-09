@@ -139,6 +139,16 @@ review, state_domain, source_docs, edit_budget_declared`
 **且 `phases` 非空**的文件即停止（残缺 META 跳过，防空壳计划当路由输入）。常驻计划在
 5 层未命中时自动检测。
 
+## 路由白名单基线
+
+（单一文档基线：改动下列代码常量必须同批更新本表，否则 `check_route_center_alignment` ⑦ 报「偏离文档基线」。）
+
+| 常量 | 值 |
+|:--|:--|
+| `MAIN_REPO_WSL` | 运行时解析（无字面量） |
+| `DEV_WORKTREE_ROOTS` | `<home>/.trae/worktrees/`, `c:/users/hp/.trae/worktrees/`, `/root/.config/superpowers/worktrees/` |
+| `SEARCH_DIRS` | `{main}/docs/plans/`, `{main}/docs/plan-backup/`, `{skill}/references/`, `{skill}/references/docs/plan-backup/`, `{user}/.codex/docs/plans/` |
+
 ## 7. 仓库路由（运行时解析）
 
 `resolve_repo` 内建表（`target_repo` → 路径）：

@@ -8,7 +8,7 @@
   能清残态的**唯一**自愈是 `_gx_analyze_embeddings`（--embeddings → 失败再 --drop-embeddings）。
 
 判据（红先，落刀前 HEAD **必红**）：
-  arm1  B 块的 stale 刷新须改走 `_gx_analyze_embeddings "$_bl_dir"`（HEAD 为纯 analyze → 红）
+  arm1  B 块按 2026-11-02 owner 裁定改**只读判定**（stale 只告警、不再触发 analyze）
   arm2  `_gx_analyze_embeddings` 的 analyze 须显式 `GK_GX_DIR="$dir"`（HEAD 未传 → 红）
   arm3  `_gitnexus_ensure_baseline` 须改走 `_gx_analyze_embeddings "$dir"`（HEAD 纯 analyze → 红）
   arm4  自愈须**跨进程单飞**（flock），并发臂不并发 analyze（HEAD 无锁 → 红）
@@ -37,20 +37,24 @@ def _body(name: str) -> str:
     return s[i:j]
 
 
-def test_arm1_preflight_b_routes_selfheal():
-    """arm1：B 块 stale 刷新必须走自愈单源，而非纯 analyze。
+def test_arm1_preflight_b_readonly_status():
+    """arm1：B 块按 2026-11-02 owner 裁定改**只读判定**（stale 只告警，不再触发 analyze）。
 
-    2026-10-27（U3 归因）：刷新已上抽为单一源 `_gitnexus_refresh_if_stale`（`106516c`，
-    2026-10-16）⟹ 判据改**两段式**，比原单字面更强：B 块调 helper，且 helper 内走
-    `_gx_analyze_embeddings`（残态自愈 + 跨进程单飞都在后者里）。
+    历史（2026-10-16 T7）：B 块曾调 `_gitnexus_refresh_if_stale`（stale ⟹ 自愈 analyze）。
+    2026-11-02 owner 裁定改为只读：`analyze --embeddings` 是 40min 级重操作，挂在每次
+    质询前置门会永久卡死（持续提交的仓库里 stale 是常态）⟹ 本臂由「必须自愈」翻转为
+    「不得自愈」，并保留「必须走状态判定单点」的正向断言。
     """
+    def _code(x):
+        return "\n".join(l for l in x.splitlines() if not l.lstrip().startswith("#"))
     b = _body("_review_channel_preflight")
-    assert '_gitnexus_refresh_if_stale "$_bl_dir"' in b, (
-        "B 块未走 gitnexus 刷新 helper ⟹ 卡死索引刷不绿 ⟹ BASELINE_STALE 全臂拦停")
+    assert '_gitnexus_baseline_status "$_bl_dir"' in _code(b), (
+        "B 块未走 gitnexus 状态判定单点 ⟹ 新鲜度不可判/误判")
+    assert '_gitnexus_refresh_if_stale' not in _code(b), (
+        "B 块重新引入 analyze 自愈 ⟹ 质询侧 40min 级重操作（违反 2026-11-02 owner 裁定）")
     h = _body("_gitnexus_refresh_if_stale")
     assert '_gx_analyze_embeddings "$_d"' in h, (
-        "刷新 helper 未走自愈单源 `_gx_analyze_embeddings` ⟹ 残态（incremental-in-progress / "
-        "embedding-checkpoint-pending）仍刷不绿")
+        "刷新 helper（close-out 面）未走自愈单源 `_gx_analyze_embeddings` ⟹ 残态仍刷不绿")
 
 
 def test_arm2_selfheal_pins_gx_dir():

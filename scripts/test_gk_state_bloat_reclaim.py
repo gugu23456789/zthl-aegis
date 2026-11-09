@@ -24,6 +24,12 @@ def _mkstate(tmp_path, gd=None):
     return str(st)
 
 
+def _read_state(path):
+    """WAL-aware 读（reclaim/backfill 经 `update_state` 落 WAL，裸读 checkpoint 会滞后）。"""
+    import gk_json_utils as gju
+    return gju.read_state_file(str(path))
+
+
 # ── A1（T2/R6）：生产 append 的叶子须可过期 ──────────────────────────────
 def test_A1_production_append_leaf_has_nonzero_ttl(tmp_path, monkeypatch):
     """生产路径（**不显式传** `ttl_s`）落下的叶子，其 `ttl_s` 须非 0。"""
@@ -69,9 +75,9 @@ def test_A3_reclaim_apply_is_idempotent(tmp_path):
     with open(SAT.shard_path(st, "pipeline"), "a", encoding="utf-8") as fh:
         fh.write('{"id":1}\n')
     SAT.reclaim(st, now=1_600_000_000.0, dry_run=False)
-    d1 = json.load(open(st, encoding="utf-8"))["gate_data"]["satellite_index"]["b1"]["A"]["reclaimed_ts"]
+    d1 = _read_state(st)["gate_data"]["satellite_index"]["b1"]["A"]["reclaimed_ts"]
     SAT.reclaim(st, now=1_600_000_100.0, dry_run=False)
-    d2 = json.load(open(st, encoding="utf-8"))["gate_data"]["satellite_index"]["b1"]["A"]["reclaimed_ts"]
+    d2 = _read_state(st)["gate_data"]["satellite_index"]["b1"]["A"]["reclaimed_ts"]
     assert d1 == d2, "二次 apply 改变了墓碑（非幂等）：%r != %r" % (d1, d2)
 
 
@@ -95,7 +101,7 @@ def test_A5_register_spills_open_over_cap(tmp_path, monkeypatch):
     for i in range(6):
         out = GF.register(st, "title-%d" % i, "manual")
         assert out and out.get("id"), "register 被拒（自锁）：%r" % (out,)
-    main = json.load(open(st, encoding="utf-8"))["gate_data"]["ecc_findings"]
+    main = _read_state(st)["gate_data"]["ecc_findings"]
     n_open = sum(1 for f in main if f.get("status") == "open")
     assert n_open <= 3, "open 越线未溢出（主 state 仍撑）：n_open=%d" % n_open
     allf = GF.load_findings_union(st)
@@ -143,7 +149,7 @@ def test_A8_backfill_stamps_missing_ttl(tmp_path, monkeypatch):
                      "last_ts": "2000-01-01T00:00:00+00:00"}}}})
     r = SAT.backfill_ttl(st)
     assert r.get("ok") and r.get("backfilled") == 1, r
-    leaf = json.load(open(st, encoding="utf-8"))["gate_data"]["satellite_index"]["b1"]["A"]
+    leaf = _read_state(st)["gate_data"]["satellite_index"]["b1"]["A"]
     assert int(leaf.get("ttl_s", 0)) > 0, "存量叶 ttl_s 未回填：%r" % (leaf,)
 
 
@@ -172,7 +178,7 @@ def test_A10_register_spills_over_byte_cap(tmp_path, monkeypatch):
     st = _mkstate(tmp_path)
     for i in range(6):
         GF.register(st, "byte-title-%d" % i, "manual")
-    main = json.load(open(st, encoding="utf-8"))["gate_data"]["ecc_findings"]
+    main = _read_state(st)["gate_data"]["ecc_findings"]
     n = len(_j.dumps(main, ensure_ascii=False).encode("utf-8"))
     assert n <= 2500 or len(main) <= 1, \
         "byte 越线未溢出：size=%d n=%d（cap=2500）" % (n, len(main))
@@ -204,7 +210,7 @@ def test_A12_spillover_dry_run_writes_nothing(tmp_path, monkeypatch):
     assert open(st, encoding="utf-8").read() == before, "dry-run 竟改写了 state"
     r2 = GF.spillover_open(st, max_open=2)
     assert r2.get("spilled") == 2, "apply 未真移：%r" % (r2,)
-    main = json.load(open(st, encoding="utf-8"))["gate_data"]["ecc_findings"]
+    main = _read_state(st)["gate_data"]["ecc_findings"]
     assert sum(1 for f in main if f.get("status") == "open") <= 2, "apply 后 open 未降至 cap"
 
 

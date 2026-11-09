@@ -352,3 +352,37 @@ def test_human_unlock_rejected_on_unsealed_ledger(tmp_path):
     _write(st, [{"ts": L._now_str(), "source": "code-fix", "kind": L.KIND_RAISE}], seal=False)
     out = L.record_unlock(str(st), "owner", "x")
     assert out.get("ok") is False and out.get("error") == "RAISE_LEDGER_SEAL_INVALID"
+
+def _concurrent_append_worker(st, key_dir, barrier):
+    barrier.wait()
+    L.append(st, "degrade", reason="concurrency-arm", key_dir=key_dir)
+
+
+def test_append_concurrent_no_duplicate_seq(tmp_path):
+    """并发 append ⟹ 封链 seq 必须严格 1..N，无重复（2026-11-09 锁根因臂）。
+
+    红先性：旧实现 append = 读记录 → 追加行 → seal_now（读链尾 → 写 seal → 推链）
+    **整段无锁** ⟹ 8 路并发会各自 seal 同一账本摘要 ⟹ 链上出现同 seq 重复条目
+    （本会话实测 `seq=1582` 逐字重复）⟹ `_verify_chain` 判 `seq_mismatch`。
+    """
+    import multiprocessing as mp
+    st = _state(tmp_path)
+    key_dir = str(tmp_path / "nokeys")
+    n = 8
+    try:
+        ctx = mp.get_context("fork")
+    except ValueError:                       # 非 POSIX 宿主（无 fork）⟹ 用默认上下文
+        ctx = mp.get_context()
+    barrier = ctx.Barrier(n)
+    ps = [ctx.Process(target=_concurrent_append_worker,
+                      args=(str(st), key_dir, barrier)) for _ in range(n)]
+    for x in ps:
+        x.start()
+    for x in ps:
+        x.join(30)
+    assert all(x.exitcode == 0 for x in ps), [x.exitcode for x in ps]
+    chain = Path(str(st) + L.SEAL_SUFFIX + L.CHAIN_SUFFIX)
+    seqs = [json.loads(ln)["seq"] for ln in chain.read_text(encoding="utf-8").splitlines() if ln.strip()]
+    assert seqs == list(range(1, n + 1)), f"封链 seq 非严格递增/有重复: {seqs}"
+    assert L.verify_seal(str(st), key_dir=key_dir)["ok"] is True
+

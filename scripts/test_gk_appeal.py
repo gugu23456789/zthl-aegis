@@ -10,6 +10,12 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 
+def _read_state(path):
+    """WAL-aware 读（`appeal` 经 `update_state` 落 WAL，裸读 checkpoint 会滞后）。"""
+    import gk_json_utils as gju
+    return gju.read_state_file(str(path))
+
+
 sys.path.insert(0, str(Path(__file__).parent))
 
 from gk_appeal import appeal, _detect_foreign_content, _build_mediation_context, _collect_hard_evidence
@@ -235,8 +241,7 @@ class TestAppealApiCall:
         assert result["appeal_verdict"] == "DENIED"
         
         # Verify appeal_denied_gates was written
-        with open(state_file) as f:
-            state = json.load(f)
+        state = _read_state(state_file)
         assert "ECO-AUDIT" in state.get("appeal_denied_gates", [])
     
     @patch("gk_appeal.requests.post")
@@ -262,8 +267,7 @@ class TestAppealApiCall:
         assert result["ok"] is True
         
         # Verify appeal_required was cleared
-        with open(state_file) as f:
-            state = json.load(f)
+        state = _read_state(state_file)
         assert "appeal_required" not in state.get("gate_data", {})
 
     @patch("gk_appeal.requests.post")
@@ -298,8 +302,7 @@ class TestAppealApiCall:
         result = appeal(gate="ECO-AUDIT", notes="test", api_key="test", state_path=str(state_file))
         assert result["ok"] is True
 
-        with open(state_file) as f:
-            state = json.load(f)
+        state = _read_state(state_file)
         gd = state["gate_data"]
         assert set(gd["appeal_blocks"]) == {"entropy"}      # credit 源已清
         assert gd["appeal_required"] == "STAGE_3"           # 熵源镜像保留
@@ -330,8 +333,7 @@ class TestAppealErrorCodeSafetyNet:
         result = appeal(gate="ECO-AUDIT", notes="test", api_key="test", state_path=str(state_file))
         assert result["ok"] is False
         assert result["error"] == "APPEAL_RESPONSE_INVALID"
-        with open(state_file) as f:
-            st = json.load(f)
+        st = _read_state(state_file)
         assert st.get("appeal_denied_gates", []) == []
         assert st.get("appeal_records", {}) == {}
 
@@ -359,8 +361,7 @@ class TestAppealErrorCodeSafetyNet:
         result = appeal(gate="ECO-AUDIT", notes="test", api_key="test", state_path=str(state_file))
         assert result["ok"] is True
         assert result["appeal_verdict"] == "APPROVED"
-        with open(state_file) as f:
-            st = json.load(f)
+        st = _read_state(state_file)
         assert "ECO-AUDIT" not in st.get("appeal_denied_gates", [])
         log = st.get("gate_data", {}).get("appeal_repair_log", [])
         assert log and log[-1]["reason"] == "sentinel_denied_repaired"
@@ -378,8 +379,7 @@ class TestAppealErrorCodeSafetyNet:
         result = _a(gate="ECO-AUDIT", notes="test", api_key="test", state_path=str(state_file))
         assert result["ok"] is False
         assert "APPEAL_DENIED_PERMANENTLY" in result["error"]
-        with open(state_file) as f:
-            st = json.load(f)
+        st = _read_state(state_file)
         assert "ECO-AUDIT" in st.get("appeal_denied_gates", [])
         assert st.get("gate_data", {}).get("appeal_repair_log", []) == []
 

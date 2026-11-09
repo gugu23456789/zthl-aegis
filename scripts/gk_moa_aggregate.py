@@ -2669,6 +2669,7 @@ def chain(state_file: str, *, plan: str = "", batch: str = "", role: str = "plan
             except Exception:  # noqa: BLE001 — 读失败 ⟹ 不启用身份锚（保守）
                 _known = set()
             _fs = _PF.convert(_text, plan=plan, batch=b, refs=_refs_of(agg),
+                              require_structural=False,
                               known_findings=_known)
             _ids = []
             for _f in _fs:

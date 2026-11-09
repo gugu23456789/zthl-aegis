@@ -36,9 +36,11 @@ def test_arm_bn1_fanout_passes_batch_narrow():
 def test_arm_bn2_batch_narrow_is_shared_across_groups():
     """臂 bn2（静态）：`--batch-narrow` 实参须**唯一共享**（非逐臂各异），且带 `--arm-group`。"""
     blk = _fanout_block()
-    args = re.findall(r"--batch-narrow\s+(\S+)", blk)
+    # 只看可执行面：**行内注释**里为说明历史会引用 `--batch-narrow ... ⟹` 字样，不能当实参。
+    code = "\n".join(l.split("#", 1)[0] for l in blk.splitlines())
+    args = re.findall(r"--batch-narrow\s+(\S+)", code)
     assert args, "未找到 --batch-narrow 实参（下发段未按批注入批级共享集）"
     assert len(set(args)) == 1, (
         "--batch-narrow 实参不唯一 %s ⟹ 非批级共享 ⟹ batch_id 分叉" % sorted(set(args))
     )
-    assert "--arm-group" in blk, "下发段未传 --arm-group ⟹ 组别身份缺失"
+    assert "--arm-group" in code, "下发段未传 --arm-group ⟹ 组别身份缺失"
