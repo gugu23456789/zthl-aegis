@@ -164,3 +164,9 @@ class TestDocFreshnessC6:
         r = check_doc_freshness(str(tmp_path))
         assert r["status"] == "FAIL"
         assert "缺失" in r["detail"]
+
+    def test_release_mode_missing_total_is_skip(self, tmp_path):
+        """发布门（release=True）：总表属导出排除面 ⟹ 公开树缺席降级 SKIP，不阻断公开包。"""
+        r = check_doc_freshness(str(tmp_path), release=True)
+        assert r["status"] == "SKIP"
+        assert "导出排除面" in r["detail"]

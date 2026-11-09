@@ -3,7 +3,7 @@
 > 生成器：`scripts/gk_repo_index.py --write`；漂移由 `gk_release_preflight.py` 的 `repo_index` 项守。
 > 用途：**移动端**（GitHub App 没有 “Go to file”）与抓取工具一次拿到全量路径；点路径直达文件。
 
-**共 870 个文件。**
+**共 872 个文件。**
 
 ## 索引生成物
 
@@ -70,6 +70,7 @@
 - [RELEASE-NOTES/RELEASE-NOTES-v0.9.8.6.md](RELEASE-NOTES/RELEASE-NOTES-v0.9.8.6.md) — ZTHL Aegis v0.9.8.6 — 发布说明
 - [RELEASE-NOTES/RELEASE-NOTES-v0.9.8.7.md](RELEASE-NOTES/RELEASE-NOTES-v0.9.8.7.md) — ZTHL Aegis v0.9.8.7 — 发布说明
 - [RELEASE-NOTES/RELEASE-NOTES-v0.9.8.8.md](RELEASE-NOTES/RELEASE-NOTES-v0.9.8.8.md) — ZTHL Aegis v0.9.8.8 — 发布说明
+- [RELEASE-NOTES/RELEASE-NOTES-v0.9.8.9.md](RELEASE-NOTES/RELEASE-NOTES-v0.9.8.9.md) — ZTHL Aegis v0.9.8.9 — 发布说明
 - [RELEASE-NOTES/RELEASE-NOTES-v0.9.8.md](RELEASE-NOTES/RELEASE-NOTES-v0.9.8.md) — v0.9.8 — 人评结构锚 + p_meta 冻结 + MoA 链路修正 + 相关性基准
 
 ## THIRD_PARTY_LICENSES/
@@ -426,6 +427,7 @@
 - [scripts/gk_write_claims.py](scripts/gk_write_claims.py) — Python 模块
 - [scripts/gk_zenodo_sync.py](scripts/gk_zenodo_sync.py) — Python 模块
 - [scripts/opcap_evidence.py](scripts/opcap_evidence.py) — Python 模块
+- [scripts/oss_export_surface.py](scripts/oss_export_surface.py) — Python 模块
 - [scripts/otd_probes.py](scripts/otd_probes.py) — Python 模块
 - [scripts/pack_release.py](scripts/pack_release.py) — 确定性打包（zip + SHA256SUMS + PROVENANCE + manifest）
 - [scripts/pin-workflows.py](scripts/pin-workflows.py) — Python 模块

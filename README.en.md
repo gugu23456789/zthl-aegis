@@ -360,8 +360,7 @@ absent.
 - State files, plan backups, generated reports and review caches are git-ignored; only code,
   references and tests are tracked.
 - Reporting a vulnerability: [`SECURITY.md`](SECURITY.md) (please use private reporting, not a
-  public issue). Deployment caveats and secret rotation are in
-  [`references/security-measures.md`](references/security-measures.md).
+  public issue).
 
 ### Contributing
 

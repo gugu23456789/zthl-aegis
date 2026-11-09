@@ -57,7 +57,7 @@
 | 3 | 写类工具的 `file_path` 必须落在活跃工作树内 |
 | 4 | CLI `pre-tool-check` 必须通过（含 edit 预算扣减/保护区行号） |
 | 5 / 6 / 7 | `Read` / `Glob|Grep` / `LS` 的目标必须在工作树内 |
-| 8 | 保护区行号级判定（见 `references/security-measures.md`） |
+| 8 | 保护区行号级判定（`scripts/pre_tool_hook.py` 保护区段） |
 | 9 | 提问挂起闸：无人时段 / 纯确认型 `AskUserQuestion` → BLOCK |
 
 ### 4.2 危险命令与跨平台解析（R0 家族）
@@ -164,4 +164,3 @@ bash uninstall.sh                      # 按 .spz-manifest 回收
 - `scripts/test_gk_q2_hint_selfconsistency.py`：Q2 自洽（提示与判据一致）。
 - `scripts/test_gk_q3_persistent_block_log.py`：BLOCK 持久日志四臂。
 - `scripts/test_eco_integration.py`：CLI 侧 pre-tool-check / guard-edit 同窗。
-- 误报率口径与六类安全网表：`references/security-measures.md`。

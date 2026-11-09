@@ -253,7 +253,7 @@ def _cache_get(key: str) -> str | None:
 
 # ─── 进程树回收（2026-11-02）────────────────────────────────────────────────
 # 病象（实测）：杀掉 CLI/后台任务后，`node.exe` 仍挂着 —— 本机一度 12 个，其中 9 个是
-#   `D:\Program Files\nodejs\node.exe`（gitnexus 的 **worker 子进程**）。原因：
+#   `<node 安装目录>\nodejs\node.exe`（gitnexus 的 **worker 子进程**）。原因：
 #   ① `subprocess.run(timeout=)` 超时只杀**直接子进程**，杀不到 worker；
 #   ② 外部把 python 一起 kill 掉时，python 连清理都来不及跑 ⟹ 必然留孤儿。
 # 两条修法：

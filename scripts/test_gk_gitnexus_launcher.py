@@ -3,11 +3,15 @@
 
 覆盖：
   1. 缓存准入：写类子命令**永不**缓存；开关关闭/无 repo/无 HEAD sha ⟹ 不缓存。
-  2. 命中不 spawn（monkeypatch `subprocess.run` 抛错也能返回），未命中 spawn 并落盘。
+  2. 命中不 spawn（monkeypatch `subprocess.Popen` 抛错也能返回），未命中 spawn 并落盘。
   3. 缓存键含 HEAD sha（sha 变 ⟹ 换键 ⟹ 不读到旧图）。
   4. `invalidate_cache()` 清空。
   5. `run_json` 的 strict 两态（rc≠0 → error / 忽略 rc 只解析 stdout）。
   6. 探测面为零：node/js 只读 env；posix 下 `D:\\...` 归一为 `/mnt/d/...`。
+
+⚠ 2026-11-09：`run_raw` 已从 `subprocess.run` 迁到 `Popen`（独立进程组 + 整树击杀，
+  见 `gk_gitnexus.py` 进程树回收段）⟹ 本文件的 spawn 替身**必须钉 `Popen`**；
+  旧版钉 `run` 的 4 条臂因此从未真正拦截 spawn（真去起 `/fake/node.exe` ⟹ 恒 False）。
 """
 import json
 import os
@@ -19,6 +23,13 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent))
 
 import gk_gitnexus as gx  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _isolate_worker_pidfile(tmp_path, monkeypatch):
+    """worker pidfile 落 tmp：测试**不得**写真实 `~/.gatekeeper`。"""
+    monkeypatch.setattr(gx, "_WORKER_PIDFILE", tmp_path / "gitnexus-workers.json")
+    yield
 
 
 @pytest.fixture
@@ -34,12 +45,24 @@ def cache_env(monkeypatch, tmp_path):
     return tmp_path / "gxcache"
 
 
-class _R:
-    returncode = 0
+class _FakePopen:
+    """`run_raw` 的 spawn 替身（`Popen` 契约：argv/pid/returncode/communicate）。"""
 
-    def __init__(self, out="", err=""):
-        self.stdout = out
-        self.stderr = err
+    def __init__(self, argv, out="", err="", rc=0, sink=None, **_k):
+        self.argv = argv
+        self.pid = 424242
+        self.returncode = rc
+        self._out, self._err = out, err
+        if sink is not None:
+            sink.append(argv)
+
+    def communicate(self, timeout=None):
+        return self._out, self._err
+
+
+def _popen(out="", err="", rc=0, sink=None):
+    """→ 可作 `gx.subprocess.Popen` 替身的工厂（固定单次返回）。"""
+    return lambda argv, **k: _FakePopen(argv, out=out, err=err, rc=rc, sink=sink)
 
 
 # ─── 1. 缓存准入 ───────────────────────────────────────────────────────────
@@ -74,7 +97,7 @@ def test_cache_hit_skips_spawn(cache_env, monkeypatch):
     def _boom(*a, **k):
         raise AssertionError("缓存命中却仍然 spawn 了 node")
 
-    monkeypatch.setattr(gx.subprocess, "run", _boom)
+    monkeypatch.setattr(gx.subprocess, "Popen", _boom)
     ok, out, err, cached = gx.run_raw(["query", "foo"])
     assert (ok, cached) == (True, True)
     assert "row_count" in out
@@ -82,12 +105,8 @@ def test_cache_hit_skips_spawn(cache_env, monkeypatch):
 
 def test_cache_miss_spawns_and_writes(cache_env, monkeypatch):
     calls = []
-
-    def _run(argv, **k):
-        calls.append(argv)
-        return _R(out='{"row_count":7}\n')
-
-    monkeypatch.setattr(gx.subprocess, "run", _run)
+    monkeypatch.setattr(gx.subprocess, "Popen",
+                        _popen(out='{"row_count":7}\n', sink=calls))
     ok, out, _err, cached = gx.run_raw(["query", "bar"])
     assert (ok, cached) == (True, False)
     assert calls and calls[0][-2:] == ["query", "bar"], f"argv 未透传: {calls}"
@@ -97,17 +116,13 @@ def test_cache_miss_spawns_and_writes(cache_env, monkeypatch):
 
 
 def test_cache_key_changes_with_head(cache_env, monkeypatch):
-    monkeypatch.setattr(gx.subprocess, "run", lambda *a, **k: _R(out='{"n":1}\n'))
+    monkeypatch.setattr(gx.subprocess, "Popen", _popen(out='{"n":1}\n'))
     gx.run_raw(["query", "baz"])
     # 换 HEAD ⟹ 键变 ⟹ 必须重新 spawn（否则会读到旧图）
     monkeypatch.setattr(gx, "head_sha", lambda d="": "cafebabe" * 5)
     seen = []
-
-    def _run(argv, **k):
-        seen.append(argv)
-        return _R(out='{"n":2}\n')
-
-    monkeypatch.setattr(gx.subprocess, "run", _run)
+    monkeypatch.setattr(gx.subprocess, "Popen",
+                        _popen(out='{"n":2}\n', sink=seen))
     ok, out, _e, cached = gx.run_raw(["query", "baz"])
     assert cached is False and seen, "HEAD 变化后仍命中旧缓存"
     assert json.loads(out)["n"] == 2
@@ -126,9 +141,8 @@ def test_invalidate_cache_removes_entries(cache_env):
 def test_run_json_strict_reports_rc_error(monkeypatch):
     monkeypatch.setenv("GX_NODE", "/fake/node.exe")
     monkeypatch.setenv("GX_JS", r"C:\fake\index.js")
-    monkeypatch.setattr(gx.subprocess, "run",
-                        lambda *a, **k: type("R", (), {"returncode": 1, "stdout": "boom",
-                                                       "stderr": "bad flag"})())
+    monkeypatch.setattr(gx.subprocess, "Popen",
+                        _popen(out="boom", err="bad flag", rc=1))
     d = gx.run_json(["cypher", "x"], strict=True)
     assert "error" in d
 
@@ -136,9 +150,8 @@ def test_run_json_strict_reports_rc_error(monkeypatch):
 def test_run_json_non_strict_parses_stdout(monkeypatch):
     monkeypatch.setenv("GX_NODE", "/fake/node.exe")
     monkeypatch.setenv("GX_JS", r"C:\fake\index.js")
-    monkeypatch.setattr(gx.subprocess, "run",
-                        lambda *a, **k: type("R", (), {"returncode": 3, "stdout": '{"ok":1}',
-                                                       "stderr": ""})())
+    monkeypatch.setattr(gx.subprocess, "Popen",
+                        _popen(out='{"ok":1}', rc=3))
     d = gx.run_json(["detect-changes", "-s", "compare"], strict=False)
     assert d == {"ok": 1}
 
@@ -146,9 +159,8 @@ def test_run_json_non_strict_parses_stdout(monkeypatch):
 def test_run_json_text_fallback(monkeypatch):
     monkeypatch.setenv("GX_NODE", "/fake/node.exe")
     monkeypatch.setenv("GX_JS", r"C:\fake\index.js")
-    monkeypatch.setattr(gx.subprocess, "run",
-                        lambda *a, **k: type("R", (), {"returncode": 0, "stdout": "变更：1 个文件\n",
-                                                       "stderr": ""})())
+    monkeypatch.setattr(gx.subprocess, "Popen",
+                        _popen(out="变更：1 个文件\n", rc=0))
     d = gx.run_json(["detect-changes"], strict=False)
     assert d == {"raw": "变更：1 个文件\n"}
 

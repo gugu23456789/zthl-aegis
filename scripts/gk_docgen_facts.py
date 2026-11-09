@@ -35,8 +35,26 @@ def _read(p: Path) -> str:
 
 
 def _refs_top_md(sd: Path) -> int:
-    """顶层 `references/*.md` 计数 —— 与索引同源（`_git_ref_names`，git 优先/目录回退）。"""
-    return len(_git_ref_names(sd))
+    """顶层 **公开面** `references/*.md` 计数 —— 与索引同源（`_git_ref_names` 扣除导出排除面）。
+
+    2026-11-09：原为**私仓**入库全量（34）⟹ 同一事实块在公开树（23）必然判漂移 ⟹ 发布门恒红
+    （夜间 bench-nightly 实际失败点）。计数口径与 `render_refs` 的「公开面共 N 份」对齐。
+    """
+    return len([n for n in _git_ref_names(sd)
+                if n != "README.md" and not _export_excluded("references/" + n, sd)])
+
+
+def _export_excluded(rel: str, sd: Path) -> bool:
+    """公开导出排除面判定（单一事实源 = `references/oss-export-whitelist.json`，随包导出）。
+
+    不直接 `import oss_scrub`：该脚本自身不导出（词表即指纹）⟹ 公开树内必失败。
+    """
+    try:
+        sys.path.insert(0, str(sd / "scripts"))
+        from oss_export_surface import is_excluded as _ex
+        return bool(_ex(rel, str(sd)))
+    except Exception:  # noqa: BLE001 — 边界：判定不可用 ⟹ 不豁免（保守）
+        return False
 
 
 def _static_roles(sd: Path) -> list:
@@ -125,7 +143,7 @@ def render(facts: dict) -> str:
         ("CLI 命令数", facts.get("commands"), "`^_CMD_REG[` 计数"),
         ("红队站点", len(facts.get("red_stations") or []), "`gk_chain.py` 的 `Step(\"RED-*\")`"),
         ("自检检查函数", facts.get("selfcheck_checks"), "`gk_self_check.py` 的 `def check_*`"),
-        ("references 入库 md", facts.get("refs_tracked"), "`git ls-files references/*.md`（顶层）"),
+        ("references 公开 md", facts.get("refs_tracked"), "`git ls-files references/*.md`（顶层，扣除导出排除面）"),
         ("子代理角色", len(facts.get("roles") or []), "`subagent_runner.ROLE_TOOLS`"),
         ("hook R0 门禁", gate_txt, "`pre_tool_hook.py` 的 `Gate R0.N`"),
         ("红队向量", facts.get("red_vectors"), "`references/red-vectors.json`"),
@@ -209,14 +227,9 @@ def _first_title(p: Path) -> str:
 
 
 def collect_refs(sd: Path) -> list:
-    """公开面参考文档（**排除面单源 = `oss_scrub.is_excluded`**，禁第二份名单）。"""
-    try:
-        sys.path.insert(0, str(sd / "scripts"))
-        import oss_scrub as S
-        names = [n for n in _git_ref_names(sd)
-                 if n != "README.md" and not S.is_excluded("references/" + n)]
-    except Exception:  # noqa: BLE001
-        names = [n for n in _git_ref_names(sd) if n != "README.md"]
+    """公开面参考文档（**排除面单源 = `references/oss-export-whitelist.json`**，禁第二份名单）。"""
+    names = [n for n in _git_ref_names(sd)
+             if n != "README.md" and not _export_excluded("references/" + n, sd)]
     return [{"name": n, "title": _first_title(sd / "references" / n),
              "cat": _CATEGORY.get(n, "9. Other")} for n in names]
 

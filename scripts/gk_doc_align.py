@@ -175,12 +175,22 @@ def check_cli_protocol_commands(skill_dir: str) -> dict:
 
 
 # ── 检查器 3: 双源 L 层唯一源一致性 ──────────────────────────────────
-def check_review_dual_source(skill_dir: str, review_skill_dir: str) -> dict:
-    """stage-3-review（流程壳）引用 requesting-code-review（L1-L9 唯一源），且两边都含 L1-L9。"""
+def check_review_dual_source(skill_dir: str, review_skill_dir: str,
+                             release: bool = False) -> dict:
+    """stage-3-review（流程壳）引用 requesting-code-review（L1-L9 唯一源），且两边都含 L1-L9。
+
+    `release=True`：stage-3-review.md 属导出排除面（stage 指南合并为 `stages.md`）⟹
+    公开树缺席降级 SKIP。
+    """
     result = {"check": "review_dual_source"}
     stage3 = Path(skill_dir) / "references" / "stage-3-review.md"
     reqcr = Path(review_skill_dir) / "SKILL.md"
     if not stage3.exists():
+        if release:
+            result["status"] = "SKIP"
+            result["detail"] = ("release 模式：references/stage-3-review.md 属导出排除面"
+                                "（stage 指南已合并为 stages.md）⟹ 公开树缺席是预期")
+            return result
         result["status"] = "FAIL"
         result["detail"] = "stage-3-review.md 缺失"
         return result
@@ -394,6 +404,19 @@ def _build_md_index(skill_dir: str) -> dict:
     return index
 
 
+def _export_excluded(rel: str, skill_dir) -> bool:
+    """公开导出**排除面**判定（单一事实源 = 随包导出的 `references/oss-export-whitelist.json`）。
+
+    为何不 `import oss_scrub`（2026-11-09）：该脚本自身不导出（反查词表），公开树内 import 必失败
+    ⟹ 排除判定静默失效 ⟹ 公开树 doc 门恒红（夜间 bench-nightly 实际失败点）。
+    """
+    try:
+        from oss_export_surface import is_excluded as _ex
+        return bool(_ex(rel, str(skill_dir)))
+    except Exception:  # noqa: BLE001 — 边界：判定不可用 ⟹ 不豁免（保守）
+        return False
+
+
 def check_crossref_drift(skill_dir: str) -> dict:
     """关键文档互引锚点漂移检测：锚点式引用（path.md §N / #N）目标存在 + 章节命中。
 
@@ -408,12 +431,8 @@ def check_crossref_drift(skill_dir: str) -> dict:
     issues = []
 
     def _doc_excluded(rel: str) -> bool:
-        """公开包裁剪掉的私仓文档：缺失不算漂移（仅私仓运行时会检查）。"""
-        try:
-            import oss_scrub as _S  # 私仓独有
-            return bool(_S.is_excluded(rel))
-        except Exception:  # noqa: BLE001
-            return False
+        """公开包裁剪掉的私仓文档：缺失不算漂移（单一事实源 = 随包导出的白名单 JSON）。"""
+        return _export_excluded(rel, skill_dir)
 
     index = _build_md_index(skill_dir)
     for doc in _CROSSREF_DOCS:
@@ -460,14 +479,14 @@ def check_crossref_drift(skill_dir: str) -> dict:
     return result
 
 
-def check_audit_docs_merged(skill_dir: str) -> list[dict]:
+def check_audit_docs_merged(skill_dir: str, release: bool = False) -> list[dict]:
     """审计文档审查引擎 7 项 → doc-align check 条目（check 前缀 audit_docs_*）。"""
     mod = _load_audit_docs()
     if isinstance(mod, Exception):
         return [{"check": "audit_docs_import", "status": "FAIL",
                  "detail": f"gk_audit_docs 导入失败: {mod}"}]
     try:
-        out = mod.check_docs(skill_dir)
+        out = mod.check_docs(skill_dir, release=release)
     except Exception as e:
         return [{"check": "audit_docs_run", "status": "FAIL",
                  "detail": f"check_docs 执行失败: {e}"}]
@@ -551,7 +570,7 @@ def check_cross_review_matrix(skill_dir: str) -> dict:
 
 
 # ── 2026-09-06 扩展：E1-E4 子集评估器规格 lint ─────────────────────────
-def check_eval_matrix(skill_dir: str) -> dict:
+def check_eval_matrix(skill_dir: str, release: bool = False) -> dict:
     """E1-E4 子集评估器规格结构 lint（2026-09-06 实装，check_cross_review_matrix sibling）。
 
     定位（e1e4-evaluator-matrix.md = plan-refinement SCR 质询协议子集评估器的单源规格，
@@ -569,6 +588,11 @@ def check_eval_matrix(skill_dir: str) -> dict:
     result = {"check": "eval_matrix"}
     spec = Path(skill_dir) / "references" / "e1e4-evaluator-matrix.md"
     if not spec.exists():
+        if release:
+            result["status"] = "SKIP"
+            result["detail"] = ("release 模式：references/e1e4-evaluator-matrix.md 属导出排除面"
+                                "（references 压缩，owner 2026-10-30）⟹ 公开树缺席是预期")
+            return result
         result["status"] = "FAIL"
         result["detail"] = "references/e1e4-evaluator-matrix.md（E1-E4 子集评估器规格）缺失"
         return result
@@ -876,7 +900,7 @@ def _func_defined(func: str, py: Path, skill_dir: Path) -> bool:
     return False
 
 
-def check_comment_code_mismatch(skill_dir: str) -> dict:
+def check_comment_code_mismatch(skill_dir: str, release: bool = False) -> dict:
     """注释-代码错配精细检测（2026-09-02，用户"你经常误删注释改错注释"驱动）。
 
     检测面（只做**实存**校验，防注释引用已删符号 = 错配）：
@@ -919,7 +943,9 @@ def check_comment_code_mismatch(skill_dir: str) -> dict:
             for ref, kind in _refs_from_comment(chunk):
                 if kind == "script":
                     if not (sd / "scripts" / ref).exists() and ref not in cross_repo_scripts:
-                        problems.append(f"{py.name} 注释引用脚本缺失: {ref}")
+                        # 公开树：被导出排除的脚本（如 gk_paper_*）缺席是预期，不算错配。
+                        if not (release and _export_excluded("scripts/" + ref, sd)):
+                            problems.append(f"{py.name} 注释引用脚本缺失: {ref}")
                 elif kind == "func":
                     # 跳过**内置**（`str()`…）+ **方法调用**（本文件出现 `.<name>(` ⟹ 是方法，
                     # 如 `exists()`/`read_text()`），二者都非本仓模块函数（`ECC-092EC2A72A3F`）。
@@ -1813,7 +1839,7 @@ def run_all(skill_dir: str, papers_dir: str, review_skill_dir: str,
         issues += 1
     checks.append(r)
 
-    r = check_review_dual_source(skill_dir, review_skill_dir)
+    r = check_review_dual_source(skill_dir, review_skill_dir, release=release)
     if r["status"] == "FAIL":
         issues += 1
     checks.append(r)
@@ -1873,7 +1899,7 @@ def run_all(skill_dir: str, papers_dir: str, review_skill_dir: str,
     checks.append(r)
 
     # 2026-08-28: 文档审查引擎 7 项并入（audit --docs C1-C5）
-    for r in check_audit_docs_merged(skill_dir):
+    for r in check_audit_docs_merged(skill_dir, release=release):
         if r["status"] == "FAIL":
             issues += 1
         checks.append(r)
@@ -1887,13 +1913,13 @@ def run_all(skill_dir: str, papers_dir: str, review_skill_dir: str,
 
     # 2026-09-01 矩阵机制实装：L1-L9 × 约束-难度矩阵确定性命令存在性校验
     checks.append(check_cross_review_matrix(skill_dir))
-    checks.append(check_eval_matrix(skill_dir))  # 2026-09-06 E1-E4 子集评估器规格 lint（sibling）
+    checks.append(check_eval_matrix(skill_dir, release=release))  # 2026-09-06 E1-E4 子集评估器规格 lint（sibling）
 
     # 2026-09-02 元数据统一路由检测匹配扩展（用户质询三连）：
     # ① 序列节点安全网 map/车站播报/下一站过时检测
     checks.append(check_sequence_node_map(skill_dir))
     # ② 注释-代码错配精细检测（误删/改错注释）
-    checks.append(check_comment_code_mismatch(skill_dir))
+    checks.append(check_comment_code_mismatch(skill_dir, release=release))
     # ③ 5 层路由文档 ↔ 代码一致性
     checks.append(check_route_center_alignment(skill_dir))
 
@@ -1910,7 +1936,8 @@ def run_all(skill_dir: str, papers_dir: str, review_skill_dir: str,
     checks.append(r)
 
     # 2026-09-06 C6: doc_freshness — references 安全网总表须回流最近登记批次时间戳
-    r = check_doc_freshness(skill_dir)
+    #   （release=True 时该总表属导出排除面 ⟹ 缺席降级 SKIP，见 check_doc_freshness docstring）
+    r = check_doc_freshness(skill_dir, release=release)
     if r["status"] == "FAIL":
         issues += 1
     checks.append(r)
@@ -2597,7 +2624,7 @@ def main(argv=None):
     sys.exit(1 if bad else 0)
 
 
-def check_doc_freshness(skill_dir: str) -> dict:
+def check_doc_freshness(skill_dir: str, release: bool = False) -> dict:
     """doc_freshness（2026-09-06 C6）：references 安全网总表新鲜度守护。
 
     背景（评估 §15.6 ⑧ f6）：security-measures.md 曾停更 11 天无任何检查器发现（靠人工质询
@@ -2606,12 +2633,22 @@ def check_doc_freshness(skill_dir: str) -> dict:
     - 总表须含 ≥1 行机制登记行（`> **C# 追加` / `> **C#+A#` 形态，机制 id 回流面）
     FAIL = 总表停更未回流（须补"最近登记批次"登记行）。真实库含 doc_freshness 检测结论段
     也计入（本检查器自身回流的锚）。
+
+    `release=True`（发布门，2026-11-09）：该总表属**导出排除面**（`oss-export-whitelist.json`，
+    owner 2026-11-02 裁定仅私仓留存）⟹ 公开树缺席是**预期**，降级 SKIP；私仓（release=False）
+    仍 FAIL（内部必须存在且回流）。
     """
     RECENT_BATCH_TS = "2026-09-25"   # 最近登记批次（…→ 09-13 C11 XSPI → 09-25 C12 hook-xenv §15.3-Q3：持久化块日志分母源 + 总表四列网表扩列）
     # 2026-09-25 C12 bump：持久化块日志（误报率分母源）+ 四列网表（层/判据/误报率口径/守方）回流后须同步，防呆 pin 面即本行
     result = {"check": "doc_freshness"}
     total = Path(skill_dir) / "references" / "security-measures.md"
     if not total.exists():
+        if release:
+            result["status"] = "SKIP"
+            result["detail"] = ("release 模式：references/security-measures.md 属导出排除面"
+                                "（oss-export-whitelist，owner 2026-11-02 裁定仅私仓留存）⟹ "
+                                "公开树缺席是预期，跳过存在性/新鲜度检查")
+            return result
         result["status"] = "FAIL"
         result["detail"] = "references/security-measures.md（安全网总表）缺失"
         return result

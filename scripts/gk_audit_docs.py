@@ -56,8 +56,13 @@ def _tracked_ref_md(skill_dir: Path, ref_dir: Path) -> set:
     return {f for f in os.listdir(ref_dir) if f.endswith(".md")}
 
 
-def check_docs(skill_dir: str = str(DEFAULT_SKILL)) -> dict:
-    """4 deterministic doc checks. Return docs_checks + summary."""
+def check_docs(skill_dir: str = str(DEFAULT_SKILL), release: bool = False) -> dict:
+    """4 deterministic doc checks. Return docs_checks + summary.
+
+    `release=True`（公开导出树内跑发布门，2026-11-09）：导出**排除面**的文档缺席是**预期**，
+    相关检查降级为 `skipped`（match=True），不作为漂移。排除面判定走
+    `oss_export_surface.is_excluded`（消费随包导出的白名单 JSON；`oss_scrub.py` 本身不导出）。
+    """
     checks = []
     sd = Path(skill_dir)
     ref_dir = sd / "references"
@@ -111,8 +116,8 @@ def check_docs(skill_dir: str = str(DEFAULT_SKILL)) -> dict:
         def _export_excluded(name: str) -> bool:
             """导出面排除的文档：在公开树里缺席是**预期**，不算文件地图漂移。"""
             try:
-                import oss_scrub as _S
-                return bool(_S.is_excluded("references/" + name))
+                from oss_export_surface import is_excluded as _ex
+                return bool(_ex("references/" + name, str(sd)))
             except Exception:
                 return False
 
@@ -148,18 +153,23 @@ def check_docs(skill_dir: str = str(DEFAULT_SKILL)) -> dict:
     # C5: bashpy-problem-taxonomy.md — 分类学结构（权威源指针/统计基线/双循环维护）
     # 2026-08-27 新增: 分类学维护任务落点批次（batch8+meta-routing）+ 统计口径确定性核验。
     taxo_path = ref_dir / "bashpy-problem-taxonomy.md"
-    try:
-        taxo_text = taxo_path.read_text(encoding="utf-8", errors="replace")
-        has_authority = "migration-issues.md" in taxo_text and "权威源" in taxo_text
-        has_baseline = all(k in taxo_text for k in ["174", "435", "RED-MIGRATE-INLINE", "RED-MIGRATE-SWALLOW", "RED-MIGRATE-DANGER", "RED-MIGRATE-FD"])
-        has_dual_loop = "循环 A" in taxo_text and "循环 B" in taxo_text and "维护任务" in taxo_text
+    if release and not taxo_path.exists():
         checks.append({"doc": "bashpy-problem-taxonomy.md", "check": "taxonomy structure",
-                       "match": has_authority and has_baseline and has_dual_loop,
-                       "authority_pointer": has_authority, "baseline_counts": has_baseline,
-                       "dual_loop_maintenance": has_dual_loop})
-    except Exception as e:
-        checks.append({"doc": "bashpy-problem-taxonomy.md", "check": "read",
-                       "error": str(e), "match": False})
+                       "match": True, "skipped": True,
+                       "reason": "导出排除面（references 压缩，owner 2026-10-30）⟹ 公开树缺席是预期"})
+    else:
+        try:
+            taxo_text = taxo_path.read_text(encoding="utf-8", errors="replace")
+            has_authority = "migration-issues.md" in taxo_text and "权威源" in taxo_text
+            has_baseline = all(k in taxo_text for k in ["174", "435", "RED-MIGRATE-INLINE", "RED-MIGRATE-SWALLOW", "RED-MIGRATE-DANGER", "RED-MIGRATE-FD"])
+            has_dual_loop = "循环 A" in taxo_text and "循环 B" in taxo_text and "维护任务" in taxo_text
+            checks.append({"doc": "bashpy-problem-taxonomy.md", "check": "taxonomy structure",
+                           "match": has_authority and has_baseline and has_dual_loop,
+                           "authority_pointer": has_authority, "baseline_counts": has_baseline,
+                           "dual_loop_maintenance": has_dual_loop})
+        except Exception as e:
+            checks.append({"doc": "bashpy-problem-taxonomy.md", "check": "read",
+                           "error": str(e), "match": False})
 
     # C6: batch8 回写（十一）↔ 评估文档 §10 登记对齐（2026-08-30 新增）
     # 用户要求"0828-0830 详细记录见评估文档几十轮记录；审计序列应可审计这些"。
@@ -170,32 +180,38 @@ def check_docs(skill_dir: str = str(DEFAULT_SKILL)) -> dict:
     #（第十九次登记 = 区间起点 + git-workflow 安全网末条 = 区间终点 + 965 passed = 验证声明）。
     plan_doc = sd / "docs" / "plan-backup" / "2026-06-22-batch8-python-migration-plan.md"
     assess_doc = sd / "docs" / "plans" / "2026-08-28-security-hardening-assessment.md"
-    try:
-        plan_text = plan_doc.read_text(encoding="utf-8", errors="replace")
-        assess_text = assess_doc.read_text(encoding="utf-8", errors="replace")
-        wb11 = ""
-        for para in plan_text.split(">"):
-            if "2026-08-30 回写（十一）" in para:
-                wb11 = para
-                break
-        has_pointer = ("security-hardening-assessment.md" in wb11) and ("§10" in wb11)
-        sec10_seg = assess_text.split("## §10", 1)[1].split("## §11", 1)[0]
-        bullet_count = len(re.findall(r"^\- \*\*", sec10_seg, re.MULTILINE))
-        register_marks = len(re.findall(r"第[一二三四五六七八九十]+次登记", sec10_seg))
-        anchors = {
-            "first (第19次)": "第十九次登记" in sec10_seg,
-            "last (git-workflow 安全网)": "git-workflow 技能加载安全网" in sec10_seg,
-            "verification (965 passed)": "965 passed" in sec10_seg,
-        }
+    if release and not (plan_doc.exists() and assess_doc.exists()):
         checks.append({"doc": "2026-06-22-batch8-python-migration-plan.md",
                        "check": "batch8 回写（十一）↔ 评估文档 §10 登记对齐",
-                       "pointer": has_pointer, "bullet_count": bullet_count,
-                       "register_marks": register_marks,
-                       "anchors": anchors,
-                       "match": has_pointer and bullet_count >= 20 and all(anchors.values())})
-    except Exception as e:
-        checks.append({"doc": "2026-06-22-batch8-python-migration-plan.md",
-                       "check": "read", "error": str(e), "match": False})
+                       "match": True, "skipped": True,
+                       "reason": "docs/ 整体属导出排除面 ⟹ 公开树缺席是预期"})
+    else:
+        try:
+            plan_text = plan_doc.read_text(encoding="utf-8", errors="replace")
+            assess_text = assess_doc.read_text(encoding="utf-8", errors="replace")
+            wb11 = ""
+            for para in plan_text.split(">"):
+                if "2026-08-30 回写（十一）" in para:
+                    wb11 = para
+                    break
+            has_pointer = ("security-hardening-assessment.md" in wb11) and ("§10" in wb11)
+            sec10_seg = assess_text.split("## §10", 1)[1].split("## §11", 1)[0]
+            bullet_count = len(re.findall(r"^\- \*\*", sec10_seg, re.MULTILINE))
+            register_marks = len(re.findall(r"第[一二三四五六七八九十]+次登记", sec10_seg))
+            anchors = {
+                "first (第19次)": "第十九次登记" in sec10_seg,
+                "last (git-workflow 安全网)": "git-workflow 技能加载安全网" in sec10_seg,
+                "verification (965 passed)": "965 passed" in sec10_seg,
+            }
+            checks.append({"doc": "2026-06-22-batch8-python-migration-plan.md",
+                           "check": "batch8 回写（十一）↔ 评估文档 §10 登记对齐",
+                           "pointer": has_pointer, "bullet_count": bullet_count,
+                           "register_marks": register_marks,
+                           "anchors": anchors,
+                           "match": has_pointer and bullet_count >= 20 and all(anchors.values())})
+        except Exception as e:
+            checks.append({"doc": "2026-06-22-batch8-python-migration-plan.md",
+                           "check": "read", "error": str(e), "match": False})
 
     total = len(checks)
     matches = sum(1 for c in checks if c.get("match"))
