@@ -23,6 +23,7 @@ Gate chain (fail-closed: any gate fails = exit 2):
   Gate 6: Glob/Grep scope — search path must be within worktree
   Gate 7: LS scope — target directory must be within worktree
   Gate 9: 提问挂起闸 — 无人时段 / 纯确认型 AskUserQuestion → BLOCK（F-REV-96，普适）
+  Gate R0.25: 注释模版**编辑时**注入面 — 新增 def/class 缺意图注释 ⟹ stderr 推骨架命令（放行式，不拦截）
 """
 
 import hashlib
@@ -230,6 +231,19 @@ def _state_claims(p: Path) -> bool:
     return isinstance(d, dict) and "stage" in d
 
 
+def _pointer_plan_draft(plan_name: str) -> bool:
+    """指针绑定计划是否**未定稿**（方案 A：未定稿 ⟹ hook 不跟随域指针，回主 state）。
+
+    判据单源 = `gk_route_center.plan_is_draft`（禁第二份 META 解析）。解析不到计划 /
+    中枢不可导入 ⟹ False（不改既有行为，历史指针与测试夹具零回归）。
+    """
+    try:
+        from gk_route_center import plan_is_draft
+        return plan_is_draft(plan_name, str(SKILL_DIR))
+    except Exception:  # noqa: BLE001 — 边界：判据不可用时不阻断既有路由
+        return False
+
+
 def _resolve_state_by_cwd(cwd: str) -> Optional[Path]:
     """按实际工作目录归属解析 state 文件（修复 hook 读错 state）。
 
@@ -250,7 +264,8 @@ def _resolve_state_by_cwd(cwd: str) -> Optional[Path]:
         try:
             pp = json.loads(plan_pointer.read_text())
             sf = pp.get("state_file", "")
-            if sf and _plan_pointer_fresh(pp):
+            # 方案 A（owner 2026-11-14）：计划未定稿 ⟹ 不跟随指针（编辑额度回主 state）。
+            if sf and _plan_pointer_fresh(pp) and not _pointer_plan_draft(pp.get("plan", "")):
                 pf = _resolve_existing(sf)
                 if pf and pf.exists():
                     return pf
@@ -533,6 +548,17 @@ def _read_session_alias(payload_sid: str) -> str:
         return _session_alias_path(payload_sid).read_text(encoding="utf-8").strip()
     except Exception:  # noqa: BLE001
         return ""
+
+
+def resolve_session_id(env_sid: str, pay_sid: str, wt_tok: str) -> str:
+    """会话身份优先级：显式 env > 宿主 payload sid > 目标 worktree token（仅兜底）。
+
+    2026-11-12（会话身份隔离）：原序 `env > wt_tok > payload` 让**目标路径 token** 覆盖
+    宿主会话号 ⟹ 两个 chat 指向同一棵 worktree 时身份相同，归属闸无法区分（实测同树双写）。
+    路径 token 是**路径身份**（`agent/session/<leaf>` / `slot-N`），不是会话身份；只有在
+    宿主完全给不出会话号（老载荷 / 手工调用）时才作平台无关兜底。
+    """
+    return str(env_sid or pay_sid or wt_tok or "").strip()
 
 
 def _write_session_marker(sid: str, tool: str, cwd: str) -> None:
@@ -1029,6 +1055,7 @@ import gk_evidence as _gk_evidence  # noqa: E402（同目录轻量单源）
 MCP_EGRESS_ALLOWLIST = frozenset(_gk_evidence.PRIOR_ART_HOSTS)
 MCP_EGRESS_ALLOWED = "McpEgressAllowed"    # 受治车道放行哨兵（调用点据此记账 + 放行）
 MCP_EGRESS_SEALED = "McpEgressSealed"      # 封禁哨兵（调用点据此 BLOCK）
+MCP_EGRESS = "McpEgress"                   # 域外/不可解析哨兵（出网动词默认档 ⟹ BLOCK）
 MCP_EGRESS_SEALED_TOOLS = frozenset((      # JS 内 fetch = 出网残余 ⟹ 封
     "evaluate", "eval_js", "evaluate_handle", "evaluate_function", "eval",
     "browser_eval_js"))                    # octop-browser 前缀名（`ECC-96B2214FA16B`）
@@ -1090,9 +1117,20 @@ def _egress_identity(tool_name, tool_input):
         return tool_name, ""
     url = _egress_url(args)
     host = _egress_host(url)
+    # 2026-11-09 红队本地护栏：MCP 浏览器出网也必须过授权范围；缺失护栏 = 拒（fail-closed）。
+    try:
+        from gk_red_guard import check as _rg_check
+        _rg = _rg_check(url, "read")
+    except ImportError:
+        _rg = {"ok": False, "reason": "RED_GUARD_MISSING"}
+    if not _rg["ok"]:
+        # 归「域外 / 不可解析」档（`McpEgress`），不是 `McpEgressSealed` ——
+        #   后者语义专指**工具本身被封**（`evaluate`/`eval_js` 的 JS 内 fetch）。
+        #   调用点对两档都 BLOCK，标签只决定告警口径（契约见本函数 docstring）。
+        return MCP_EGRESS, url
     if host and host in MCP_EGRESS_ALLOWLIST:
         return MCP_EGRESS_ALLOWED, url
-    return "McpEgress", url
+    return MCP_EGRESS, url
 
 
 # ── Gate R0.18【蓝色大肥鱼与章鱼浏览器工具面：install / record 写面闸】（2026-11-03）──
@@ -1281,6 +1319,11 @@ def _blue_fat_fish_ps_story(command: str) -> Optional[tuple]:
 #      末行为裸 `-N` 时参数被污染（实测 `git log --oneline -1` → `fatal: '1?': not a
 #      non-negative integer`；`bash -x` 实证末参 `$'-1\r'`）。同命令走**脚本文件**（LF 落盘）
 #      或末行补垫行则正常。（finding `ECC-2EB738051C82`，2026-10-01）
+#   W6 WARN  —— `powershell|pwsh … -File <Windows 路径>` 的路径是**裸 token** 且含 `\`：
+#      bash/gitbash **宿主**做词法解析时把反斜杠当转义符吞掉（实测 2026-11-13 E8 启动：
+#      `powershell.exe -File <home>\…\e8_start.ps1` → 报找不到 `C:UsersHP…`）。
+#      与 W4 同属「宿主边界」根因，但形态不同（W4 = wsl 侧不认盘符，W6 = bash 词法吞反斜杠）。
+#      PS 宿主无此问题；双引号在 bash 中保留 `\`（仅 `$`/反引号/`"`/`\`/换行前特殊）⟹ 带引号即安全。
 BLUE_FAT_FISH_WSL_GATE_NAME = "蓝色大肥鱼与wsl之间不得不说的故事"
 _WSL_STORY_FIX = ("Fix: ① 内联 bash 改**单引号**（`wslsh -c '<原文>'`，PS 不展开单引号内内容）；"
                   "② 复杂/多行 → Write 落 .sh 后 `wslsh <file>`；"
@@ -1362,6 +1405,24 @@ def _blue_fat_fish_wsl_story(command: str) -> Optional[tuple]:
                 "`fatal: '1?': not a non-negative integer`）",
                 "Fix: ① 落 .sh 后 `wsl.exe -e bash /mnt/c/…/x.sh`（文件 LF 落盘，不经 stdin 管道）；"
                 "② 或末行补垫行（`:` / `echo`），使裸 CR 落在垫行上")
+
+    # W6 —— `powershell|pwsh … -File <Windows 路径>`：路径是**裸 token** 且含 `\` ⟹ 在
+    #   bash/gitbash 宿主下被词法层当转义符吞掉（实测 2026-11-13 E8 启动：
+    #   `<home>\…\e8_start.ps1` → 报找不到 `C:UsersHP…`）。PS 宿主无此问题；
+    #   双引号在 bash 中保留 `\`（仅 `$`/反引号/`"`/`\`/换行前特殊）⟹ 带引号即安全。
+    #   判据先遮蔽引号区（`_ps_alias_strip_quoted`）：`bash -c '… -File C:\x …'` 不算命中。
+    #   短选项 `-f/-fi/-fil` 与 `-File` 同为 PS 参数前缀唯一匹配，一并覆盖。
+    _w6_cmd = _ps_alias_strip_quoted(command)
+    m6 = re.search(r"\b(?:powershell|pwsh)(?:\.exe)?\b[^|;&\n]*?\s-(?:f|fi|fil|file)\s+(\S+)",
+                   _w6_cmd, re.IGNORECASE)
+    if m6 and "\\" in m6.group(1):
+        return ("WARN",
+                "`powershell|pwsh -File <Windows 路径>` 是**裸 token** 且含反斜杠 —— "
+                "bash/gitbash 宿主会把 `\\` 当转义符吞掉（实测 `<home>\\x.ps1` → "
+                "`C:UsersHPx.ps1`）",
+                "Fix: ① 路径改**正斜杠**（`-File C:/Users/…/x.ps1`，PS/bash 都认）；"
+                "② 或整段加**单引号**（`-File 'C:\\Users\\…\\x.ps1'`）；"
+                "③ 或确认命令走 PS 宿主（不经 bash 包装）")
 
     return None
 
@@ -1895,27 +1956,22 @@ _MAIN_GIT_MUTATING = frozenset((
 ))
 
 
-def _git_main_tree_write(command: str, cwd: str = "") -> tuple[str, str] | None:
-    """Gate R0.15：git 写子命令的目标仓库是**主树** ⟹ BLOCK（堵 RunCommand 写面旁路）。"""
-    import re
+def _git_invocations(command: str, cwd: str = ""):
+    """`git [-C dir] <sub>` 命令位扫描 → yield `(sub, repo)`（repo = `-C` 目标或该段最近 `cd`）。
+
+    **解析单一实现**：R0.15（主树写）/ R0.22（外来 worktree 写）共用；`echo 'git …'` 等引号内
+    字面量跳过；`bash -c '…'` 载荷按命令位展开（与 2026-10-26 主树闸同口径）。
+    """
+    import re as _re
     cmd = (command or "").strip()
     if not cmd:
-        return None
-    if re.search(r"(?:^|[;&|\n])\s*GK_ALLOW_MAIN_GIT_WRITE=1\b", cmd, re.I):
-        return None
-    main = _win_to_wsl(str(SKILL_DIR)).rstrip("/")
-    if not main:
-        return None
-    # shell 包裹（`bash -c '…'` / `wslsh -c '…'`）内的命令也是命令 ⟹ 把 `-c '` 归一为分隔符，
-    # 使内部 `cd`/`git` 处于命令位；纯 `echo 'git …'`（非 -c 载荷）仍不误拦。
-    import re as _re
+        return
     scan = _re.sub(r"(?:-c|--command)\s*(['\"])", ";", cmd, flags=_re.I)
-    # `cd <dir> && git …` 形态：取**该 git 之前**最近的一次 cd（一条命令可跨仓串写，
-    # 用「最后一次 cd」会把前段的 worktree 提交误判成主树写 —— 2026-10-26 实测踩中）。
+    # `cd <dir> && git …`：取该 git **之前**最近的一次 cd（一条命令可跨仓串写）。
     _cds = [(c.start(), c.group(2)) for c in
             _re.finditer(r"(?:^|[;&|\n])\s*cd\s+(['\"]?)([^'\"\s;&|]+)\1", scan, _re.I)]
     for m in _re.finditer(r"\bgit\b", scan, _re.I):
-        if _in_quotes(scan, m.start()):          # 引号内字面量（echo 'git …'）不误拦
+        if _in_quotes(scan, m.start()):
             continue
         eff = cwd or ""
         for pos, d in _cds:
@@ -1935,10 +1991,24 @@ def _git_main_tree_write(command: str, cwd: str = "") -> tuple[str, str] | None:
                 break
         if i >= len(toks):
             continue
-        sub = toks[i].lower()
+        yield toks[i].lower(), (target or eff)
+
+
+def _git_main_tree_write(command: str, cwd: str = "") -> tuple[str, str] | None:
+    """Gate R0.15：git 写子命令的目标仓库是**主树** ⟹ BLOCK（堵 RunCommand 写面旁路）。"""
+    import re
+    cmd = (command or "").strip()
+    if not cmd:
+        return None
+    if re.search(r"(?:^|[;&|\n])\s*GK_ALLOW_MAIN_GIT_WRITE=1\b", cmd, re.I):
+        return None
+    main = _win_to_wsl(str(SKILL_DIR)).rstrip("/")
+    if not main:
+        return None
+    for sub, raw_repo in _git_invocations(cmd, cwd):
         if sub not in _MAIN_GIT_MUTATING:
             continue
-        repo = _win_to_wsl(target or eff).rstrip("/")
+        repo = _win_to_wsl(raw_repo).rstrip("/")
         if not repo:
             continue
         if repo == main or (repo.startswith(main + "/") and "/worktrees/" not in repo):
@@ -1947,6 +2017,140 @@ def _git_main_tree_write(command: str, cwd: str = "") -> tuple[str, str] | None:
                     "Fix: 改动一律在 worktree 内 commit，再按落地仪式 `git merge --no-ff` 回主树；"
                     "确需手工时在**段首**声明 GK_ALLOW_MAIN_GIT_WRITE=1")
     return None
+
+
+# ── Gate R0.22【worktree 不可共享】git 写子命令打到**别人的 worktree** ⟹ BLOCK（2026-11-10）──
+# 事故（实证）：并发会话把 `references/comment-template.md` 写进本会话 worktree，并被本会话
+#   commit（`99aed8c2`）⟹ 别人的产物混进我的历史。判据单源 = `gk_worktree_owner`
+#   （worktree 路径 token / 池槽租约 sid / 首写认领）；本段只做**接线**，不复制判据。
+# 逃生舱：段首 `GK_ALLOW_FOREIGN_WT=1`（仅供排障；与 R0.15 同形）。
+def _git_foreign_worktree_write(command: str, cwd: str, caller_ids) -> tuple[str, str] | None:
+    """Gate R0.22：`git <写子命令> -C <别人的 worktree>` ⟹ BLOCK（防 commit/merge 串味）。"""
+    import re
+    cmd = (command or "").strip()
+    if not cmd:
+        return None
+    if re.search(r"(?:^|[;&|\n])\s*GK_ALLOW_FOREIGN_WT=1\b", cmd, re.I):
+        return None
+    try:
+        sys.path.insert(0, str(SKILL_DIR / "scripts"))
+        import gk_worktree_owner as _gwo  # noqa: E402
+    except Exception as e:  # noqa: BLE001 — 边界：判据不可得 ⟹ 不拦（显式留痕）
+        _log_hook("OWNER-GATE-UNAVAILABLE: %s: %s" % (type(e).__name__, e))
+        return None
+    for sub, raw_repo in _git_invocations(cmd, cwd):
+        if sub not in _MAIN_GIT_MUTATING:
+            continue
+        repo = _win_to_wsl(raw_repo).rstrip("/")
+        if not repo:
+            continue
+        out = _gwo.check(repo, caller_ids, autoclaim=False)
+        if out.get("sid_rotated"):
+            _log_hook("SID-ROTATED: worktree=%s allocated=%s caller=%s（放行，建议重新 claim）"
+                      % (out.get("worktree"), out.get("allocated_sid"), out.get("caller_ids")))
+        if out.get("decision") == "block":
+            return (f"foreign-worktree git write: `git {sub}` 的目标 {out.get('worktree')} 属于 "
+                    f"{out.get('claim') or out.get('owner')} ⟹ 并发产物会混进别人的提交历史"
+                    f"（worktree 不可共享）",
+                    "Fix: 只在自己的 worktree 内 commit；他人成果由其本人在各自树提交后，"
+                    "由主树**串行** `git merge --no-ff` 收口（排障逃生：段首 GK_ALLOW_FOREIGN_WT=1）")
+    return None
+
+
+def _worktree_owner_gate(target: str, caller_ids) -> tuple[str, str] | None:
+    """Gate 3c：Edit/Write 目标必须属于**本会话**的 worktree（判据单源 = `gk_worktree_owner`）。"""
+    if not target:
+        return None
+    try:
+        sys.path.insert(0, str(SKILL_DIR / "scripts"))
+        import gk_worktree_owner as _gwo  # noqa: E402
+    except Exception as e:  # noqa: BLE001 — 边界：判据不可得 ⟹ 不拦（显式留痕）
+        _log_hook("OWNER-GATE-UNAVAILABLE: %s: %s" % (type(e).__name__, e))
+        return None
+    out = _gwo.check(target, caller_ids)
+    if out.get("sid_rotated"):
+        _log_hook("SID-ROTATED: worktree=%s allocated=%s caller=%s（放行，建议重新 claim）"
+                  % (out.get("worktree"), out.get("allocated_sid"), out.get("caller_ids")))
+    if out.get("decision") == "block":
+        return (f"WORKTREE_OWNERSHIP_VIOLATION: 目标 {out.get('worktree')} 属于会话 "
+                f"{out.get('claim') or out.get('owner')}，本会话身份 {out.get('caller_ids')} 无权写入"
+                f" ⟹ worktree 不可共享（并发产物会串味）",
+                "Fix: 在**自己的** worktree 内编辑（apply-worktree --session <你的 sid>）；"
+                "需要他人改动时请其在自己的树内提交，再由主树串行 merge")
+    return None
+
+
+# ── Gate R0.23【让攻击不划算】诱饵命中 / 已被隔离 ⟹ **单行零信息**拒绝（2026-11-11）──
+# 用户口径：被攻击时让对方把 token/算力花在假信息上，并让越权者拿不到任何可调整策略的信号。
+# 分工（判据单源，本段只接线）：
+#   · 隔离级别 = `gk_threat.check`（per-sid 窗口计数；quarantined ⟹ 一切工具调用都拒）；
+#   · 诱饵命中 = `gk_canary.check_access`（注册表路径前缀，O(1)；非 owner 命中 ⟹ 记违约）。
+# 输出纪律：**只看得到一行** `GATEKEEPER: request rejected.` —— 无错误码 / 无路径 / 无 state /
+#   无修复提示；细节只进本地 hook 日志与 per-sid 台账（供事后审计，不回给调用方）。
+def _opaque_block(tag: str) -> None:
+    """被隔离方可见面：单行、零信息、exit 2（与 `block()` 同退出码，宿主才真正拦截）。"""
+    _log_hook("OPAQUE-BLOCK: " + (tag or ""))
+    try:
+        sys.path.insert(0, str(SKILL_DIR / "scripts"))
+        import gk_threat as _th  # noqa: E402
+        line = _th.SINGLE_LINE
+    except Exception:  # noqa: BLE001 — 文案兜底（仍不含任何内部信息）
+        line = "GATEKEEPER: request rejected."
+    sys.stderr.write(line + "\n")
+    sys.exit(2)
+
+
+def _deception_gate(tool_name: str, tool_input: dict, cwd: str, sid: str,
+                    target: str = "") -> str:
+    """返回非空 tag ⟹ 调用方走 `_opaque_block`；空串 ⟹ 放行。"""
+    try:
+        sys.path.insert(0, str(SKILL_DIR / "scripts"))
+        import gk_threat as _th  # noqa: E402
+        import gk_canary as _cn  # noqa: E402
+    except Exception as e:  # noqa: BLE001 — 判据不可得 ⟹ 不拦（显式留痕，与 R0.22 同纪律）
+        _log_hook("DECEPTION-GATE-UNAVAILABLE: %s: %s" % (type(e).__name__, e))
+        return ""
+    chk = _th.check(sid, state=os.environ.get("STATE_FILE") or None)
+    if chk.get("denied"):
+        return "quarantined"
+    text = ""
+    if tool_name == "RunCommand":
+        text = str((tool_input or {}).get("command") or "")
+    elif target:
+        text = str(target)
+    else:
+        try:
+            text = _mcp_write_path(tool_input or {}) or ""
+        except Exception:  # noqa: BLE001
+            text = ""
+    if not text:
+        return ""
+    hit = _cn.check_access(text, cwd=cwd, target=target)
+    if not hit.get("hit"):
+        return ""
+    reg = hit.get("registry") or {}
+    # 维护面放行（宿主注入 env，agent 不可设置）：CI/审计/排障批量扫到诱饵名不该被隔离。
+    if os.environ.get("GK_CANARY_MAINT") == "1":
+        _log_hook("CANARY-MAINT-ALLOW: sid=%s" % sid)
+        return ""
+    # owner 豁免（多 owner）：防御方自己巡检诱饵不得反把自己关进隔离区
+    owners = set(reg.get("owner_sids")
+                 or ([reg.get("owner_sid")] if reg.get("owner_sid") else []))
+    if sid and sid in owners:
+        return ""
+    hits = hit.get("decoys") or []
+    if hits:
+        # **一次访问只记一笔**（否则「目录前缀 + 具体文件」会一次算两笔，3 次阈值实际 2 次就触发）；
+        # 取最具体的那条（rel 最长）作为本次违约的证据。
+        decoy = max(hits, key=lambda d: len(str((d or {}).get("rel") or "")))
+        _cn.record_hit(decoy, sid, repo=hit.get("repo") or "",
+                       state=os.environ.get("STATE_FILE") or None)
+        # 旋转门：命中 ⟹ 旧地图作废（去抖 60s，失败静默 —— 不得把拒绝面变成崩溃面）
+        try:
+            _cn.maybe_rotate(hit.get("repo") or "", on_hit=True)
+        except Exception as e:  # noqa: BLE001
+            _log_hook("CANARY-ROTATE-FAILED: %s: %s" % (type(e).__name__, e))
+    return "canary_hit"
 
 
 # ── Gate R0.16【蓝色大肥鱼与配好的解释器之间不得不说的故事】pytest 解释器硬拦（2026-10-27）──
@@ -2371,7 +2575,14 @@ def _scan_script_content(command: str) -> tuple[str, str] | None:
     cmd = command.strip()
     script_path = None
     # 形态1: bash/sh/source <file>（含 wslsh -c '...bash <file>...' 内层）
-    m = re.search(r"\b(?:bash|sh|source)\s+([^\s'\"|&;]+)", cmd)
+    # 2026-11-10（本会话实证的整片绕过面）：原式只认 bash|sh|source ⟹ `wslsh <file>`
+    #   的脚本体**完全不进扫描** ⟹ 把 `git worktree remove` / `git branch -D` /
+    #   `git push origin HEAD:master` 写进临时 .sh 再 `wslsh 那个.sh` 跑，命令行里
+    #   一个字都没有，R0.3/R0.9/R0.15/R0.17 四道门全部放行（实测复发多次）。
+    #   现补 `wslsh`（本仓宿主的标准执行器）与 `wsl[.exe] -e bash <file>` 两种形态。
+    m = re.search(r"\b(?:bash|sh|source|wslsh)\s+([^\s'\"|&;]+)", cmd)
+    if not m:
+        m = re.search(r"\bwsl(?:\.exe)?\s+-e\s+(?:bash|sh)\s+([^\s'\"|&;]+)", cmd)
     if m:
         candidate = m.group(1)
         if candidate.endswith((".sh", ".bash")) or "/" in candidate:
@@ -2431,6 +2642,7 @@ def _scan_script_content(command: str) -> tuple[str, str] | None:
                     "Fix: 修正引号/heredoc 语法后再执行；WSL 下建议 wslsh 落 .sh 避免嵌套引号")
     except Exception:
         pass  # bash 不可用或超时 → 跳过语法预检
+    _cur_cwd = str(p.parent)        # R0.3b：脚本内 `cd` 累积（初值 = 脚本所在目录）
     for i, line in enumerate(lines, 1):
         stripped = line.strip()
         if not stripped or stripped.startswith("#"):
@@ -2456,6 +2668,17 @@ def _scan_script_content(command: str) -> tuple[str, str] | None:
             reason, hint = danger
             return (f"script content scan [{p} L{i}]: {reason}",
                     f"Fix: {hint} — 脚本内危险命令需人工确认后再执行")
+        # 2026-11-10（R0.3b）：脚本体里的 **git 生命周期 / 主树写 / 直推主线** 也是命令 ⟹
+        #   逐行过 R0.17 / R0.15 / R0.21。`cd` 按行累积（脚本常见 `cd <主树> && git …`，
+        #   单行扫描看不见前一行的 cwd ⟹ 这正是本会话绕过 R0.15 的形态）。
+        _cdm = re.search(r"(?:^|[;&|]\s*)cd\s+(['\"]?)([^'\"\s;&|]+)\1", stripped)
+        if _cdm:
+            _cur_cwd = _cdm.group(2)
+        for _gate in (_wt_route_gate(stripped),
+                      _git_main_tree_write(stripped, _cur_cwd),
+                      _git_push_mainline_gate(stripped)):
+            if _gate:
+                return (f"script content scan [{p} L{i}]: {_gate[0]}", _gate[1])
     return None
 
 
@@ -2989,7 +3212,8 @@ def _emit_step_event_unscoped(cmd: str) -> None:
     """scope_out 分支的步数采集（2026-10-23）。**永不抛出**。
 
     ⚠ 必须与范围内分支**两处都接**：只接一处会重演 T6 的「采样点够不着」缺陷（会话 cwd 常为
-    `c:\\Users\\HP`，走 scope_out 后直接 `sys.exit(0)`）。session 归位规则同 T6（别名优先）。
+    `c:\\Users\\HP`，走 scope_out 后直接 `sys.exit(0)`）。session = `_SESSION_ID`（与 Edit 计费
+    同一桶；别名分片只服务 threat freeze，**不得**用于遥测 —— 2026-11-16 修）。
     """
     try:
         if os.environ.get("GK_EDIT_LOG", "1") == "0":
@@ -3007,7 +3231,7 @@ def _emit_step_event_unscoped(cmd: str) -> None:
             node = str((json.loads(st.read_text(encoding="utf-8")) or {}).get("stage", "") or "")
         except Exception:
             node = ""
-        sess = _read_session_alias(_SESSION_ID) or _SESSION_ID
+        sess = _SESSION_ID
         _bl.append_step(str(st), session=sess, node=node, cmd=cmd)
     except Exception:
         pass
@@ -3060,8 +3284,11 @@ def _emit_verify_event_unscoped(cmd: str) -> None:
             node = str((json.loads(st.read_text(encoding="utf-8")) or {}).get("stage", "") or "")
         except Exception:  # noqa: BLE001 — 读不到 node 不阻断采集
             node = ""
-        # 2026-10-23：归位到 worktree token（= Edit 计费的桶）；无别名则用载荷 sid。
-        sess = _read_session_alias(_SESSION_ID) or _SESSION_ID
+        # 2026-11-16（hook 会话派生一致性）：遥测 session 必须 = `_SESSION_ID`（与 Edit 计费同桶）。
+        #   原实现优先读「载荷 sid → worktree token」别名 ⟹ verify/step 落到 token 桶，而
+        #   2026-11-12 起 Edit 计费用载荷 sid ⟹ `(session,node)` 永不交集 ⟹ file_cap/T6 不销账。
+        #   别名分片仍保留给 `gk_threat.session_alias`（budget freeze），不参与遥测身份。
+        sess = _SESSION_ID
         _bl.append_verify(str(st), session=sess, node=node, cmd=cmd)
         _log_hook(f"T6-VERIFY scope-out session={sess} node={node} cmd={cmd[:80]}")
     except Exception:  # noqa: BLE001 — 遥测不得阻断调用
@@ -3435,6 +3662,135 @@ def _shellcheck_lint(path: str) -> str:
     except Exception:  # noqa: BLE001
         pass
     return out
+
+
+# ── Gate R0.25【蓝色大肥鱼与注释模版之间不得不说的故事】(2026-11-13) ──
+# 病灶（owner 质询「模版自动加载咋回事」）：`scripts/gk_comment_scaffold.py` 与
+#   `references/comment-templates.json` 早已在 master，SKILL.md 却**没有路由行**、
+#   hook 也**没有注入点** ⟹ 技能被加载时拿不到这个入口（组件在、入口没接线）。
+# 本闸 = **编辑时**的入口：新增 def/class 且没有意图注释时，把**可照做**的骨架命令
+#   推到 stderr。放行式（不拦截），与 `_shellcheck_lint` 同族 —— 提示器自身出问题
+#   绝不能阻断编辑（fail-quiet）。
+# 单一事实源：position 候选从 `references/comment-templates.json` 读（禁第二份硬编码
+#   清单）；登记表不可读时仍给命令（只省略候选列表）。
+# 噪声控制：① 只对代码扩展名；② 已有注释/docstring 不提；③ 同一文件同一内容摘要
+#   只提示一次（hook 每次调用是新进程 ⟹ 去重必须落盘）。
+# 逃生舱：`GK_COMMENT_TEMPLATE_HINT=0`。
+_COMMENT_HINT_EXTS = (".py", ".sh", ".bash", ".js", ".jsx", ".ts", ".tsx",
+                      ".go", ".rs", ".java", ".c", ".h", ".cc", ".cpp", ".hpp", ".rb")
+_COMMENT_DEF_RES = (
+    re.compile(r"^\s*(?:async\s+)?def\s+\w+\s*\("),                      # Python
+    re.compile(r"^\s*class\s+\w+\s*[\(:]"),                              # Python / JS class
+    re.compile(r"^\s*(?:export\s+)?(?:default\s+)?(?:async\s+)?function\s*\*?\s*\w+\s*\("),
+    re.compile(r"^\s*(?:pub\s+)?fn\s+\w+\s*[\(<]"),                      # Rust
+    re.compile(r"^\s*func\s+(?:\([^)]*\)\s*)?\w+\s*\("),                 # Go
+)
+_COMMENT_HINT_FILE = None            # 测试缝：`None` ⟹ 由 SKILL_DIR 派生
+_COMMENT_HINT_MAX = 200
+_COMMENT_MARKS = ("#", "//", "/*", "*", '"""', "'''")
+
+
+def _comment_added_text(tool_name: str, tool_input: dict) -> tuple:
+    """→ `(path, added_text)`；非写类/取不到 ⟹ `("", "")`。"""
+    inner, args = _mcp_inner_tool(tool_name, tool_input)
+    if inner and isinstance(args, dict):
+        tool_input = args
+        tool_name = inner
+    path = str(tool_input.get("file_path") or tool_input.get("path") or "")
+    if not path:
+        return "", ""
+    for k in ("content", "new_str", "newText", "new_string"):
+        v = tool_input.get(k)
+        if isinstance(v, str) and v:
+            return path, v
+    return path, ""
+
+
+def _comment_positions() -> list:
+    """登记表里的 position 候选（最多 3 个，偏好 anchor-line/module-docstring/contract）。"""
+    try:
+        reg = json.loads((SKILL_DIR / "references" / "comment-templates.json")
+                         .read_text(encoding="utf-8"))
+        positions = [str(x) for x in (reg.get("positions") or [])]
+    except Exception:  # noqa: BLE001 — 登记表不可读 ⟹ 只省略候选（命令照给）
+        return []
+    prefer = ("anchor-line", "module-docstring", "contract")
+    out = [p for p in prefer if p in positions]
+    out += [p for p in positions if p not in out]
+    return out[:3]
+
+
+def _undocumented_defs(added: str) -> list:
+    """列出「新增 def/class 且上下都没有意图注释」的签名行（最多 3 条）。"""
+    lines = (added or "").splitlines()
+    hits = []
+    for i, ln in enumerate(lines):
+        if not any(r.match(ln) for r in _COMMENT_DEF_RES):
+            continue
+
+        def _neighbors(idx):
+            out = []
+            j = idx - 1
+            while j >= 0 and not lines[j].strip():
+                j -= 1
+            if j >= 0:
+                out.append(lines[j].strip())
+            j = idx + 1
+            while j < len(lines) and not lines[j].strip():
+                j += 1
+            if j < len(lines):
+                out.append(lines[j].strip())
+            return out
+
+        if not any(n.startswith(_COMMENT_MARKS) for n in _neighbors(i)):
+            hits.append(ln.strip()[:80])
+            if len(hits) >= 3:
+                break
+    return hits
+
+
+def _comment_hint_seen(path: str, digest: str) -> bool:
+    """同一路径 + 同一内容摘要是否已提示过（落盘去重）；读写失败 ⟹ 视为未提示。"""
+    p = _COMMENT_HINT_FILE or (SKILL_DIR / ".gatekeeper.comment-hint")
+    try:
+        seen = json.loads(Path(p).read_text(encoding="utf-8"))
+        if not isinstance(seen, dict):
+            seen = {}
+    except Exception:  # noqa: BLE001
+        seen = {}
+    key = path + "|" + digest
+    if key in seen:
+        return True
+    seen[key] = int(time.time())
+    try:
+        Path(p).write_text(json.dumps(dict(list(seen.items())[-_COMMENT_HINT_MAX:]),
+                                      ensure_ascii=False), encoding="utf-8")
+    except Exception:  # noqa: BLE001 — 去重落盘失败不阻断提示
+        pass
+    return False
+
+
+def _comment_template_hint(tool_name: str, tool_input: dict) -> str:
+    """Gate R0.25：新增 def/class 缺意图注释 ⟹ 返回可直接照做的骨架命令；否则空串/None。"""
+    if os.environ.get("GK_COMMENT_TEMPLATE_HINT") == "0":
+        return None
+    path, added = _comment_added_text(tool_name, tool_input)
+    if not path or not added:
+        return None
+    if not path.lower().endswith(_COMMENT_HINT_EXTS):
+        return None
+    hits = _undocumented_defs(added)
+    if not hits:
+        return None
+    digest = hashlib.sha256((path + "\n" + added).encode("utf-8")).hexdigest()[:16]
+    if _comment_hint_seen(path, digest):
+        return None
+    pos = _comment_positions()
+    pos_txt = ("--position " + "|".join(pos)) if pos else "--position <pos>"
+    return ("新增定义缺**意图**注释（%s）⟹ 先取骨架："
+            "python3 scripts/gk_comment_scaffold.py scaffold \"<意图>\" %s；"
+            "落盘后 python3 scripts/gk_comment_scaffold.py check <file> --changed-only"
+            % (hits[0], pos_txt))
 
 
 def _cross_skill_root() -> str:
@@ -4034,6 +4390,83 @@ def _wt_route_gate(command: str):
     return None
 
 
+# ── Gate R0.21：直推主线（`git push … master|main`）──────────── 2026-11-10 ──
+# 病象（本会话实证）：`gatekeeper-cli.sh push` 带**阶段门 + 远端白名单 + 预检**；
+#   直接用 `git push origin HEAD:master` 把 worktree 内容推进主线，整条 push 链被跳过
+#   （2026-11-10 实际发生一次：绕过后只能事后 FF，无法回退审查）。
+# 判据：`git push` 的**目标 refspec** 解析为 master/main（含 `HEAD:master` 形态）⟹ BLOCK。
+#   `git push origin feature/x` 不拦（分支推送本身是合法协作）。
+# 逃生舱：段首 `GK_ALLOW_DIRECT_PUSH=1`（同 R0.15 形）/ 进程级 `GK_PUSH_MAINLINE_GATE=0`。
+_PUSH_MAINLINE_PAT = re.compile(r"\bgit\b[^\n;&|]*?\bpush\b([^\n;&|]*)")
+_PUSH_MAINLINE_HINT = (
+    "Fix: 推送走单一入口 `bash gatekeeper-cli.sh push`（阶段门 + 远端白名单 + 预检）；"
+    "确需手工直推主线时在**段首**声明 GK_ALLOW_DIRECT_PUSH=1"
+)
+
+
+def _git_push_mainline_gate(command: str):
+    """Gate R0.21 检测体：直推 master/main ⟹ (reason, hint)；无命中 → None。"""
+    if os.environ.get("GK_PUSH_MAINLINE_GATE", "") == "0":
+        return None
+    cmd = (command or "").strip()
+    if not cmd:
+        return None
+    scan = cmd.split("<<", 1)[0]
+    if re.search(r"(?:^|[;&|\n])\s*GK_ALLOW_DIRECT_PUSH=1\b", scan, re.I):
+        return None
+    scan = re.sub(r"(?:-c|--command)\s*(['\"])", ";", scan)
+    for m in _PUSH_MAINLINE_PAT.finditer(scan):
+        if _in_quotes(scan, m.start()):
+            continue
+        toks = [t for t in m.group(1).split() if not t.startswith("-")]
+        if len(toks) < 2:                     # 无 refspec（推当前分支）不在判据内
+            continue
+        dst = toks[1].split(":")[-1].strip("\"'")
+        if dst in ("master", "main"):
+            return (f"直推主线（`git push … {dst}`）绕过 push 阶段门/远端白名单/预检",
+                    _PUSH_MAINLINE_HINT)
+    return None
+
+
+# ── Gate R0.24：裸合并落主树 ⟹ BLOCK（2026-11-13，owner 令「不能以任何形式绕过」）──
+# 病根（现存设计）：R0.15 的 `_MAIN_GIT_MUTATING` **显式排除 `merge`**（当时判据："merge 是既有
+#   落地仪式，拦了就断正路"）⟹ `git merge` / `git pull` / `git branch -f master` 落主树时
+#   零闸（闸①/闸②都不跑）= 本闸要堵的洞。
+# 判据：`git <merge|pull>` 或 `git branch -f|--force master|main` 的目标仓库 == 主树 ⟹ BLOCK。
+#   worktree 内 `git merge origin/master`（把主线并进自己分支）**不拦**（repo ≠ 主树）。
+# 逃生舱：段首 `GK_ALLOW_RAW_MERGE=1`（与 R0.15 同形；留痕 hook.log，便于事后对账）。
+_MERGE_SUBS = frozenset(("merge", "pull"))
+_BRANCH_FORCE_MAIN_PAT = re.compile(
+    r"\bgit\b[^\n;&|]*\bbranch\b[^\n;&|]*?\s(?:-f|--force)\s+(?:master|main)\b")
+_RAW_MERGE_HINT = (
+    "Fix: 用唯一入口 `bash gatekeeper-cli.sh merge --source <branch> [--target master]`"
+    "（内部 闸①→merge→闸②→提交，自动签发放行票据）；确需应急时在**段首**声明 GK_ALLOW_RAW_MERGE=1"
+)
+
+
+def _git_merge_main_gate(command: str, cwd: str = ""):
+    """Gate R0.24 检测体：裸 merge/pull/branch -f 落主树 ⟹ (reason, hint)；无命中 → None。"""
+    cmd = (command or "").strip()
+    if not cmd:
+        return None
+    if re.search(r"(?:^|[;&|\n])\s*GK_ALLOW_RAW_MERGE=1\b", cmd, re.I):
+        _log_hook("RAW-MERGE-ALLOWED: " + cmd[:160])
+        return None
+    main = _win_to_wsl(str(SKILL_DIR)).rstrip("/")
+    if not main:
+        return None
+    for sub, raw_repo in _git_invocations(cmd, cwd):
+        repo = _win_to_wsl(raw_repo).rstrip("/") or main
+        if not (repo == main or (repo.startswith(main + "/") and "/worktrees/" not in repo)):
+            continue
+        if sub in _MERGE_SUBS:
+            return ("裸 `git %s` 落主树 ⟹ 绕过合并前置闸（退化/回退/受保护区/暂存删除全不查）"
+                    % sub, _RAW_MERGE_HINT)
+    if _BRANCH_FORCE_MAIN_PAT.search(cmd):
+        return ("`git branch -f master|main` 直接搬主线指针 ⟹ 绕过合并前置闸", _RAW_MERGE_HINT)
+    return None
+
+
 def _task_dispatch_gate(tool_name: str, tool_input: dict, session: str = "") -> str:
     """Gate 0（方案 B，2026-10-27）：Task **默认拒绝** + 单次票据校验。
 
@@ -4158,6 +4591,7 @@ def main():
     _env_sid = str(os.environ.get("GK_SESSION_ID") or "")
     _pay_sid = str(hook_data.get("session_id") or "")
     _wt_tok = ""
+    _gsi = None
     if _CALL_TARGET:
         try:
             sys.path.insert(0, str(SKILL_DIR / "scripts"))
@@ -4166,9 +4600,21 @@ def main():
             _wt_tok = _cand if _gsi.is_valid_token(_cand) else ""
         except Exception:
             _wt_tok = ""
-    _SESSION_ID = _env_sid or _wt_tok or _pay_sid
-    # 2026-10-23（T6 销账）：把「载荷 sid ↔ worktree token」同一性落盘 —— 见
-    #   `_write_session_alias` 的实测背景（否则 verify 与编辑落到两个桶，T6 永不销账）。
+    # 2026-11-12（会话身份隔离）：**宿主会话号优先**；路径 token 只在无宿主身份时兜底。
+    #   原序 `env > wt_tok > payload` 会把“目标在谁的树里”误当成“我是谁”（同树双写根因之一）。
+    _SESSION_ID = resolve_session_id(_env_sid, _pay_sid, _wt_tok)
+    # ── 归属闸（Gate 3c / R0.22）用的**调用方**身份候选（2026-11-10）──
+    #   ⚠ 刻意**不含** `_SESSION_ID`：它由**目标**路径派生 ⟹ 与 owner 恒等，用作判据恒真。
+    #   判据单源 = `gk_worktree_owner.caller_identities`（cwd token + env + 载荷 sid + 同源 marker 别名）。
+    _caller_ids = []
+    try:
+        import gk_worktree_owner as _gwo  # noqa: E402
+        _caller_ids = _gwo.caller_identities(cwd, extra=(_env_sid, _pay_sid))
+    except Exception as _e:  # noqa: BLE001 — 边界：判据不可得 ⟹ 归属闸自行 fail-open
+        _log_hook("OWNER-IDS-UNAVAILABLE: %s: %s" % (type(_e).__name__, _e))
+    # 2026-10-23（T6 销账）：把「载荷 sid ↔ worktree token」同一性落盘。**2026-11-16 更正**：
+    #   该别名只服务 `gk_threat.session_alias`（budget freeze 的会话归并），**不再**用于
+    #   verify/step 遥测身份 —— 遥测与 Edit 计费统一用载荷 sid（`_SESSION_ID`）。
     if _pay_sid and _wt_tok:
         _write_session_alias(_pay_sid, _wt_tok)
     # 2026-09-25：**会话身份出口**（见 `_write_session_marker`）—— 必须在任何早退/拦截之前落盘，
@@ -4191,6 +4637,13 @@ def main():
         tool_input["command"] = _ccmd
         _CALL_TOOL = tool_name      # 归一后同步（提权防线② / 审计口径）
         _CALL_CMD = _ccmd           # R0 家族读它
+
+    # ── Gate R0.23【让攻击不划算】诱饵命中 / 已被隔离（**先于**一切放行分支，含 scope_out）──
+    #   位点刻意在 scope 解析之前：被隔离方的任何调用（含范围外读诱饵）都只能拿到一行。
+    _dec_tag = _deception_gate(tool_name, tool_input, cwd, _env_sid or _pay_sid,
+                               target=_CALL_TARGET)
+    if _dec_tag:
+        _opaque_block(_dec_tag)
 
     # ── Gate R0.14【单出网口闸】：浏览器 MCP 出网归一 + 普适 BLOCK（`ECC-6007804DD7BD`）──
     # 位点同 `_cmd_identity`：**先于** `scope_out` —— 出网是"普适"面，治理范围外同样拦。
@@ -4381,6 +4834,11 @@ def main():
             if main_git:
                 block(f"{BLUE_FAT_FISH_MAIN_GIT_GATE_NAME}: {main_git[0]} Command: {command[:120]}...",
                       main_git[1])
+            # ── Gate R0.24: 裸 merge/pull/branch -f 落主树 ⟹ 绕过合并前置闸（普适，范围外也执行）──
+            raw_merge = _git_merge_main_gate(command, cwd)
+            if raw_merge:
+                _log_hook(f"BLOCK R0.24 raw-merge: {command[:160]}")
+                block(f"RAW-MERGE {raw_merge[0]}. Command: {command[:120]}...", raw_merge[1])
             # ── Gate R0.16: 蓝色大肥鱼与配好的解释器之间不得不说的故事（pytest 解释器；普适）──
             py_gate = _pytest_wrong_interpreter(command)
             if py_gate:
@@ -4451,6 +4909,14 @@ def main():
             if wt_route:
                 _log_hook(f"BLOCK R0.17 worktree-route: {command[:160]}")
                 block(f"WT-ROUTE {wt_route[0]}. Command: {command[:120]}...", wt_route[1])
+            push_main = _git_push_mainline_gate(command)      # R0.21（2026-11-10）
+            if push_main:
+                _log_hook(f"BLOCK R0.21 push-mainline: {command[:160]}")
+                block(f"PUSH-MAINLINE {push_main[0]}. Command: {command[:120]}...", push_main[1])
+            fw = _git_foreign_worktree_write(command, cwd, _caller_ids)   # R0.22（2026-11-10）
+            if fw:
+                _log_hook(f"BLOCK R0.22 foreign-worktree: {command[:160]}")
+                block(f"FOREIGN-WT {fw[0]}. Command: {command[:120]}...", fw[1])
             # ── T6 销账通道（2026-10-23）：范围外**也**采集验证动作 ──
             #   范围内分支尾部有 `_emit_verify_event`；本分支原直接 `sys.exit(0)` ⟹ 会话 cwd
             #   在范围外时**永不采集** ⟹ `kind=verify` 恒 0 ⟹ T6 欠债无法清偿（实测见
@@ -4566,6 +5032,12 @@ def main():
             block(f"{BLUE_FAT_FISH_MAIN_GIT_GATE_NAME}: {main_git[0]} Command: {command[:120]}...",
                   main_git[1])
 
+        # ── Gate R0.24: 裸 merge/pull/branch -f 落主树 ⟹ 绕过合并前置闸（2026-11-13）──
+        raw_merge = _git_merge_main_gate(command, cwd)
+        if raw_merge:
+            _log_hook(f"BLOCK R0.24 raw-merge: {command[:160]}")
+            block(f"RAW-MERGE {raw_merge[0]}. Command: {command[:120]}...", raw_merge[1])
+
         # ── Gate R0.16【蓝色大肥鱼与配好的解释器之间不得不说的故事】pytest 解释器（2026-10-27）──
         py_gate = _pytest_wrong_interpreter(command)
         if py_gate:
@@ -4671,6 +5143,14 @@ def main():
         if wt_route:
             _log_hook(f"BLOCK R0.17 worktree-route: {command[:160]}")
             block(f"WT-ROUTE {wt_route[0]}. Command: {command[:120]}...", wt_route[1])
+        push_main = _git_push_mainline_gate(command)          # R0.21（2026-11-10）
+        if push_main:
+            _log_hook(f"BLOCK R0.21 push-mainline: {command[:160]}")
+            block(f"PUSH-MAINLINE {push_main[0]}. Command: {command[:120]}...", push_main[1])
+        fw = _git_foreign_worktree_write(command, cwd, _caller_ids)   # R0.22（2026-11-10）
+        if fw:
+            _log_hook(f"BLOCK R0.22 foreign-worktree: {command[:160]}")
+            block(f"FOREIGN-WT {fw[0]}. Command: {command[:120]}...", fw[1])
 
     # ── Gate 1: Stage must be active ──
     if not STATE_FILE.exists():
@@ -4743,6 +5223,14 @@ def main():
             else:
                 block(f"Path '{file_path}' resolves to '{resolved}' which is NOT in active write surface (worktree '{worktree}' + worktrees_extra). Edit files only in the active write surface.")
 
+        # ── Gate 3c: worktree **独占归属**（2026-11-10）──────────────────────────────
+        #   病象（实证）：`worktrees_extra[]` 是**共享**列表 ⟹ 目标在列表里的任何会话都能写
+        #   ⟹ worktree 事实可共享，并发产物混进别人的提交（`99aed8c2`）。判据单源 = gk_worktree_owner。
+        _ow = _worktree_owner_gate(resolved, _caller_ids)
+        if _ow:
+            _log_hook(f"BLOCK GATE3c ownership: {resolved} ids={_caller_ids}")
+            block(_ow[0], _ow[1])
+
         # ── Gate 8: 技能自维护防裸跑（2026-08-20, R-T8.3）──
         # 技能仓库（SKILL_DIR 内）写操作须有 open finding 或活跃 R-phase，否则 BLOCK。
         # 与 Gate 3 同层（EDIT_TOOLS 且 file_path 非空），复用同一 resolve。
@@ -4757,6 +5245,14 @@ def main():
         if _sc:
             print(f"GATEKEEPER-FIX: {_sc}", file=sys.stderr)
             _log_hook(f"SHELLCHECK-FIX {resolved}: {_sc[:160]}")
+
+        # ── Gate R0.25: 注释模版**编辑时**注入面（2026-11-13，owner 质询「模版自动加载」）──
+        # 与 shellcheck 同族：放行式主动注入（不拦截）。新增 def/class 缺意图注释 ⟹ 把
+        # `gk_comment_scaffold.py scaffold … / check … --changed-only` 推到 stderr。
+        _ch = _comment_template_hint(_ORIG_TOOL_NAME, tool_input)
+        if _ch:
+            print(f"GATEKEEPER-HINT: {_ch}", file=sys.stderr)
+            _log_hook(f"COMMENT-HINT {resolved}: {_ch[:160]}")
 
         # ── Gate 4: CLI pre-tool-check ──
         # 2026-09-22（ECC-BFE933526D0B 修复）：把**行号**补进自动拦截路径。原式只传路径 ⟹

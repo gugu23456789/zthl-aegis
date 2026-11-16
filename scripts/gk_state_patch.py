@@ -426,6 +426,65 @@ def cmd_worktrees_extra(state_path: str, op: str, path: str,
                 "worktrees_extra": new, "checksum": w.get("checksum")}
 
 
+def detach_route(state_path: str, worktree: str, fallback: str = "") -> dict:
+    """删树前的**路由复位**（reclaim 事务化第一半；2026-11-13 P0-b）。
+
+    病象：`reclaim` 删掉 worktree 后 `state.worktree` 仍指向该路径 ⟹ 唯一路由链悬空
+    （编辑静默落空 / 空 BLOCK，实测）。故删树前必须先把路由挪到 fallback，且与允许集
+    清理放在**同一次** state 写里（一次 `state_lock` + 一次 `_write_state`）：
+
+      ① `worktree == <被删树>` ⟹ 改写为 `fallback`（缺 fallback ⟹ fail-loud，不留悬空）；
+      ② `worktrees_extra[]`（顶层 + `gate_data`；后者是 `route-check` 的真实消费面）
+         中指向该树的项一并摘除；
+      ③ checksum 由 `gk_state._write_state` 单一事实重算。
+
+    **幂等**：无需变更 ⟹ `changed:false` 且**零写盘**（崩溃后重入 / 复跑安全）。
+    """
+    try:
+        from gk_route_center import _as_norm  # noqa: E402 — 归一单源（RC1）
+    except Exception as e:  # noqa: BLE001 — CLI 边界，显式失败
+        return {"ok": False,
+                "error": f"归一单源不可用（gk_route_center._as_norm）：{type(e).__name__}: {e}"}
+    wt = _as_norm(worktree)
+    fb = _as_norm(fallback or "") if fallback else ""
+    if not wt:
+        return {"ok": False, "error": "detach-route 需要非空 worktree"}
+    with state_lock(state_path):
+        data = gk_state._read_state(state_path)
+        if "error" in data:
+            return {"ok": False, "error": data["error"]}
+        changed = []
+        cur = _as_norm(data.get("worktree") or "")
+        if cur and cur == wt:
+            if not fb:
+                # fail-closed：不留悬空路由（删了树却把 worktree 留空/留旧值）
+                return {"ok": False, "error": "fallback_required",
+                        "detail": "state.worktree 指向被删树，但未给 fallback ⟹ 拒复位"}
+            data["worktree"] = fb
+            changed.append("worktree")
+        cur_list = data.get("worktrees_extra")
+        if isinstance(cur_list, list):
+            new = [e for e in cur_list if _as_norm(e) != wt]
+            if len(new) != len(cur_list):
+                data["worktrees_extra"] = new
+                changed.append("worktrees_extra")
+        gd = data.get("gate_data")
+        if isinstance(gd, dict) and isinstance(gd.get("worktrees_extra"), list):
+            cur_list = gd["worktrees_extra"]
+            new = [e for e in cur_list if _as_norm(e) != wt]
+            if len(new) != len(cur_list):
+                gd["worktrees_extra"] = new
+                changed.append("gate_data.worktrees_extra")
+        if not changed:
+            return {"ok": True, "changed": False, "worktree": wt, "fallback": fb}
+        w = gk_state._write_state(data, state_path)
+        if not w.get("ok", False):
+            return {"ok": False, "error": w.get("error", "state 写入失败"),
+                    "detail": w.get("detail", "")}
+        return {"ok": True, "changed": True, "worktree": wt, "fallback": fb,
+                "keys": changed, "checksum": w.get("checksum")}
+
+
 def cmd_wt_domain(state_path: str, op: str, token: str, path: str,
                   dry_run: bool = False) -> dict:
     """`gate_data.wt_domain[<token>][]` 的**唯一写通路**（§17-2 域化活动写面）。

@@ -130,6 +130,20 @@ def _assert_verify_source(vsrc: str) -> None:
 #   → 技能仓 → state 所在仓 → CWD 所在仓 → 技能仓的**同级仓**。单仓假设 = 漂移源（跨仓 sha 被
 #   误判为伪源）⟹ 默认多仓。
 _ACCEPT_KINDS = ("commit", "arm", "tests", "review", "crossr", "red", "monitor")
+# 2026-11-12（owner 令「不允许糊弄式关单」）：`review:` 是**自证**，不能单独作为机械类 finding
+#   的关单证据；`--ack-accept` 只对 `closure_oracle=judgment` 开放（机械类必须给可核验腿）。
+_WEAK_ACCEPT_KINDS = ("review",)
+
+
+def _finding_oracle(state_file: str, fid: str) -> str:
+    """读该 finding 的 `closure_oracle`（`mechanical` / `judgment` / 空）。只读、不抛。"""
+    try:
+        for f in load_findings(state_file):
+            if f.get("id") == fid:
+                return str(f.get("closure_oracle") or "")
+    except Exception:  # noqa: BLE001
+        return ""
+    return ""
 
 
 def _accept_segments(vsrc: str) -> list:
@@ -227,23 +241,29 @@ def _accept_gate(state_file: str, fid: str, verify_source: str, accept_ack=None)
     segs = _accept_segments(verify_source)
     ev = [(k, p) for (k, p) in segs if k in _ACCEPT_KINDS]
     problems = []
+    oracle = _finding_oracle(state_file, fid)
+    judgment = oracle == "judgment"
     if not ev:
         problems.append("无证据段：verify_source=%r 不含 %s 之一（manual/空/自由文本不作证据）"
                         % (verify_source, "/".join(_ACCEPT_KINDS)))
+    # 2026-11-12 锁：机械类 finding 不得只靠 `review:` 自证（糊弄式关单）
+    if ev and not judgment and all(k in _WEAK_ACCEPT_KINDS for k, _p in ev):
+        problems.append("弱证据：review 属自证，closure_oracle=%r 的 finding 须配 "
+                        "commit:/tests:/arm:/crossr:/red:/monitor: 之一" % oracle)
     repos = _candidate_repos(state_file)
     for k, p in ev:
         if k == "commit" and not _commit_resolvable(p, repos):
             problems.append("commit:%s 在候选仓不可解析（伪源；候选=%d 仓）" % (p, len(repos)))
     if not problems:
         return
-    if accept_ack:
+    if accept_ack and judgment:
         _append_journal(state_file, {"event": "accept_ack", "fid": fid, "ts": _now(),
                                      "problems": problems})
         return
     raise ValueError(
         "ECC_CLOSE_ACCEPT_FAIL: " + "; ".join(problems)
         + " —— 关单须承载可核验证据（先 `verify`，或 `--verify-source` 写 `commit:<真实sha>`/"
-          "`arm:`/`tests:`）；确需无据关单请 `--ack-accept` 显式放行（记 accept_ack 留痕）")
+          "`tests:`/`arm:`）；`--ack-accept` 仅对 closure_oracle=judgment 开放（记 accept_ack 留痕）")
 
 
 # ── 释放批准链（release approval；B 阶段 2026-10-06）─────────────────────────────
@@ -503,11 +523,34 @@ def load_findings(state_file: str) -> list:
     return s.setdefault("gate_data", {}).setdefault("ecc_findings", [])
 
 
-def save_findings(state_file: str, findings: list) -> None:
+def save_findings(state_file: str, findings: list, *,
+                  allow_shrink: bool = False, shrink_reason: str = "") -> None:
+    """整份写回 `ecc_findings`（所有写面的**唯一**落盘口）。
+
+    2026-11-12（owner 令「全链路全生命周期追踪」）：新增**收缩守卫** ——
+    原实现直接 `gd["ecc_findings"] = findings`，不 diff ⟹ `discover` 重建 state / 并发
+    覆盖造成的"少了几条"**不留任何痕迹**（实测 2026-10-02T14:01Z `discover` 抹掉 30 条，
+    journal 只有 register）。现口径：
+      · 未声明收缩（`allow_shrink=False`）而新列表少了 fid ⟹ **拒写** + fail-loud；
+      · 合法收缩（spillover/归档/归并）须显式 `allow_shrink=True` + `shrink_reason`，
+        写成功后在 journal 落一条 `{"event":"shrink","removed_fids":[...],"reason":...}`。
+    """
+    removed = []
     # 2026-09-25（选项 A）：读-改-写整体持 `state_lock`（否则并发 register/close 相互覆盖）。
     with state_lock(state_file):
         s = _read_state(state_file)
         gd = s.setdefault("gate_data", {})
+        old_ids = {str(f.get("id")) for f in (gd.get("ecc_findings") or [])
+                   if isinstance(f, dict) and f.get("id")}
+        new_ids = {str(f.get("id")) for f in findings
+                   if isinstance(f, dict) and f.get("id")}
+        removed = sorted(old_ids - new_ids)
+        if removed and not allow_shrink:
+            raise ValueError(
+                "ECC_LEDGER_SHRINK_REFUSED: 本次写入将删 %d 条 finding（%s%s）—— "
+                "静默收缩 = 无痕删条（2026-10-02 discover 事故形态）；"
+                "合法收缩须显式 allow_shrink=True + shrink_reason（落 journal `shrink` 事件）"
+                % (len(removed), ",".join(removed[:5]), "…" if len(removed) > 5 else ""))
         gd["ecc_findings"] = findings
         # 2026-11-02（写崩修复）：checksum 与台账**同一次写**落盘。
         #   原实现先 `save_findings` 再 `_write_checksum` 二次写；后者只改 checksum，
@@ -516,6 +559,12 @@ def save_findings(state_file: str, findings: list) -> None:
         s["_checksum"] = hashlib.sha256(
             json.dumps(gd, sort_keys=True).encode()).hexdigest()[:16]
         dump_state(state_file, s)
+    if removed:
+        # 合法收缩的**轨迹**（锁外写，journal 自带哈希链/HMAC）；写失败不阻断主流程
+        # （journal 缺失由 reconcile 显式暴露，不静默吞）。
+        _append_journal(state_file, {"ts": _now(), "event": "shrink",
+                                     "removed_fids": removed,
+                                     "reason": shrink_reason or "unspecified"})
 
 
 def spillover_open(state_file: str, max_open: int = 0, *, dry_run: bool = False) -> dict:
@@ -570,7 +619,8 @@ def spillover_open(state_file: str, max_open: int = 0, *, dry_run: bool = False)
                 "spilled_ids": sorted(str(f.get("id")) for f in removed if f.get("id")),
                 "open": sum(1 for f in remaining if f.get("status") == "open"),
                 "bytes": _sz(remaining)}
-    save_findings(state_file, remaining)
+    save_findings(state_file, remaining, allow_shrink=True,
+                  shrink_reason="spillover_open：open/byte 溢出 → finding 卫星片")
     _write_checksum(state_file)
     try:
         import gk_satellite as _SAT
@@ -754,6 +804,14 @@ def _refresh_repo_index(state_file: str) -> dict:
 # 处置（A3 ①，用户裁定）：去重键改 **id**，同 id 走 upsert ——
 #   `first_added` 不回溯（保留最早）；内容变（`evidence_hash` 变）才推进 `last_modified`
 #   （对齐 `_red_attacks.red_report` 的 F-REV-90 双语义：first_added 永不改写 / last_modified 内容变才改写）。
+# 2026-11-12（噪声根治）：**度量型** RED finding 是「当前快照」而非待办 —— 一旦人工关闭，
+#   重扫只刷新计数/哈希，**不得重开**（否则每次红队扫描都把 7 条全部重新打开）。
+_RED_METRIC_IDS = frozenset({
+    "RED-MIGRATE-INLINE", "RED-MIGRATE-SWALLOW", "RED-MIGRATE-FD", "RED-MIGRATE-DANGER",
+    "RED-CONSTRAINTS-01", "RED-CONSTRAINTS-02", "RED-INTEGRITY-06", "RED-INTEGRITY-07",
+})
+
+
 def upsert_red_findings(state_file: str, new: list) -> dict:
     """RED 引擎 finding 台账 upsert（键 = `id`）。返回 added/updated/unchanged/duplicate_ids。
 
@@ -817,6 +875,10 @@ def upsert_red_findings(state_file: str, new: list) -> dict:
         merged.update({k: v for k, v in f.items() if v is not None})
         merged["first_added"] = old.get("first_added") or f.get("first_added")
         merged["last_modified"] = f.get("last_modified") or old.get("last_modified")
+        # 度量型：已关的旧记录不得被重扫的 `status=open` 重新打开（只刷计数/哈希）
+        if (fid in _RED_METRIC_IDS and str(old.get("status") or "") in ("closed", "fixed")
+                and str(merged.get("status") or "") == "open"):
+            merged["status"] = old.get("status")
         findings[i] = merged
         updated += 1
         _touched.append((fid, old.get("status", "open")))
@@ -896,7 +958,8 @@ def prune_duplicates(state_file: str) -> dict:
             seen.add(fid)
         kept.append(f)
     if dropped:
-        save_findings(state_file, kept)
+        save_findings(state_file, kept, allow_shrink=True,
+                      shrink_reason="prune_duplicates：同根因重复归并")
         _write_checksum(state_file)
         for fid in sorted(set(dup_ids)):
             _append_journal(state_file, {"ts": _now(), "event": "prune_duplicate",
@@ -1056,7 +1119,10 @@ def reconcile_pair(findings: list, events: list, gen_start: str = "") -> dict:
     背景：2026-09-11 域隔离迁移的 10 条纯技能域记录在后续一次未留痕台账重置中消失，journal
     只剩逐条 `reanchor` ⟹ 对账器无法区分「声明出域」与「真丢失」，只能永久 FAIL 10 项。
     """
-    evs_src = [e for e in events if e.get("event") != _EPOCH_EVENT]
+    # `shrink`（2026-11-12）= **台账级**事件（无单个 fid，`removed_fids` 承载批量），
+    #   由 `_legacy_loss` 单独消费 ⟹ 不进 per-fid 事件账（否则会以 fid="" 报"记录被删"）。
+    evs_src = [e for e in events
+               if e.get("event") not in (_EPOCH_EVENT, "shrink")]
     if gen_start:
         evs_src = [e for e in evs_src if str(e.get("ts", "")) >= gen_start]
     purged = set()
@@ -1122,11 +1188,49 @@ def epoch(state_file: str, ts: str = "", reason: str = "", purged_fids=None) -> 
             "journal_path": _journal_path(state_file)}
 
 
+def _legacy_loss(findings: list, events: list, gen_start: str, purged) -> list:
+    """**跨代际**静默丢失（2026-11-12，owner 令「全链路全生命周期追踪」）。
+
+    `gen_start` **之前** register、无任何终态事件（closed/fixed/rejected）、未被 epoch
+    `purged_fids` 显式声明、也未被 `shrink` 事件声明，且不在 live 台账 ⟹ 判为 legacy-loss。
+
+    背景：代际过滤（F-REV-23）本意是防"前代 fid 误报"，但它同时把**边界之前真实发生的
+    静默丢失**一起藏起来（实测 2026-10-02T14:01Z `discover` 抹掉 30 条，reconcile 恒报 ok）。
+    ⚠ **只报不阻断**：`ok`/`anomalies` 不变（历史既成事实，不能把现行门禁长期卡红）；
+    它单列于 `legacy_loss` 供审计/收口（`epoch --purged-fids` 显式声明后即出清）。
+    """
+    if not gen_start:
+        return []
+    live = {str(f.get("id")) for f in findings if isinstance(f, dict) and f.get("id")}
+    regs, tos, shrunk = {}, {}, set()
+    for e in events:
+        ev = e.get("event")
+        if ev == "shrink":
+            shrunk.update(str(x) for x in (e.get("removed_fids") or []))
+            continue
+        fid = str(e.get("fid") or "")
+        if not fid:
+            continue
+        if ev == "register" and str(e.get("ts", "")) < gen_start:
+            regs.setdefault(fid, str(e.get("ts", "")))
+        if e.get("to"):
+            tos.setdefault(fid, set()).add(str(e["to"]))
+    out = []
+    for fid in regs:
+        if fid in live or fid in purged or fid in shrunk:
+            continue
+        if tos.get(fid, set()) & {"closed", "fixed", "rejected"}:
+            continue
+        out.append(fid)
+    return sorted(out)
+
+
 def reconcile(state_file: str) -> dict:
     """finding_journal_reconcile（C8/f7）：live journal 重放对账 state.ecc_findings。
 
     委托 reconcile_pair（单源）；archived 版本 = gk_ember_replay.reconcile_ember。
     F-REV-23：以最近一次 epoch 标记的 ts 作 gen_start（代际过滤），避免前代 fid 误报。
+    2026-11-12：新增 `legacy_loss`（代际窗外的静默丢失，只报不阻断）+ `legacy_loss_ok`。
     """
     if not os.path.isfile(state_file):
         return {"check": "finding_journal_reconcile", "ok": True,
@@ -1135,11 +1239,13 @@ def reconcile(state_file: str) -> dict:
     events = _journal_events(state_file)
     gen = _last_epoch(events)
     r = reconcile_pair(findings, events, gen_start=gen)
+    legacy = _legacy_loss(findings, events, gen, r["purged"])
     return {"check": "finding_journal_reconcile", "ok": r["ok"],
             "journal_path": _journal_path(state_file), "gen_start": gen,
             "events": r["events"], "raw_events": r["raw_events"],
             "findings": r["findings"], "anomalies": r["anomalies"],
-            "purged": r["purged"]}
+            "purged": r["purged"],
+            "legacy_loss": legacy, "legacy_loss_ok": not legacy}
 
 
 def _split_layers(v) -> list:
@@ -1384,6 +1490,78 @@ def _scan_drift(state_file: str, fids) -> list:
     return drifted
 
 
+# ── 全量预检（2026-11-12）：一次索引扫全部 open，且补查 `anchors` 字段 ──
+# 病灶：`precheck <fid>` 每条新起进程 + 重建候选仓索引（实测 40 条 ≈ 19s，单批 0.17s）；
+#   且 `_scan_drift` 只看**标题行**锚，`anchors` 字段完全不看 ⟹ "0 drift" 可能只是没查。
+# 边界：本组只读；`_guard_precheck` 的硬门语义**不变**（仍只看标题锚），避免改判据。
+_ANCHOR_FILE_RE = re.compile(
+    r"([A-Za-z0-9_./\-]+\.(?:py|sh|md|json|tex|txt|ya?ml|c|h|cc|cpp|js|ts|toml))"
+    r"(?::(\d+)(?:-(\d+))?)?")
+_ANCHOR_KINDS = ("plan", "mod", "test", "file", "src", "anchor", "ref")
+_LINE_COUNT_CACHE = {}
+
+
+def _anchor_verdict(ref, roots):
+    """单锚判决 → `(verdict, rel)`；`nonfile` = 非文件锚（`batch:` / 纯符号 / 散文）。
+
+    支持：`kind:path:line[-line]`、`path::symbol`（只验文件存在）、裸 `plan:<name>`（补 .md）。
+    """
+    s = str(ref or "").strip()
+    kind = ""
+    if ":" in s and s.split(":", 1)[0] in _ANCHOR_KINDS:
+        kind, s = s.split(":", 1)
+    if kind == "batch":
+        return "nonfile", s
+    if kind == "plan" and os.path.basename(s.strip()) in ("", "-", "none"):
+        return "nonfile", s          # `plan:-` = 无计划（占位），不是文件锚
+    m = _ANCHOR_FILE_RE.search(s)
+    if not m and kind == "plan":
+        rel, lo, hi = os.path.basename(s.strip()) + ".md", None, None
+    elif not m:
+        return "nonfile", s
+    else:
+        rel, lo, hi = m.group(1), m.group(2), m.group(3)
+    if os.path.isabs(rel):
+        cands = [rel]
+    else:
+        cands = [os.path.join(r, rel) for r in roots]
+        if kind == "plan":
+            cands += [os.path.join(r, "docs", "plans", os.path.basename(rel)) for r in roots]
+    for p in cands:
+        if not os.path.isfile(p):
+            continue
+        if lo is None:
+            return "ok", rel
+        n = _LINE_COUNT_CACHE.get(p)
+        if n is None:
+            try:
+                with open(p, "rb") as fh:
+                    n = sum(1 for _ in fh)
+            except OSError:
+                n = -1
+            _LINE_COUNT_CACHE[p] = n
+        return ("ok" if int(hi or lo) <= n else "line_oob:%s>%s" % (hi or lo, n)), rel
+    return "file_missing", rel
+
+
+def _scan_anchors_field(state_file: str, fids) -> list:
+    """补查 `anchors` 字段的文件/行号（与 `_scan_drift` 的标题锚互补；只读、不写盘）。"""
+    wanted = {str(x) for x in (fids or []) if str(x)}
+    if not wanted or not os.path.isfile(state_file):
+        return []
+    roots = list(_candidate_repos(state_file) or [str(DEFAULT_SKILL)])
+    out = []
+    for f in load_findings(state_file):
+        fid = str(f.get("id") or "")
+        if fid not in wanted:
+            continue
+        for ref in (f.get("anchors") or []):
+            verdict, rel = _anchor_verdict(ref, roots)
+            if verdict not in ("ok", "nonfile"):
+                out.append({"fid": fid, "anchor": str(ref), "rel": rel, "verdict": verdict})
+    return out
+
+
 def _journal_precheck_ack(state_file: str, drifted: list) -> None:
     """逐 drifted fid 记 `precheck_ack`（schema 见 `_guard_precheck`：必带 fid、禁带 to）。"""
     for fid in sorted({d["fid"] for d in drifted}):
@@ -1602,7 +1780,8 @@ def register(state_file: str, title: str, source: str,
                     merged.get("title", ""), merged.get("root_key", ""),
                     merged.get("family", ""), merged.get("anchors") or [])
             merged["last_modified"] = _now()
-            save_findings(state_file, findings)
+            save_findings(state_file, findings, allow_shrink=True,
+                          shrink_reason="register merge_into：并入既有根因记录")
         else:
             # F-REV-23 自锚：state 代际初启（findings 空）且无 epoch → 先打代际标记，
             # 使后续 reconcile 只对「本代际内」事件对账（防前代 fid 残留误报「记录被删」）。
@@ -1732,13 +1911,15 @@ def verify(state_file: str, fid: str, ok: bool, verify_source: str = "",
 
 
 def close(state_file: str, fid: str, verify_source: str, ack: bool = False, *,
-          declassify: bool = False, accept_hard: bool = False, accept_ack=None) -> dict:
+          declassify: bool = False, accept_hard: bool = False, accept_ack=None,
+          allow_multi: bool = False) -> dict:
     """关闭 finding（终态 `closed`）；写入边界校验 `verify_source` 形态（c9）。
 
     Plan-2：处置前强制回环闸（定序同 `verify`）；T5-a：不可信来源未 declassify ⟹ 终态汇点禁行。
+    `allow_multi=True` **仅供** `close_all_sources` 使用（单源写仍受 `_assert_single_source` 保护）。
     """
     _gate_writable(state_file)
-    _assert_single_source(state_file, fid, "close")
+    _assert_single_source(state_file, fid, "close", allow_multi=allow_multi)
     _guard_precheck(state_file, [fid], ack=ack)
     _assert_verify_source(verify_source)
     if accept_hard:
@@ -1770,7 +1951,37 @@ def close(state_file: str, fid: str, verify_source: str, ack: bool = False, *,
     raise KeyError(f"finding {fid} not found")
 
 
-def reopen(state_file: str, fid: str, reason: str = "", ack: bool = False) -> dict:
+def close_all_sources(state_file: str, fid: str, verify_source: str, ack: bool = False, *,
+                      declassify: bool = False, accept_hard: bool = True,
+                      accept_ack=None) -> dict:
+    """把同 id 的**全部可写副本**一起写成 `closed`（多源分叉的唯一安全出口）。
+
+    `_assert_single_source` 的语义是「有分叉就拒绝单源写」—— 但同 id 双源均在 open 时
+    （`conflicts --dedupe` 只删**真镜像**，内容不同代者不删），单源 close 会被永久锁死。
+    本函数按 `_entries_by_id` 枚举可写源，逐源 close（`allow_multi=True`）：
+    全部成功 ⟹ 不再存在「一源已关、另一源仍 open」的分叉；任一失败 ⟹ 抛
+    `CLOSE_ALL_PARTIAL` 并列出已处理源（便于人工接着修，不静默半途而废）。
+    """
+    paths = sorted({p for (p, _kind, _e) in _entries_by_id(state_file).get(fid, [])
+                    if _kind != "archive"})
+    if not paths:
+        raise KeyError(f"finding {fid} not found")
+    done, out = [], {}
+    for p in paths:
+        try:
+            out = close(p, fid, verify_source, ack=ack, declassify=declassify,
+                        accept_hard=accept_hard, accept_ack=accept_ack, allow_multi=True)
+            done.append(os.path.basename(p))
+        except Exception as e:  # noqa: BLE001 — 汇总成单一 fail-loud
+            raise ValueError("CLOSE_ALL_PARTIAL: %s 已关 %s，失败于 %s: %s"
+                             % (fid, done, os.path.basename(p), e)) from e
+    out = dict(out or {})
+    out["closed_sources"] = done
+    return out
+
+
+def reopen(state_file: str, fid: str, reason: str = "", ack: bool = False, *,
+           allow_multi: bool = False) -> dict:
     """重开一条**终态**（closed/fixed/rejected）finding：status → open + journal 留痕。
 
     用途：误关（如把伞形 finding 当载体关掉）或缺陷回归时把台账拉回真实态。与 `close` 镜像，
@@ -1785,7 +1996,7 @@ def reopen(state_file: str, fid: str, reason: str = "", ack: bool = False) -> di
     - checksum 重算走 `_write_checksum`（与 `close` 同路径）
     """
     _gate_writable(state_file)
-    _assert_single_source(state_file, fid, "reopen")
+    _assert_single_source(state_file, fid, "reopen", allow_multi=allow_multi)
     _guard_precheck(state_file, [fid], ack=ack)
     findings = load_findings(state_file)
     for f in findings:
@@ -1805,6 +2016,29 @@ def reopen(state_file: str, fid: str, reason: str = "", ack: bool = False) -> di
                                          "reason": reason or "manual"})
             return f
     raise KeyError(f"finding {fid} not found")
+
+
+def reopen_all_sources(state_file: str, fid: str, reason: str = "", ack: bool = False) -> dict:
+    """把同 id 的**全部可写副本**一起重开（`close_all_sources` 的镜像）。
+
+    用途：误关/批量关单后原样恢复 —— 只重开一份会制造「一源 open、一源 closed」的新分叉。
+    全部成功才返回；任一失败抛 `REOPEN_ALL_PARTIAL` 并列出已处理源。
+    """
+    paths = sorted({p for (p, _kind, _e) in _entries_by_id(state_file).get(fid, [])
+                    if _kind != "archive"})
+    if not paths:
+        raise KeyError(f"finding {fid} not found")
+    done, out = [], {}
+    for p in paths:
+        try:
+            out = reopen(p, fid, reason=reason, ack=ack, allow_multi=True)
+            done.append(os.path.basename(p))
+        except Exception as e:  # noqa: BLE001 — 汇总成单一 fail-loud
+            raise ValueError("REOPEN_ALL_PARTIAL: %s 已处理 %s，失败于 %s: %s"
+                             % (fid, done, os.path.basename(p), e)) from e
+    out = dict(out or {})
+    out["reopened_sources"] = done
+    return out
 
 
 # ── 台账时效巡检（TTL 标 stale + 锚文件被 diff 触及 ⟹ 自动 reopen，2026-11-01）────────
@@ -2296,6 +2530,50 @@ def amend_anchors(state_file: str, mapping: dict, apply: bool = False, note: str
             "not_found": not_found, "dry_run": False}
 
 
+# ── 时效性置信度（**只读派生标签**；owner 2026-11-12）─────────────────────────
+# 唯一作用 = **提醒**：finding 内容可能因时间过久而失真（台账是历史陈述，不是当前事实）。
+# 纪律（刻意收窄，防止变成第二个「自动关单」通道）：
+#   · **不写盘**、**不改 status**、**不参与任何门禁判定**（与 `stale` 子命令的 TTL 巡检是两件事：
+#     后者可 `--apply` 标记过期，本标签永远只读）；
+#   · 基准 = `_last_touch`（verify / amend-title / close 都算「重新确认过」）⟹ 长期未复核才涨龄；
+#   · 无时间戳 ⟹ `unknown`（不臆造时间）。
+STALE_AGING_DAYS = 14      # ≥14 天未复核 ⟹ aging（可能已过时）
+STALE_STALE_DAYS = 30      # ≥30 天未复核 ⟹ stale（大概率已失真）
+
+
+def staleness(f, now=None) -> tuple:
+    """**只读**派生 `(confidence, age_days)`：`fresh` / `aging` / `stale` / `unknown`。"""
+    now = now or datetime.now(timezone.utc)
+    d = _parse_ts(_last_touch(f))
+    if d is None:
+        return ("unknown", None)
+    age = (now - d).total_seconds() / 86400.0
+    if age >= STALE_STALE_DAYS:
+        return ("stale", age)
+    if age >= STALE_AGING_DAYS:
+        return ("aging", age)
+    return ("fresh", age)
+
+
+def stale_labels(state_file: str, now=None, limit: int = 20) -> dict:
+    """只读汇总：非 `fresh` 的条目按龄降序（`limit` 截断）+ 分档计数。零写盘。"""
+    counts = {"fresh": 0, "aging": 0, "stale": 0, "unknown": 0}
+    items = []
+    for f in load_findings_union(state_file):
+        conf, age = staleness(f, now)
+        counts[conf] = counts.get(conf, 0) + 1
+        if conf in ("aging", "stale") and age is not None:
+            items.append({
+                "id": f.get("id"), "status": f.get("status", "open"),
+                "confidence": conf, "age_days": round(age, 1),
+                "label": ("%s：内容大概率已失真（%d 天未复核，请重新核实后再据此决策）"
+                          if conf == "stale" else
+                          "%s：可能已过时（%d 天未复核）") % (f.get("id"), int(age)),
+            })
+    items.sort(key=lambda x: -float(x.get("age_days") or 0))
+    return {"counts": counts, "items": items[:limit]}
+
+
 def status(state_file: str) -> dict:
     # 2026-10-31（遗漏⑤ 读侧收口）：**读**走 union（主台账 ⊕ finding 溢出片）——
     #   只读 main 会把已溢出条目当「不存在」（读分裂，`MU_BACKCAST_NEGATIVE` 同族）。
@@ -2373,7 +2651,7 @@ def _usage_error(cmd):
         "register": "finding register <title> [source] [--title-file <path>] [--source-file <path>] [--from-report <path>] [--family <族>] [--cover-layers L1,L9] [--gap true|false] [--root-key <根因指纹>] [--anchor <锚>]... [--facet <侧面>]... [--closure-oracle <mechanical|judgment>] [--repo <仓根|token>] [--merge-into <fid>] [--dup-ack <理由>] [--domain <repo>.<plan>]",
         "dup-check": "finding dup-check <title> [--family <族>] [--anchor <锚>]... [--facet <侧面>]... [--tau <0..1>] [--limit <n>] [--exclude-id <fid>] [--domain <repo>.<plan>]",
         "verify": "finding verify <id> <true|false> [--verify-source <来源>] [--domain <repo>.<plan>]",
-        "close": "finding close <id> [verify_source] [--verify-source <来源>] [--ack-accept] [--domain <repo>.<plan>]",
+        "close": "finding close <id> [verify_source] [--verify-source <来源>] [--ack-accept] [--all-sources] [--domain <repo>.<plan>]",
         "reopen": "finding reopen <id> [reason] [--reason <文本>] [--domain <repo>.<plan>]",
         "release-approve": "finding release-approve <id> [--by <名>] [--note <文本>] [--divergence <0..1>] [--final-ruling] [--declassify] [--domain <repo>.<plan>]",
         "release-reject": "finding release-reject <id> [--by <名>] [--note <文本>] [--domain <repo>.<plan>]",
@@ -2391,7 +2669,7 @@ def _usage_error(cmd):
         "amend-anchors": "finding amend-anchors --map <old=new,...> [--apply] [--note <text>] [--domain <repo>.<plan>]",
         "epoch": "finding epoch [--ts <iso>] [--reason <text>] [--purged <fid,fid,...>] [--domain <repo>.<plan>]",
         "archive-closed": "finding archive-closed [--target-total <bytes>] [--keep-closed <n>] [--dry-run] [--domain <repo>.<plan>]",
-        "precheck": "finding precheck <fid> [--domain <repo>.<plan>]",
+        "precheck": "finding precheck <fid|--all> [--domain <repo>.<plan>]",
         "journal-verify": "finding journal-verify [--domain <repo>.<plan>]",
         "stale": "finding stale [--ttl-days <n>] [--apply] [--now <iso>] [--domain <repo>.<plan>]",
     }
@@ -2515,7 +2793,8 @@ def archive_closed(state_file: str, target_total: int = 0, keep_closed: int = 0,
     #   故闸随后即落盘（纯读；无漂移 ⟹ 零动作）。
     _guard_precheck(state_file, [str(f.get("id")) for f in removed if f.get("id")], ack=ack)
     # 落盘次序：state 先、旁挂次、代际锚最后（对齐 register/close 的「锚在末」次序）
-    save_findings(state_file, remaining)
+    save_findings(state_file, remaining, allow_shrink=True,
+                  shrink_reason="archive_closed：closed 条目移出主台账")
     _write_checksum(state_file)
     # [ECC-65129D205C9A / 卫星计划 §8/§10] **生产者接线（禁第二直写者）**：片写**收敛为调中枢**
     #   `gk_satellite.append`（片唯一写者 = 中枢）。原实现 `open(_archive_path(state_file), "a")`
@@ -3346,7 +3625,7 @@ def _entries_by_id(state_file: str) -> dict:
     return out
 
 
-def _assert_single_source(state_file: str, fid: str, op: str) -> None:
+def _assert_single_source(state_file: str, fid: str, op: str, allow_multi: bool = False) -> None:
     """**禁多源可写**（全序列打通②/③ 本体）：id 级写前置**唯一性门**（fail-loud）。
 
     若 `fid` 同现于 ≥2 个**可写**源（base/domain；archive 只读不计）⟹ 拒绝 —— 否则「改了一源、
@@ -3354,6 +3633,8 @@ def _assert_single_source(state_file: str, fid: str, op: str) -> None:
     """
     srcs = sorted({p for (p, kind, _e) in _entries_by_id(state_file).get(fid, [])
                    if kind != "archive"})
+    if allow_multi:   # 显式多源写（`close_all_sources`）：调用方负责把所有副本写成同一终态
+        return
     if len(srcs) > 1:
         raise ValueError(
             "FINDING_MULTI_SOURCE: " + op + " 拒绝写 id " + fid + "（同现于 " + str(len(srcs))
@@ -3484,7 +3765,8 @@ def conflicts(state_file: str, converge: bool = False, apply: bool = False,
                     continue                     # 保留唯一权威（胜者那份）
                 fs = load_findings(p)
                 fs[:] = [x for x in fs if x.get("id") != fid]
-                save_findings(p, fs)
+                save_findings(p, fs, allow_shrink=True,
+                              shrink_reason="conflicts --dedupe：删除跨源真镜像")
                 _write_checksum(p)
                 _append_journal(p, {"ts": _now(), "event": "conflict_dedupe", "fid": fid,
                                     "kept": w[0], "removed_entry": e,
@@ -3762,7 +4044,7 @@ def main(argv=None):
             #   判据单一源 = `_guard_precheck`（禁第二实现）；`_scan_drift` 仅取结构化明细
             #   （同一判决引擎，只读）。`ack` 恒 False ⟹ 预检**不设放行口**（逃生舱 = env
             #   `GK_FINDING_PRECHECK=0`）。命中 ⟹ rc=1 + `ECC_PRECHECK_DRIFT` + drift 明细。
-            pc_fid = ""
+            pc_fid, pc_all = "", False
             rest = args[2:]
             i = 0
             while i < len(rest):
@@ -3771,23 +4053,40 @@ def main(argv=None):
                     if i + 1 >= len(rest):
                         raise ValueError("--domain 缺值（" + _usage_error("precheck") + "）")
                     domain, i = rest[i + 1], i + 2
+                elif a == "--all":
+                    pc_all, i = True, i + 1
                 elif a.startswith("--"):
                     raise ValueError(f"precheck 不支持参数 {a}（" + _usage_error("precheck") + "）")
                 else:
                     pc_fid, i = a, i + 1
-            if not pc_fid:
-                raise ValueError("precheck 需要 <fid>（" + _usage_error("precheck") + "）")
+            if not pc_fid and not pc_all:
+                raise ValueError("precheck 需要 <fid> 或 --all（" + _usage_error("precheck") + "）")
             if domain is not None:
                 state_file = resolve_domain_state(state_file, domain)
-            try:
-                _guard_precheck(state_file, [pc_fid], ack=False)
-            except ValueError:
-                print(json.dumps({"ok": False, "error": "ECC_PRECHECK_DRIFT",
-                                  "finding": pc_fid,
-                                  "drift": _scan_drift(state_file, [pc_fid])},
-                                 ensure_ascii=False))
-                sys.exit(1)
-            out = {"ok": True, "finding": pc_fid}
+            if pc_all:
+                # 一次索引 + 一次装载扫全部 open（标题锚 + anchors 字段），只读
+                _ids = [str(f.get("id")) for f in load_findings(state_file)
+                        if str(f.get("status") or "") == "open"]
+                _td = _scan_drift(state_file, _ids)
+                _ad = _scan_anchors_field(state_file, _ids)
+                all_out = {"ok": not _td and not _ad, "scanned": len(_ids),
+                           "title_drift": _td, "anchors_drift": _ad}
+                if not all_out["ok"]:
+                    all_out["hint"] = ("跨仓锚未解析时设 GK_FINDING_REPOS=<仓根>（`:` 分隔）；"
+                                       "`line_oob` = 行号超出当前文件长度")
+                    print(json.dumps(all_out, ensure_ascii=False))
+                    sys.exit(1)
+                out = all_out
+            else:
+                try:
+                    _guard_precheck(state_file, [pc_fid], ack=False)
+                except ValueError:
+                    print(json.dumps({"ok": False, "error": "ECC_PRECHECK_DRIFT",
+                                      "finding": pc_fid,
+                                      "drift": _scan_drift(state_file, [pc_fid])},
+                                     ensure_ascii=False))
+                    sys.exit(1)
+                out = {"ok": True, "finding": pc_fid}
         elif cmd == "verify":
             pos, vsrc = [], ""
             rest = args[2:]
@@ -3816,7 +4115,7 @@ def main(argv=None):
             out = verify(state_file, pos[0], _parse_bool(pos[1], "ok"),
                          verify_source=vsrc, ack=ack_drift)
         elif cmd == "close":
-            pos, vsrc, accept_ack = [], "", None
+            pos, vsrc, accept_ack, all_sources = [], "", None, False
             rest = args[2:]
             i = 0
             while i < len(rest):
@@ -3828,6 +4127,8 @@ def main(argv=None):
                 elif a == "--ack-accept":
                     accept_ack = True
                     i += 1
+                elif a == "--all-sources":
+                    all_sources, i = True, i + 1
                 elif a == "--domain":
                     if i + 1 >= len(rest):
                         raise ValueError("--domain 缺值（" + _usage_error("close") + "）")
@@ -3846,8 +4147,12 @@ def main(argv=None):
                 vsrc = pos[1]  # 向后兼容：finding close <id> <verify_source>
             if domain is not None:
                 state_file = resolve_domain_state(state_file, domain)
-            out = close(state_file, fid, vsrc or "manual", ack=ack_drift,
-                        accept_hard=True, accept_ack=accept_ack)
+            if all_sources:
+                out = close_all_sources(state_file, fid, vsrc or "manual", ack=ack_drift,
+                                        accept_hard=True, accept_ack=accept_ack)
+            else:
+                out = close(state_file, fid, vsrc or "manual", ack=ack_drift,
+                            accept_hard=True, accept_ack=accept_ack)
         elif cmd == "reopen":
             pos, reason = [], ""
             rest = args[2:]
@@ -4077,6 +4382,9 @@ def main(argv=None):
                 out["cross_domain_dup"] = cross_domain_dups(state_file)
                 # 2026-11-01：跨仓索引（**只读现算**，不依赖落盘投影是否最新；不写盘）。
                 out["repo_index"] = _project_repo_index(load_findings_union(state_file))
+                # 2026-11-12（owner）：**时效性置信度只读标签** —— 唯一作用是提醒「放太久了，
+                #   内容大概率已失真」；不改 status、不写盘、不参与门禁（禁做成自动关单通道）。
+                out["stale_labels"] = stale_labels(state_file)
         elif cmd == "journal-verify":
             # C 接线（2026-10-16，owner 裁定「事件级签名 + 哈希链」）：只读验链 + 验签（不新增 _CMD_REG）。
             rest = args[2:]

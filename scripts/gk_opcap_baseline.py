@@ -42,18 +42,41 @@ def baseline_path(state_file: str) -> str:
     return str(state_file) + ".opcap-baseline.json"
 
 
-def _x3_metric() -> dict:
-    # x3 = acknowledge-injected 计数（门禁绕行率）：唯一留痕是 credit-ledger 的 `exempt` 行，
-    #   但 opcap §1 禁把额度事件直接当 OPCAP 评分，且「计数 vs 率」分母未裁 ⟹ 不造载体。
-    return {"status": "no_carrier", "value": None, "unit": "count",
-            "note": "only trace = credit-ledger exempt rows; unit (count vs rate) unresolved"}
+def _x3_metric(snap=None) -> dict:
+    """x3 = acknowledge-injected 率（门禁绕行率）。
+
+    2026-11-16 裁定 B（本地化）：分子 = credit-ledger `exempt` 行；分母 = hook
+    `INVOKE event=PreToolUse` 行。载体缺失（任一为 None / 分母 0）⟹ 沿用 `no_carrier`，
+    **不造率**（避免把「无日志」读成 0 绕行）。
+    """
+    s = ((snap or {}).get("x3_ack_injected") or {})
+    n, d = s.get("exempt"), s.get("gate_invokes")
+    if isinstance(n, int) and isinstance(d, int) and d > 0:
+        return {"status": "available", "value": round(n / d, 6), "unit": "rate",
+                "numerator": n, "denominator": d,
+                "note": "local: credit-ledger exempt / hook PreToolUse invokes"}
+    return {"status": "no_carrier", "value": None, "unit": "rate",
+            "note": "carrier absent: credit-ledger exempt rows and/or hook PreToolUse log missing"}
 
 
-def _x4_metric() -> dict:
-    # x4 = override 率：上游 v47/v48 已删除旧 override 实现，改报零事件上界；
-    #   本仓无「机会数」载体 ⟹ 只登记状态，不计算。
+def _x4_metric(snap=None) -> dict:
+    """x4 = override 率。
+
+    上游 v47/v48 删除旧实现；2026-11-16 裁定 B 改为**本地运行口径**：
+    分子 = budget-log 提额事件（`advance_env` / `state_patch_set_nested` / `code-fix` /
+    `override`）；分母 = hook `INVOKE event=PreToolUse`（机会数，与 x3 同源）。
+    `advances` 只作上下文：实测 `_advance_log` 被裁剪到最近 5 条，不能当分母。
+    载体缺失 ⟹ 沿用 `removed_upstream`。
+    """
+    s = ((snap or {}).get("x4_overrides") or {})
+    n, d = s.get("events"), s.get("gate_invokes")
+    if isinstance(n, int) and isinstance(d, int) and d > 0:
+        return {"status": "available", "value": round(n / d, 6), "unit": "rate",
+                "numerator": n, "denominator": d,
+                "advances": s.get("advances"),
+                "note": "local: budget overrides / hook PreToolUse invokes (upstream removed v47/v48)"}
     return {"status": "removed_upstream", "value": None, "unit": "rate",
-            "note": "removed in upstream v47/v48; zero-event upper bound needs opportunity counts"}
+            "note": "carrier absent: no budget override events or hook PreToolUse log; upstream removed v47/v48"}
 
 
 def metrics_from_export(snap: dict) -> dict:
@@ -61,8 +84,8 @@ def metrics_from_export(snap: dict) -> dict:
     x8 = (snap or {}).get("x8_register_to_close") or {}
     med = x8.get("median_hours")
     return {
-        "x3": _x3_metric(),
-        "x4": _x4_metric(),
+        "x3": _x3_metric(snap),
+        "x4": _x4_metric(snap),
         "x8": {"status": "available" if med is not None else "no_data",
                "median_hours": med, "max_hours": x8.get("max_hours"),
                "n_closed": x8.get("n_closed")},

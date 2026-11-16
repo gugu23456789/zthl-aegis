@@ -109,6 +109,11 @@ def _fmt_amp(v):
     return None if v is None else round(float(v), 2)
 
 
+def _fmt_amp4(v):
+    """amp/state 期望 ~1–2，2 位小数会把小值舍成 0.0（对比时不能当分母）⟹ 保留 4 位。"""
+    return None if v is None else round(float(v), 4)
+
+
 def run_scenario(state_bytes, payload_bytes, writers, ops):
     tmp = tempfile.mkdtemp(prefix="gk_bench_state_")
     state = os.path.join(tmp, "state.json")
@@ -181,7 +186,7 @@ def run_scenario(state_bytes, payload_bytes, writers, ops):
         "ops_s": round(success / wall, 2) if wall > 0 else None,
         "latency": C.percentiles(lat),
         "amp_per_payload": _fmt_amp(amp),
-        "amp_per_state": _fmt_amp(amp_per_state),
+        "amp_per_state": _fmt_amp4(amp_per_state),
         "amp_src": amp_src,
         "write_amp": _fmt_amp(amp),          # 兼容别名（旧 baseline 读此键）
         "write_amp_src": amp_src,
@@ -280,8 +285,11 @@ def main(argv=None):
             [128 * 1024, 512 * 1024], [1024, 65536], [1, 8, 32], 30, 20)
     else:
         mode = "quick"
+        # 2026-11-14（口径对齐）：quick 必须是 full 的**同名子集**，否则发布前预检与
+        #   full 基线只有零星场景同名，对比面接近空。这里固定取 full 也有的
+        #   w1/w8-p1024-s131072（ops 可小于 full，场景名不含 ops）。
         state_sizes, payloads, writers, ops, crash_trials = (
-            [128 * 1024], [1024, 16384], [1, 4], 20, 3)
+            [128 * 1024], [1024], [1, 8], 20, 3)
     if a.no_crash:
         crash_trials = 0
     if a.crashes is not None:

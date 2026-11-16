@@ -734,6 +734,14 @@ def check_meta(doc, findings, plan_file=""):
             findings.append((CHECK_META, "medium",
                              "META `edit_budget_declared` 非法（须 ∈ [0, %d]）：%r"
                              % (DECLARED_HARD_CAP, raw_d)))
+    # 2026-11-14（方案 A）：`plan_status` 只认 `draft|frozen`（缺省 frozen）；拼错会被
+    # `plan_status()` 静默按 frozen 处理 ⟹ 作者以为已标 draft、实际仍落域，故在 lint 面报出。
+    raw_ps = meta.get("plan_status")
+    if raw_ps is not None and str(raw_ps).strip() != "":
+        if str(raw_ps).strip().lower() not in ("draft", "frozen"):
+            findings.append((CHECK_META, "medium",
+                             "META `plan_status` 非法（须为 draft|frozen，缺省 frozen）：%r"
+                             % raw_ps))
     dom = str(meta.get("state_domain") or "").strip()
     wt = str(meta.get("worktree_needed") or "").strip().lower() == "true"
     # P16（2026-10-01：**已撤销**，owner 同日裁定）。原实现 = 对 `worktree_needed=true` 而缺

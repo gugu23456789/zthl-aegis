@@ -25,6 +25,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import gk_dbg  # noqa: E402 — 诊断日志路径单一事实源（ECC-67C0B937A54B）
 from gk_host_paths import user_home as _user_home, win_abs_to_wsl  # noqa: E402
 
 PKG = "zthl_bashpy_migrate"
@@ -57,7 +58,8 @@ _DEV_SOURCE_DIRS = (
 # 包内 wheel（2026-11-05）：本体随包发布 ⟹ **包内优先**（离线自包含，版本不受本机 pip 漂移影响）。
 # 纯 Python wheel 可直接 zipimport（sys.path 插入 .whl），无需安装；SHA256 由同目录 SHA256SUMS 校验。
 _VENDOR_DIR = Path(__file__).resolve().parent.parent / "vendor" / "bashpy"
-GK_DBG_LOG = Path(__file__).resolve().parent / "gk_dbg.log"
+# 2026-11-12（ECC-67C0B937A54B）：路径**单一事实源** = `gk_dbg.log_path()`（按会话切片）。
+GK_DBG_LOG = gk_dbg.log_path()
 
 _CACHE_FILE = Path(os.environ.get("GK_BASHPY_CACHE",
                     str(Path.home() / ".cache" / "gk-bashpy"))) / "last-check.json"

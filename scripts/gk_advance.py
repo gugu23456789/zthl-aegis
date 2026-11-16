@@ -448,9 +448,61 @@ def _ecc_incremental(d: dict, current: str) -> str:
     return "missing"
 
 
+_AUDIT_PHASE_RESULT_KEYS = {
+    "AUDIT-STATE": "audit_state_result",
+    "AUDIT-MEMORY": "audit_memory_result",
+    "AUDIT-CROSSR": "audit_crossr_result",
+}
+
+
+def _audit_phase_failure(d: dict, phase: str):
+    """相位**执行失败**判据（2026-11-15，G12 ②）。
+
+    只看「审计是否真的产出可用结果」；**不**把 audit finding（matches/failures 计数）当相位
+    失败 —— 那些走 finding 台账（E18），不应阻断相位推进/报告签发。
+    → None = 未发现执行失败；否则返回具名 reason。
+    """
+    key = _AUDIT_PHASE_RESULT_KEYS.get(phase)
+    if not key:
+        return None
+    gd = d.get("gate_data")
+    gd = gd if isinstance(gd, dict) else {}
+    res = gd.get(key)
+    if not isinstance(res, dict) or not res:
+        return "result_missing:%s" % key
+    err = res.get("error") or res.get("heredoc_error")
+    if not err:
+        sm = res.get("audit_summary")
+        if isinstance(sm, dict):
+            err = sm.get("heredoc_error")
+    if err:
+        return "audit_error:%s" % str(err)[:160]
+    if res.get("ok") is False:
+        return "not_ok:%s" % key
+    return None
+
+
 def _audit_order(d: dict, to: str) -> dict:
-    """AUDIT phase ordering enforcement."""
+    """AUDIT phase ordering enforcement.
+
+    2026-11-15（G12 ②）：原实现**进入即 append** `audit_phases_completed` ⟹ 审计执行失败
+    （结果缺失 / error / ok:false）也记为 completed，`AUDIT-REPORT` 仍可达且失败态无留痕。
+    现改为：
+      · 进入相位先判执行失败 ⟹ 写 `audit_phase_failures`（按 phase 单条覆盖，成功重入即清除），
+        **不**写 completed；advance 本身仍放行（不新增阻断点）。
+      · `AUDIT-REPORT` 要求 required 全部 completed **且**不在 failures 中。
+      · 向后兼容：旧 state 已有的 completed 条目原样保留（不回填、不清空）。
+    """
     if to.startswith("AUDIT-") and to != "AUDIT-REPORT":
+        fails = [e for e in (d.get("audit_phase_failures") or [])
+                 if isinstance(e, dict) and e.get("phase") != to]
+        reason = _audit_phase_failure(d, to)
+        if reason:
+            fails.append({"phase": to, "reason": reason,
+                          "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")})
+            d["audit_phase_failures"] = fails[-20:]
+            return {"ok": True, "phase": to, "phase_failed": True, "reason": reason}
+        d["audit_phase_failures"] = fails[-20:]
         phases = d.setdefault("audit_phases_completed", [])
         phases.append(to)
     if to == "AUDIT-REPORT":
@@ -459,6 +511,12 @@ def _audit_order(d: dict, to: str) -> dict:
         if not need.issubset(set(phases)):
             return {"ok": False,
                     "error": "AUDIT phase order violation: must complete AUDIT-STATE, AUDIT-MEMORY, and AUDIT-CROSSR before AUDIT-REPORT"}
+        failed = {e.get("phase") for e in (d.get("audit_phase_failures") or [])
+                  if isinstance(e, dict) and e.get("phase")}
+        hit = need & failed
+        if hit:
+            return {"ok": False,
+                    "error": "AUDIT phase failure recorded: %s — rerun the failed phase before AUDIT-REPORT" % ",".join(sorted(hit))}
     return {"ok": True}
 
 
@@ -999,12 +1057,12 @@ def _eco_prereq_heuristic(d: dict, current: str, state_file: str = "") -> dict:
         "ECO-RESEARCH": [("release_check", bool(lrc), f"last_release_check={lrc}",
                           "先跑 gatekeeper-cli.sh release-check（版本确认，循环 A 触发信号）"),
                          ("subagent_review", bool(sh), f"subagent_history={len(sh)} 条",
-                          "先跑 gatekeeper-cli.sh monitor --subagent \"ECO-RESEARCH 交叉审查...\"（写入 subagent_history）"),
+                          "先跑 gatekeeper-cli.sh monitor --subagent --crossrev \"ECO-RESEARCH 交叉审查...\"（写入 subagent_history）"),
                          ("gitnexus_baseline", bool(lrc), "release-check 基线",
                           "先跑 release-check + gitnexus analyze（建立基线）")],
         "ECO-EDIT": [("plan_refinement_checkpoint", has_plan_ref,
                       "subagent_history 含 plan-refinement 点检",
-                      "先跑 gatekeeper-cli.sh monitor --subagent \"plan-refinement: <task>\"（写入 subagent_history）"),
+                      "先跑 gatekeeper-cli.sh plan-refinement <plan> --run --task \"<task>\"（写入 subagent_history）"),
                      ("adjudicate", any(str(e.get("stage", "")).startswith("ECO-EDIT") for e in hcl),
                       "human_calibration_log", "先跑 gatekeeper-cli.sh adjudicate --verdicts ... --score ...")],
         "ECO-VERIFY": [("audit_all", has_audit,
@@ -1150,7 +1208,45 @@ EDIT_BUDGET_HARD_CAP = 24   # 单节点硬顶（设计 §4；2026-10-23 16 → 2
 EDIT_BUDGET_CEILING = 32
 
 
-def _edit_budget(d: dict, env: dict, dry_run: bool) -> dict:
+THREAT_FREEZE_ENV = "GK_THREAT_BUDGET_FREEZE"
+
+
+def _threat_budget_cap(state_file: str, candidate: int):
+    """违约冷却期 ⟹ 注入额度**减半封顶**（只读投影；不扣款、不进熵）。
+
+    触发面 = 违约台账（`gk_threat.budget_freeze`）里该 sid 最近一次安全事件距今 < 冷却期
+    （`GK_THREAT_BUDGET_COOLDOWN_S`，默认 3600）。隔离（`quarantined`）期间 hook 对所有
+    工具调用 exit 2 ⟹ 那 1h 内根本走不到 advance；真正有牙齿的是**解除后的冷却期**。
+
+    fail-open：无 `GK_SESSION_ID` / 台账不可读 ⟹ 原样放行（只留 advisory），绝不把
+    「账本读不到」变成 advance 的崩溃面。`GK_THREAT_BUDGET_FREEZE=0` 关闭本机制。
+
+    返回 `(candidate', advisory|None)`；advisory 只在「真封顶」或「fail-open 留痕」时非空。
+    """
+    if os.environ.get(THREAT_FREEZE_ENV, "1") == "0":
+        return candidate, None
+    sid = str(os.environ.get("GK_SESSION_ID") or "").strip()
+    if not sid:
+        return candidate, None
+    try:
+        _setup_sys_path()
+        import gk_threat as _th
+        fr = _th.budget_freeze(sid, state=state_file or None)
+    except Exception as e:  # noqa: BLE001 — 只读投影不得成为阻断面
+        return candidate, {"active": False, "fail_open": True, "sid": sid,
+                           "reason": "%s: %s" % (type(e).__name__, e)}
+    if not fr.get("active"):
+        return candidate, None
+    capped = max(1, int(candidate) // 2)
+    if capped >= int(candidate):
+        return candidate, None
+    return capped, {"active": True, "reason": "threat_cooldown", "sid": sid,
+                    "from": int(candidate), "to": capped, "count": fr.get("count"),
+                    "age_s": fr.get("age_s"), "last_ts": fr.get("last_ts"),
+                    "cooldown_s": fr.get("cooldown_s")}
+
+
+def _edit_budget(d: dict, env: dict, dry_run: bool, state_file: str = "") -> dict:
     """Scheduler edit budget (bash L2880-2943). Mutates d. Returns
     {"remaining":N,"max":N,"used":N} or None if budget exhausted."""
     gd = d.setdefault("gate_data", {})
@@ -1181,6 +1277,8 @@ def _edit_budget(d: dict, env: dict, dry_run: bool) -> dict:
         sched_lr = max(min_lr, round(lr))
     # 2026-09-23 预算解耦：基座 = 梯度 × 每单位额度，封顶单节点硬顶（agent 池由派发侧追加）。
     edit_budget_max = min(sched_lr * EDIT_BUDGET_PER_LR, EDIT_BUDGET_HARD_CAP)
+    # 2026-11-11（违约 → 额度银行的**唯一**表示面）：冷却期内减半封顶，只读投影、不扣款、不进熵。
+    edit_budget_max, _threat_adv = _threat_budget_cap(state_file, edit_budget_max)
     # 2026-09-19 ECC-E05F3517A965（S1-c 后半）：`edit_count` 的窗口语义**定为 = 本 R-phase**
     # （对齐本函数返 None 时那句「no more edits in this R-phase」）⟹ 归零点 = `r_phase` 切换。
     # 原状：全仓 `edit_count` **只有读点、没有写点**（`--env-json` 也不传 `edit_used`）⟹ `used` 恒 0、
@@ -1235,7 +1333,10 @@ def _edit_budget(d: dict, env: dict, dry_run: bool) -> dict:
             lr = max_lr
         sched["current_lr"] = max(min_lr, round(lr))
         d["gate_data"]["scheduler"] = sched
-    return {"remaining": edit_remaining, "max": edit_budget_max, "used": edit_used}
+    out = {"remaining": edit_remaining, "max": edit_budget_max, "used": edit_used}
+    if _threat_adv:
+        out["threat_advisory"] = _threat_adv
+    return out
 
 
 # ────────────────────────────────────────────────────────────────────
@@ -1371,6 +1472,51 @@ def _resolve_declared_budget(skill_dir: str, env: dict) -> int:
         return 0
 
 
+def _append_advance_log(gd: dict, to: str, all_ok: bool, gates_count: int,
+                        entropy_rate, mode: str = "standard") -> None:
+    """追加一条**门禁重放明细**（`_advance_log`，cap=10）——两推进流**共用的单一写入点**。
+
+    RED-SCOPE-03 真修（2026-11-12）：原 `_advance_log` 只在 `_run_standard` 内联追加，
+    `_run_nonstandard`（direct 流）只写 `eco_completions` ⟹ direct 推进的 state 永远
+    「无可重放历史」（现场实证：生产 state `eco_completions` 有 ECO-EDIT/AUDIT/DOC 三条，
+    `_advance_log` 为空）。同一判据由两处各写一半 = 漂移源 ⟹ 收进本函数。
+
+    `mode` = `standard`（结构 gate 清单可用，`gates_count` 为真实条数）/ `direct`
+    （该流无结构 gate 清单，如实记 0；`all_ok=True` 表示已走到提交点 = 前置门全部通过）。
+    """
+    try:
+        _er = max(0.0, min(1.0, float(entropy_rate)))
+    except (TypeError, ValueError):
+        _er = 0.0
+    gl = gd.setdefault("_advance_log", [])
+    gl.append({"timestamp": _now_iso(), "to_stage": to, "all_ok": all_ok,
+               "gates_count": gates_count, "entropy_rate": _er, "mode": mode})
+    if len(gl) > 10:
+        gl[:] = gl[-10:]
+
+
+def _audit_host_advisory(state_file: str) -> dict:
+    """判据1（2026-11-16）：host α1 快照的**只读消费者**，advisory-only。
+
+    病象：`gk_audit_host.poll_once` 早已产出 `verdict`，但全仓零消费者 ⟹ 判据1
+    「审计判定路径不得直接决定 BLOCK」**无对象可判**（只能记 BLOCKED）。
+    本函数只把快照拼进 advance 结果；**绝不参与任何判定分支**。缺账本 / 异常一律具名降级。
+    """
+    try:
+        from gk_audit_host import poll_once
+    except Exception as e:  # noqa: BLE001 — 边界：模块不可用 ⟹ 具名降级
+        return {"ok": False, "error": "host_unavailable", "detail": type(e).__name__}
+    try:
+        snap = poll_once(state_file)
+    except Exception as e:  # noqa: BLE001 — 边界：快照异常不得影响推进
+        return {"ok": False, "error": "host_poll_failed", "detail": type(e).__name__}
+    if not snap.get("poll_ok"):
+        return {"ok": False, "error": snap.get("error") or "host_poll_failed"}
+    return {"ok": True, "verdict": snap.get("verdict"),
+            "pending": snap.get("pending"), "integrity_ok": snap.get("integrity_ok"),
+            "separation": snap.get("separation")}
+
+
 def _run_nonstandard(d: dict, state_file: str, current: str, to: str,
                      force: bool, dry_run: bool, cc: dict, remote: str,
                      ptype: str, monitor_json: dict, skill_dir: str = "") -> dict:
@@ -1407,7 +1553,7 @@ def _run_nonstandard(d: dict, state_file: str, current: str, to: str,
         pr = _plan_ref_checkpoint(d, state_file)
         if pr != "plan-refinement":
             return {"ok": False,
-                    "error": "ECO-READ → ECO-EDIT requires plan-refinement subagent checkpoint. Run: gatekeeper-cli.sh monitor --subagent \"plan-refinement: <task>\"",
+                    "error": "ECO-READ → ECO-EDIT requires plan-refinement subagent checkpoint. Run: gatekeeper-cli.sh plan-refinement <plan> --run --task \"<task>\"",
                     "hint": "计划质询门禁：必须先执行 plan-refinement subagent 点检（写入 subagent_history）才能推进 ECO-EDIT",
                     "subagent_checkpoint": pr,
                     "prereq_heuristic": _eco_prereq_heuristic(d, current, state_file)}
@@ -1539,6 +1685,12 @@ def _run_nonstandard(d: dict, state_file: str, current: str, to: str,
     d["stage"] = to
     eco = d.setdefault("gate_data", {}).setdefault("eco_completions", {})
     eco[current] = {"completed_at": _now_iso(), "transitioned_to": to}
+    # 2026-11-12（RED-SCOPE-03 真修）：**direct 流此前不写门禁重放明细** —— 只有 `_run_standard`
+    #   追加 `_advance_log`，本流只写 `eco_completions` ⟹ 凡经本流推进的 state 永远「无可重放
+    #   历史」（现场：生产 state `eco_completions` 3 条、`_advance_log` 空）。两条流各写一半 =
+    #   判据漂移；现两流共用 `_append_advance_log` 单一写入点（本流无结构性 gate 清单，如实记 0）。
+    _append_advance_log(d.setdefault("gate_data", {}), to, True, 0,
+                        d.get("gate_data", {}).get("entropy_rate", 0.0) or 0.0, mode="direct")
 
     # 2026-08-31 优化器接线修复（standing 分支）：ECO 周期推进 cosine 调度器
     # 原缺失——_edit_budget 只在 _run_standard 调用，standing 五节点永不推进
@@ -1579,6 +1731,7 @@ def _run_nonstandard(d: dict, state_file: str, current: str, to: str,
     # GATEKEEPER_EDIT_BUDGET 显式覆盖。advance 进入新节点即重置 remaining——
     # 随后每次 pre-tool-check edit 放行经 CLI state-patch(flock) 扣 1（bash 侧消费）。
     # 仅 standing 且非 dry_run 注入（dry_run 零副作用；standard 走 _edit_budget 语义不变）。
+    _threat_adv = None
     if ptype == "standing" and not dry_run:
         _ov = os.environ.get("GATEKEEPER_EDIT_BUDGET", "").strip()
         try:
@@ -1607,6 +1760,8 @@ def _run_nonstandard(d: dict, state_file: str, current: str, to: str,
             _declared = _resolve_declared_budget(skill_dir, os.environ)
             _budget = max(1, max(_declared,
                                  min(_lr * EDIT_BUDGET_PER_LR, EDIT_BUDGET_HARD_CAP)))
+        # 2026-11-11（违约 → 额度银行的**唯一**表示面）：冷却期内减半封顶，只读投影、不扣款、不进熵。
+        _budget, _threat_adv = _threat_budget_cap(state_file, _budget)
         # 2026-09-19 P5 §3 T5′ / 计划次序 S1-b：覆盖留痕（注入侧）
         # ① `overrides[]` 是**跨节点台账**（记「哪些节点用过逃生舱、抬到多少」），不是本节点预算的
         #    组成部分 ⟹ advance 重置 remaining 时必须显式带过去。原写法是整字典赋值 ⟹ 连带抹掉台账
@@ -1628,6 +1783,19 @@ def _run_nonstandard(d: dict, state_file: str, current: str, to: str,
             # REV-3 §12.7：注入侧提额（source=advance_env）同步进**旁挂账本**（append-only）。
             budget_log_append(state_file, "advance_env",
                               "GATEKEEPER_EDIT_BUDGET=%s" % _ov, gd["edit_budget"])
+            # D6b（2026-11-16，owner 选「可见性覆盖」）：同一 choke point 补一条 credit
+            #   **bookkeeping**（中性 delta=0）—— 与 CLI `_budget_override_record` 同口径；
+            #   **不发 raise**（owner 2026-10-19 方案 a：预算记账不计债）。失败不阻断，但 stderr 具名。
+            try:
+                import gk_credit_ledger as _CL
+                _bk = _CL.append(state_file, "bookkeeping", 0, source="advance_env",
+                                 reason="GATEKEEPER_EDIT_BUDGET=%s" % _ov)
+            except Exception as e:  # noqa: BLE001 — 边界：记账失败不得阻断推进
+                _bk = {"ok": False, "error": "credit_bookkeeping_failed: %s" % type(e).__name__}
+            if not _bk.get("ok"):
+                import sys as _sys
+                _sys.stderr.write("GATEKEEPER-WARN: [credit-ledger] advance_env 记账失败：%s\n"
+                                  % _bk.get("error"))
 
     # AUDIT phase ordering enforcement
     audit_gate = _audit_order(d, to)
@@ -1642,6 +1810,8 @@ def _run_nonstandard(d: dict, state_file: str, current: str, to: str,
     result = {"ok": True, "from": current, "to": to, "mode": "direct",
               "project_type": ptype, "hint": hint}
     result.update(extras)
+    if _threat_adv:
+        result["threat_advisory"] = _threat_adv
     # C2③（ECC-75DAED1C537C，2026-09-28）：两腿**只读体积门** —— advance 结果带出占比/余量
     #   （含 warn），防「撞墙才发现」。口径同 gk_json_utils.canon_bytes。
     result["state_size"] = two_legs_report(state_file)
@@ -1649,6 +1819,8 @@ def _run_nonstandard(d: dict, state_file: str, current: str, to: str,
         result["doc_budget_warn"] = cc_warn
     if _led is not None and not _led.get("ok"):
         result["ledger_advisory"] = _led  # P0：默认 advisory（strict=1 已在上方硬阻断）
+    # 判据1（2026-11-16）：host 快照作为 **advisory 输出**（判定路径存在，但不决定 BLOCK）。
+    result["audit_host_advisory"] = _audit_host_advisory(state_file)
     return result
 
 
@@ -1722,17 +1894,13 @@ def _run_standard(d: dict, state_file: str, current: str, to: str,
     all_ok, gates = _structural_gates(current, to, d, env, force)
 
     # Batch 4: Advance gate log — record gate results for D8 replay
-    gd = d.setdefault("gate_data", {})
-    gl = gd.setdefault("_advance_log", [])
-    gl.append({"timestamp": _now_iso(), "to_stage": to, "all_ok": all_ok,
-               "gates_count": len(gates),
-               "entropy_rate": max(0.0, min(1.0, entropy_rate))})
-    if len(gl) > 10:
-        gl[:] = gl[-10:]
+    # 2026-11-12：改走 `_append_advance_log`（与 direct 流共用单一写入点，见其 docstring）。
+    _append_advance_log(d.setdefault("gate_data", {}), to, all_ok, len(gates),
+                        entropy_rate, mode="standard")
 
     budget = None
     if all_ok:
-        budget = _edit_budget(d, env, dry_run)
+        budget = _edit_budget(d, env, dry_run, state_file)
         if budget is None:
             # edit_budget was already written to d (bash L2913 writes before check)
             eb = d.get("gate_data", {}).get("edit_budget", {})
@@ -1764,10 +1932,13 @@ def _run_standard(d: dict, state_file: str, current: str, to: str,
     # Success: write stage transition (sed+mv 等价) + checksum
     d["stage"] = to
     _write_state(state_file, d)
-    return {"allowed": True, "transition": f"{current}→{to}", "stage": to,
-            "edit_budget": {"max": budget["max"], "used": budget["used"],
-                            "remaining": budget["remaining"]},
-            "previous_rejections": previous_rejections}
+    res = {"allowed": True, "transition": f"{current}→{to}", "stage": to,
+           "edit_budget": {"max": budget["max"], "used": budget["used"],
+                           "remaining": budget["remaining"]},
+           "previous_rejections": previous_rejections}
+    if budget.get("threat_advisory"):
+        res["threat_advisory"] = budget["threat_advisory"]
+    return res
 
 
 def main(argv=None) -> int:

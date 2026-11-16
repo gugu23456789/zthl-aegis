@@ -13,10 +13,10 @@ description: "ZTHL Aegis — deterministic governance harness for AI agents. Rou
 
 | 场景 | 唯一通道 |
 |:--|:--|
-| 交叉审查 / 后 R 双独立 | `monitor --subagent --crossrev "<任务>"` |
-| 计划质询 | `plan-refinement <plan> --task "<任务>"` |
+| 交叉审查 / 后 R 双独立 | `monitor --subagent --crossrev "<任务>"`（后 R 双独立用具名角色：`--role auditor` / `--role exploiter`） |
+| 计划质询 | `plan-refinement <plan> --run --task "<任务>"`（单入口：enqueue → adjudicate → 3×K fan-out → 聚合） |
 | 红队角色 | `monitor --subagent RED-SCOPE\|RED-EXPLOIT\|RED-POSTEX\|RED-REPORT` |
-| 自由文本窄任务 | `monitor --subagent "<任务>"`（档位 = env `SUBAGENT_TIER=1-4`，无 `--tier` flag） |
+| 自由文本窄任务 | `monitor --subagent "<任务>" --default-reason "<为什么不用具名角色>"`（落 default 必须显式说明；档位 = env `SUBAGENT_TIER=1-4`，无 `--tier` flag） |
 
 理由：宿主默认 Task 无工具白名单、无 token/item 预算、无轮数上限、不产生 audit/finding 留痕 ⟹ 治理不可审计。
 
@@ -47,14 +47,14 @@ description: "ZTHL Aegis — deterministic governance harness for AI agents. Rou
 <!-- GK-FACTS:START（由 scripts/gk_docgen_facts.py 生成，勿手改） -->
 | 事实 | 值 | 来源（可复算） |
 |:--|:--|:--|
-| CLI 行数 | 12566 | `wc -l gatekeeper-cli.sh` |
+| CLI 行数 | 13248 | `wc -l gatekeeper-cli.sh` |
 | CLI 命令数 | 52 | `^_CMD_REG[` 计数 |
 | 红队站点 | 16 | `gk_chain.py` 的 `Step("RED-*")` |
 | 自检检查函数 | 39 | `gk_self_check.py` 的 `def check_*` |
-| references 公开 md | 22 | `git ls-files references/*.md`（顶层，扣除导出排除面） |
+| references 公开 md | 25 | `git ls-files references/*.md`（顶层，扣除导出排除面） |
 | 子代理角色 | 9 | `subagent_runner.ROLE_TOOLS` |
-| hook R0 门禁 | Gate R0.1–R0.20（20 个） | `pre_tool_hook.py` 的 `Gate R0.N` |
-| 红队向量 | 166 | `references/red-vectors.json` |
+| hook R0 门禁 | Gate R0.1–R0.25（25 个） | `pre_tool_hook.py` 的 `Gate R0.N` |
+| 红队向量 | 188 | `references/red-vectors.json` |
 | 情报源 | 24 | `references/red-intel-sources.json` |
 | 解释器解析 | `scripts/py_resolve.sh`（发现式，无绝对路径） | `scripts/py_resolve.sh` |
 <!-- GK-FACTS:END -->
@@ -64,8 +64,9 @@ description: "ZTHL Aegis — deterministic governance harness for AI agents. Rou
 ## CLI 与门禁
 
 - `bash gatekeeper-cli.sh <cmd>` — 确定性执行层，CLI 支持 52 命令（清单单一事实源 = `references/cli-protocol.md`；未知命令/参数 → `exit 2` + `help [cmd]`）。
+- **区外安全闸**（受保护区禁改 ⟹ 不入 `_CMD_REG`、在区外独立分派）：`premerge --source <branch> [--target master]`（只读体检：退化/回退/冲突/受保护区/暂存删除，每条 BLOCK 带可执行 `next`）、`merge --source <branch>`（**唯一**合并入口：闸①→merge→闸②→提交，自动签发一次性放行票据）、`merge-hook install|uninstall|status`（git 侧 `reference-transaction` 钩子，拦人手/脚本的裸合并）。
+- hook 门禁：`pre_tool_hook.py`（Gate 0-9 + R0.x 家族，含 R0.24 裸合并落主树）；治理范围 = 技能目录 + `.gatekeeper.scopes.json` 登记项目，范围外放行。
 - 解释器：一律经 `scripts/py_resolve.sh` 发现式解析（`GK_PYTHON` → 本机 pin → 仓内 `.venv` → 通配 → PATH），**禁止写死个人 venv 路径**。
-- hook 门禁：`pre_tool_hook.py`（Gate 0-9 + R0.x 家族）；治理范围 = 技能目录 + `.gatekeeper.scopes.json` 登记项目，范围外放行。
 - 文档对齐：`doc-align`（0 API、IDLE 可用）；每轮 commit 前跑一次。
 
 ## 状态与容量
@@ -132,6 +133,7 @@ description: "ZTHL Aegis — deterministic governance harness for AI agents. Rou
 | 序列节点安全网 | `references/sequence-node-safety-net-template.md` | 新增/强化序列节点 |
 | 标准维护模块 | `references/standard-maintenance-module.md`（实存能力 + 未接线缺口表；约定本身失效时的发现→归属→修复→回归） | 改标准/模板/维护约定 |
 | 红先测试模版 | `references/red-arm-templates.json` + `scripts/gk_red_arm_gen.py` | 写红先臂；`classify` 自动判复用/新增，`scaffold` 出骨架，`promote` 红→绿回灌 |
+| 注释模版 | `references/comment-template.md` + `references/comment-templates.json` + `scripts/gk_comment_scaffold.py` | **写任何代码注释前**先取骨架：`scaffold "<意图>" --position <pos>`；落盘后 `check <file> --changed-only`（裸 TODO / what 注释 / 未填槽位 = 机检 ERROR）。**自动提示**：hook Gate R0.25 在新增 def/class 且无意图注释时把这两条命令推到 stderr（`GK_COMMENT_TEMPLATE_HINT=0` 关） |
 | 红队向量登记 | `references/red-vectors.json` + `scripts/gk_red_vectors.py` | 加/改/复核向量 |
 | 红队情报准入 | `references/red-intel-sources.json` + `scripts/gk_red_intel.py` | 红队联网检索 |
 

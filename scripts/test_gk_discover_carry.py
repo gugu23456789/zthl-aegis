@@ -10,6 +10,7 @@
 """
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -18,7 +19,8 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from gk_discover_carry import (CARRY_GATE_KEYS, CARRY_GATE_LIST_KEYS,  # noqa: E402
-                               CARRY_GATE_SCALAR_KEYS, CARRY_TOP_KEYS, carry_over)
+                               CARRY_GATE_SCALAR_KEYS, CARRY_TOP_KEYS,
+                               CarryLossError, carry_over)
 
 _OTHER_SID = "6a3e34696caeb2204fa8bc88"
 _WT = "<home>/.trae/worktrees/spz-gatekeeper-r-sequence/agent/session/b3f2421a"
@@ -122,8 +124,10 @@ class TestCarryOverSemantics:
         #   卫星索引 / jti / 封印分 / 计数在任一 discover 后被抹且**未入片** = 数据丢失。
         assert CARRY_GATE_KEYS == ("edit_budget", "t_star", "satellite_index",
                                    "jti_store", "_sealed_agent_score", "subagent_last")
+        # 2026-11-13 同步：`_advance_log`（RED-SCOPE-03 真修，见模块 docstring）已入清单 ——
+        #   断言须与**单一登记点**恒等（本条即"登记点漂移"哨兵）。
         assert CARRY_GATE_LIST_KEYS == ("ecc_findings", "task_pipeline", "subagent_history",
-                                        "hook_block_log")
+                                        "hook_block_log", "_advance_log")
         assert CARRY_GATE_SCALAR_KEYS == ("edit_count",)
         assert CARRY_TOP_KEYS == ("worktrees_extra",)
 
@@ -217,7 +221,8 @@ class TestDiscoverWiring:
 
     def test_snapshot_file_is_cleaned_up(self):
         body = self._discover_body()
-        assert 'rm -f "$_carry_f"' in body, "快照临时件必须回收（否则 /tmp/状态目录 只进不出）"
+        assert 'rm -f "$_carry_err" "$_carry_f"' in body, \
+            "快照/错误临时件必须回收（否则 /tmp/状态目录 只进不出）"
 
     def test_snapshot_cp_failure_is_loud(self):
         """ECC-A52B0EAB6C6D（2026-10-07 质询 6 臂）：carry 快照 `cp` 失败**禁静默**回退空对象
@@ -238,3 +243,53 @@ class TestDiscoverWiring:
         tail = body[idle:]
         assert "carry_over" in tail, "IDLE 早退分支未接 carry_over（跨轮键仍会被抹）"
         assert "_idle_cf" in tail, "IDLE 分支缺快照变量（无源可回填）"
+
+
+class TestCarryLossBlock:
+    """2026-11-13（owner 令「按阻断方案执行」）：承接丢 finding ⟹ fail-loud 阻断。
+
+    触发面 = **回归**（`ecc_findings` 从保全清单掉出 = 2026-10-02 事故形态），
+    阈值 = **1 条**：判据是 id 集合差 `old_ids - new_ids`，不是净条数（丢 A 加 B 净 0 也能抓）。
+    """
+
+    def _old(self):
+        return {"gate_data": {"ecc_findings": [
+            {"id": "ECC-A", "status": "open"},
+            {"id": "ECC-B", "status": "open"}]}}
+
+    @staticmethod
+    def _drop_keys(monkeypatch):
+        """模拟回归：`ecc_findings` 不再被承接（2026-10-02 事故的最小复现）。"""
+        import gk_discover_carry as gdc
+        monkeypatch.setattr(gdc, "CARRY_GATE_LIST_KEYS",
+                            tuple(k for k in CARRY_GATE_LIST_KEYS if k != "ecc_findings"))
+
+    def test_one_missing_fid_blocks(self, monkeypatch):
+        """少 1 条即阻断（不按条数给阈值）。"""
+        self._drop_keys(monkeypatch)
+        with pytest.raises(CarryLossError) as ei:
+            carry_over(self._old(), _rebuilt_state())
+        assert ei.value.missing == ["ECC-A", "ECC-B"]
+
+    def test_no_loss_passes(self):
+        """正常流程：整份承接 ⟹ 不抛。"""
+        new = carry_over(self._old(), _rebuilt_state())
+        assert [f["id"] for f in new["gate_data"]["ecc_findings"]] == ["ECC-A", "ECC-B"]
+
+    def test_allow_shrink_marks_and_passes(self, monkeypatch):
+        """逃生舱：`allow_shrink=True` ⟹ 放行 + state 内留 `_carry_shrink` 标记。"""
+        self._drop_keys(monkeypatch)
+        new = carry_over(self._old(), _rebuilt_state(),
+                         allow_shrink=True, shrink_reason="test: 预期收缩")
+        m = new["gate_data"]["_carry_shrink"]
+        assert m["removed_fids"] == ["ECC-A", "ECC-B"] and m["reason"] == "test: 预期收缩"
+
+    def test_error_message_is_actionable(self, monkeypatch):
+        """阻断文案必须给**可执行**流程（消除手工拼接 state）。"""
+        self._drop_keys(monkeypatch)
+        with pytest.raises(CarryLossError) as ei:
+            carry_over(self._old(), _rebuilt_state())
+        msg = str(ei.value)
+        assert "prune-duplicates" in msg and "GK_DISCOVER_ALLOW_SHRINK" in msg
+        assert "手工" in msg and "reconcile" in msg
+        assert "ECC-CARRY_LOSS_BLOCKED" in msg

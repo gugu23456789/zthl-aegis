@@ -1,9 +1,17 @@
 #!/usr/bin/env python3
 """Write test state for Phase 1 sealed scoring red-team tests."""
-import json, time, os
+import json, os, sys, time
+from pathlib import Path
 
-SF = os.environ.get("REDTEAM_STATE", "<home>/.trae/skills/spz-gatekeeper-r-sequence/.gatekeeper.state")  # 2026-08-14: 优先隔离 state（runner 设 REDTEAM_STATE）
-SKILL = "<home>/.trae/skills/spz-gatekeeper-r-sequence"
+# 技能根从本文件位置派生（禁写死某台机器的绝对路径：导出/并行 worktree 下会指错树）
+SKILL = str(Path(__file__).resolve().parent.parent)
+# 测试 state 必须**显式**给出（runner 设 REDTEAM_STATE）；缺省拒写 ——
+#   否则会静默覆盖生产 `.gatekeeper.state`（2026-11-13：默认值直指生产 state）
+SF = os.environ.get("REDTEAM_STATE", "")
+if not SF:
+    sys.stderr.write("_write_test_state: REDTEAM_STATE 未设置 —— 只接受显式测试 state，"
+                     "拒绝默认写生产 .gatekeeper.state\n")
+    raise SystemExit(2)
 
 d = {
     "r_phase": "ECO-EDIT",

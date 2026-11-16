@@ -22,6 +22,12 @@ sys.path.insert(0, str(SCRIPTS))
 import gk_opcap_baseline as OB  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def _no_ambient_hook_log(tmp_path, monkeypatch):
+    """隔离：默认指到不存在的 hook 日志（防真实日志让 x3/x4 意外 available）。"""
+    monkeypatch.setenv("GK_HOOK_LOG", str(tmp_path / "no-hook.log"))
+
+
 @pytest.fixture()
 def keys(tmp_path):
     from cryptography.hazmat.primitives import serialization as ser
@@ -113,8 +119,29 @@ def test_gate_is_incomplete_without_x3_x4_carriers(tmp_path, keys):
     got = OB.gate(st, out, key_dir=keys)
     assert got["ok"] is True, got
     assert got["verdict"] == "INCOMPLETE", got
-    assert any(r.startswith("x3:") for r in got["reasons"]), got
-    assert any(r.startswith("x4:") for r in got["reasons"]), got
+
+
+# ── 判据5（2026-11-16）：本地化载体可用时 x3/x4 转 available（裁定 B）────────
+def test_x3_x4_available_from_local_carriers():
+    snap = {"x8_register_to_close": {"median_hours": 2.0},
+            "x3_ack_injected": {"exempt": 1, "gate_invokes": 4},
+            "x4_overrides": {"events": 2, "gate_invokes": 8, "advances": 5}}
+    m = OB.metrics_from_export(snap)
+    assert m["x3"]["status"] == "available" and m["x3"]["value"] == 0.25, m["x3"]
+    assert m["x3"]["unit"] == "rate" and m["x3"]["denominator"] == 4, m["x3"]
+    assert m["x4"]["status"] == "available" and m["x4"]["value"] == 0.25, m["x4"]
+    assert m["x4"]["unit"] == "rate" and m["x4"]["denominator"] == 8, m["x4"]
+    assert m["x4"]["advances"] == 5, m["x4"]
+
+
+def test_x3_x4_absent_keep_incomplete_semantics():
+    """载体缺失（None / 分母 0）不造率：沿用 no_carrier / removed_upstream ⟹ INCOMPLETE。"""
+    m = OB.metrics_from_export({"x8_register_to_close": {"median_hours": 2.0},
+                                "x3_ack_injected": {"exempt": None, "gate_invokes": None},
+                                "x4_overrides": {"events": 0, "gate_invokes": None}})
+    assert m["x3"]["status"] == "no_carrier", m["x3"]
+    assert m["x4"]["status"] == "removed_upstream", m["x4"]
+    assert OB.compare(m, m)["verdict"] == "INCOMPLETE"
 
 
 # ── ⑤ x8 恶化 ⟹ FAIL（即使 x3/x4 缺载体）──────────────────────────────────

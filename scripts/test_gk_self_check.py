@@ -395,6 +395,69 @@ class TestCronHealthCheck:
         monkeypatch.setenv("HOME", str(tmp_path))
         assert check_cron_health(now_ts=self.NOW)["status"] == "SKIP"
 
+    # ── dead-man switch（2026-11-11）：原实现恒 WARN ⟹ 永不告警。以下锁死 FAIL 两臂 ──
+    def test_scheduler_dead_fails(self, tmp_path, monkeypatch):
+        """tick 年龄 > fail_s（默认 6h）⟹ FAIL（不是 WARN）：调度器已死必须变成 finding。"""
+        from gk_self_check import check_cron_health
+        self._mk(tmp_path, monkeypatch, next_offset=1800, tick_age=7 * 3600)
+        r = check_cron_health(now_ts=self.NOW)
+        assert r["status"] == "FAIL", r
+        assert "停摆" in r["detail"]
+
+    def test_failure_streak_fails(self, tmp_path, monkeypatch):
+        """tick 新鲜但作业连续失败 ≥3 ⟹ FAIL（空转作业不得因「调度器还活着」被判绿）。"""
+        import datetime
+        from gk_self_check import check_cron_health
+        cron = tmp_path / ".gatekeeper" / "cron"
+        cron.mkdir(parents=True)
+        nr = datetime.datetime.fromtimestamp(
+            self.NOW + 1800, datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        (cron / "jobs.json").write_text(json.dumps(
+            [{"name": "model-radar", "enabled": True, "next_run_at": nr,
+              "failure_streak": 3}]), encoding="utf-8")
+        t = cron / "tick.log"
+        t.write_text("x", encoding="utf-8")
+        os.utime(t, (self.NOW - 60, self.NOW - 60))
+        monkeypatch.setenv("HOME", str(tmp_path))
+        r = check_cron_health(now_ts=self.NOW)
+        assert r["status"] == "FAIL", r
+        assert "model-radar(3)" in r["detail"]
+        assert r["failed_jobs"] == ["model-radar(3)"]
+
+    def test_failure_streak_below_threshold_passes(self, tmp_path, monkeypatch):
+        """streak < 3 仍属可自愈区间 ⟹ PASS（防单次失败即红）。"""
+        import datetime
+        from gk_self_check import check_cron_health
+        cron = tmp_path / ".gatekeeper" / "cron"
+        cron.mkdir(parents=True)
+        nr = datetime.datetime.fromtimestamp(
+            self.NOW + 1800, datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        (cron / "jobs.json").write_text(json.dumps(
+            [{"name": "audit-daily", "enabled": True, "next_run_at": nr,
+              "failure_streak": 2}]), encoding="utf-8")
+        t = cron / "tick.log"
+        t.write_text("x", encoding="utf-8")
+        os.utime(t, (self.NOW - 60, self.NOW - 60))
+        monkeypatch.setenv("HOME", str(tmp_path))
+        assert check_cron_health(now_ts=self.NOW)["status"] == "PASS"
+
+    def test_disabled_job_failure_not_counted(self, tmp_path, monkeypatch):
+        """停用作业的 streak 不计（paused 是设计意图，不是故障）。"""
+        import datetime
+        from gk_self_check import check_cron_health
+        cron = tmp_path / ".gatekeeper" / "cron"
+        cron.mkdir(parents=True)
+        nr = datetime.datetime.fromtimestamp(
+            self.NOW + 1800, datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        (cron / "jobs.json").write_text(json.dumps(
+            [{"name": "external-ref", "enabled": False, "next_run_at": nr,
+              "failure_streak": 9}]), encoding="utf-8")
+        t = cron / "tick.log"
+        t.write_text("x", encoding="utf-8")
+        os.utime(t, (self.NOW - 60, self.NOW - 60))
+        monkeypatch.setenv("HOME", str(tmp_path))
+        assert check_cron_health(now_ts=self.NOW)["status"] == "PASS"
+
 
 class TestStateFileCheck:
     """Test check_state_file — state file existence + JSON validity."""

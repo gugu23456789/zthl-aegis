@@ -26,6 +26,15 @@ _CONCL_A = "结论：本轮改动范围蔓延超出计划边界，建议收窄�
 _CONCL_B = "结论：回滚路径缺失，若中途失败将无法恢复现场，须补齐退路与快照机制。" * 6
 
 
+def test_emit_aggregate_finding_skips_empty_batch(tmp_path):
+    """2026-11-12 噪声根治：n=0（含 `batch=-` 空批）不落 finding。"""
+    sf = str(tmp_path / "s.json")
+    Path(sf).write_text(json.dumps({"gate_data": {"ecc_findings": []}}), encoding="utf-8")
+    r = M.emit_aggregate_finding(sf, {"trace": {"count": 0}}, batch=BATCH)
+    assert r.get("skipped") == "empty_batch", r
+    assert json.loads(Path(sf).read_text(encoding="utf-8"))["gate_data"]["ecc_findings"] == []
+
+
 def _state(tmp_path, rows):
     hist = []
     for sid, grp, concl, extra in rows:

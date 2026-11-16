@@ -13,6 +13,7 @@
   `git show HEAD:scripts/gk_worktree_reclaim.py | grep -c 'TMP_OWN_RULE'`     → **0**
   `git show HEAD:gatekeeper-cli.sh | grep -c -- '--trash'`                    → **0**
 """
+import json
 import os
 import subprocess
 import sys
@@ -139,6 +140,32 @@ def repo_wt(tmp_path):
     _git(str(repo), "worktree", "add", "-q", "-b", "feat", str(wt))
     (wt / "new_file.txt").write_text("未回收内容", encoding="utf-8")
     return str(repo), str(root), str(wt)
+
+
+def test_protected_branches_never_reclaimed(repo_wt):
+    """**主分支锁定**（2026-11-11）：`master/main/trunk/develop` 与 `gk-pool/*` 无论
+    是否检出、是否已并入，都不得进回收删除面。
+
+    病象（可复现）：旧判据只有「已并入 + 未检出」⟹ 主树一旦 detach，`main` 就同时满足
+    两条，会被 `git branch -D` 删掉（主分支被误回收 = 仓库失去锚点）。
+    """
+    repo, root, wt = repo_wt
+    # 该模块口径：`baseline` = **参照检出路径**（`git -C baseline` 取 HEAD / 比文件），不是 sha
+    base = repo
+    _git(repo, "branch", "topic-merged", "HEAD")
+    _git(repo, "branch", "gk-pool/9", "HEAD")
+
+    rep = wr.sweep_loose_branches(repo, base, apply=False)
+    assert "topic-merged" in rep["would_remove"], rep
+    assert "gk-pool/9" in rep["protected"], rep
+    assert "gk-pool/9" not in rep["would_remove"], rep
+
+    # 主树 detach ⟹ `main` 不再「检出中」，但仍必须受保护
+    _git(repo, "checkout", "-q", "--detach", "HEAD")
+    rep2 = wr.sweep_loose_branches(repo, base, apply=False)
+    assert "main" in rep2["protected"], rep2
+    assert not (set(rep2["would_remove"]) & set(wr.PROTECTED_BRANCHES)), rep2
+    assert not [b for b in rep2["would_remove"] if b.startswith("gk-pool/")], rep2
 
 
 def test_cli_wires_reclaim_in_both_case_slots():
@@ -310,6 +337,100 @@ def test_apply_archives_before_removing(repo_wt, monkeypatch):
     assert hits, "未提交文件未被归档 ⟹ 违反「归档前置」"
     assert open(hits[0], encoding="utf-8").read() == "未回收内容"
     assert not os.path.isdir(wt), "归档成功后 wt 应被回收"
+
+
+def _state_with_route(path, worktree, extras=None):
+    """最小 state：`worktree` 指向给定树，两桶 `worktrees_extra` 同时带上它。
+
+    两桶都要带：`route-check` 的真实消费面是 `gate_data.worktrees_extra`，而顶层桶是
+    `gk_state_patch.cmd_worktrees_extra` 的历史写面 ⟹ 事务化复位必须两处一起摘。
+    """
+    st = {"worktree": worktree,
+          "worktrees_extra": list(extras if extras is not None else [worktree]),
+          "gate_data": {"worktrees_extra": list(extras if extras is not None else [worktree])}}
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(st, fh, ensure_ascii=False)
+    return str(path)
+
+
+def test_reclaim_detaches_route_before_removing(repo_wt, tmp_path):
+    """**reclaim 事务化第一半**（P0-b）：删树前把 `state.worktree` 挪到 fallback（主树），
+    并在**同一次** state 写里摘掉两桶 `worktrees_extra` 的该路径项。
+
+    病象（实测 2026-11-13）：删完树 state 仍指向已删路径 ⟹ 唯一路由链悬空 ⟹ 后续编辑
+    静默落空 / 空 BLOCK。本臂断言「树没了，路由不悬空」。
+    """
+    repo, root, wt = repo_wt
+    state = _state_with_route(tmp_path / "s.state", wt)
+    r = wr.reclaim(repo, root, apply=True, only=[wt],
+                   trash=str(tmp_path / "trash"), state=state)
+    assert not os.path.isdir(wt), r
+    data = json.load(open(state, encoding="utf-8"))
+    assert data["worktree"] == os.path.abspath(repo), "未落 fallback ⟹ 删树后路由悬空"
+    assert wt not in data["worktrees_extra"], "顶层允许集仍留着已删树"
+    assert wt not in data["gate_data"]["worktrees_extra"], "gate_data 允许集仍留着已删树"
+
+
+def test_reclaim_leaves_route_check_green(repo_wt, tmp_path):
+    """端到端验收（P0-b）：`reclaim --apply` 之后 `route-check` 必须 **PASS**。
+
+    修复前该链必 FAIL（`stale_state` = 已删树 / `bad_extras` = 同一条路径）—— 这正是
+    本次事故的机器可检形态；本臂把「删树 ⟹ 不悬空」固化为端到端契约。
+    """
+    import gk_route_check as rc
+    repo, root, wt = repo_wt
+    state = _state_with_route(tmp_path / "s.state", wt)
+    wr.reclaim(repo, root, apply=True, only=[wt],
+               trash=str(tmp_path / "trash"), state=state)
+    out = rc.check(skill_dir=repo, state_file=state, repo=repo, cwd=repo)
+    assert out["decision"] == "PASS", out
+    assert out["route"]["worktree"] == os.path.abspath(repo), out["route"]
+    assert out["bad_extras"] == [], out["bad_extras"]
+
+
+def test_route_check_reads_canonical_extra_bucket(repo_wt, tmp_path):
+    """判据桶单源：**顶层** `worktrees_extra`（hook Gate 3 / `active_roots` 的写面）才是路由依据；
+    `gate_data.worktrees_extra` 是历史误写桶、无消费方 ⟹ 不得据此判 FAIL（否则自检假红/假绿）。
+    """
+    import gk_route_check as rc
+    repo, _root, _wt = repo_wt
+    dead = str(tmp_path / "gone")
+    p = tmp_path / "s.state"
+    p.write_text(json.dumps({"worktree": repo, "worktrees_extra": [repo, dead],
+                             "gate_data": {"worktrees_extra": [dead]}}), encoding="utf-8")
+    out = rc.check(skill_dir=repo, state_file=str(p), repo=repo, cwd=repo)
+    assert out["decision"] == "FAIL" and out["bad_extras"] == [dead], out
+    p.write_text(json.dumps({"worktree": repo, "worktrees_extra": [repo],
+                             "gate_data": {"worktrees_extra": [dead]}}), encoding="utf-8")
+    out2 = rc.check(skill_dir=repo, state_file=str(p), repo=repo, cwd=repo)
+    assert out2["decision"] == "PASS", out2
+
+
+def test_reclaim_refuses_delete_when_route_write_fails(repo_wt, tmp_path, monkeypatch):
+    """崩溃点①：路由复位**写失败** ⟹ 拒删（fail-closed）——树与 state 均保持原样。"""
+    repo, root, wt = repo_wt
+    state = _state_with_route(tmp_path / "s.state", wt)
+    import gk_state
+    monkeypatch.setattr(gk_state, "_write_state",
+                        lambda *a, **k: {"error": "write_failed"})
+    r = wr.reclaim(repo, root, apply=True, only=[wt],
+                   trash=str(tmp_path / "trash"), state=state)
+    item = next(i for i in r["items"] if os.path.abspath(i["path"]) == os.path.abspath(wt))
+    assert item["action"] == "HELD" and item["route_detach"]["ok"] is False, r
+    assert os.path.isdir(wt), "写失败仍删树 ⟹ 必然制造悬空路由"
+    assert json.load(open(state, encoding="utf-8"))["worktree"] == wt
+
+
+def test_reclaim_route_detach_is_idempotent(repo_wt, tmp_path):
+    """崩溃点②（已落 fallback 后重入）：路由不指向被删树 ⟹ 复位**零写盘**，删树照常。"""
+    repo, root, wt = repo_wt
+    state = _state_with_route(tmp_path / "s.state", os.path.abspath(repo),
+                              extras=[os.path.abspath(repo)])
+    before = open(state, "rb").read()
+    r = wr.reclaim(repo, root, apply=True, only=[wt],
+                   trash=str(tmp_path / "trash"), state=state)
+    assert not os.path.isdir(wt), r
+    assert open(state, "rb").read() == before, "幂等路竟改写了 state"
 
 
 def test_dead_registration_falls_back_to_diff(tmp_path):
@@ -698,3 +819,73 @@ def test_rc6_residue_scan_never_touches_sibling_repo(repo_wt):
         "自有子树内的空壳未收 ⟹ 收窄过度（RC6 又变漏检）"
     for p in (repo, wt):
         assert os.path.abspath(p) not in res, f"已登记树被误当残留：{p}"
+
+
+def test_dangling_registration_locked_is_pruned_then_branch_deleted(tmp_path, monkeypatch):
+    """2026-11-10（红先，实测 `agent/session/ce8ffb0b`）：**目录已删、注册仍在（locked）**。
+
+    病象：回收链两处都要求 `os.path.isdir(wt)` —— `git-workflow worktree delete`（需目录）与
+    兜底 `rmtree + prune`（同在 `isdir` 内）⟹ 目录先消失时全跳过；随后 `git branch -D` 报
+    `checked out at '<path>'` ⟹ 分支**永久** GUARDED，而本项仍报 `REMOVED`（报成功却没干完）。
+    判据（缺一即红）：① 悬挂注册被摘（`worktree list --porcelain` 不再含该路径）；
+    ② 已并入的 `feat` 分支被删（`refs/heads/feat` 不存在）；③ `branch_action == DELETED`。
+    """
+    import shutil
+
+    monkeypatch.setenv("GK_RECLAIM_CLAIM_GUARD", "0")
+    repo = tmp_path / "main"
+    repo.mkdir()
+    _git(str(repo), "init", "-q", "-b", "main")
+    (repo / "a.txt").write_text("x", encoding="utf-8")
+    _git(str(repo), "add", "a.txt")
+    _git(str(repo), "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init")
+    root = tmp_path / "wts"
+    root.mkdir()
+    wt = root / "wt1"
+    _git(str(repo), "worktree", "add", "-q", "-b", "feat", str(wt))
+    assert _git(str(repo), "worktree", "lock", str(wt)).returncode == 0, "夹具：worktree lock 失败"
+    shutil.rmtree(str(wt))                       # 目录消失，注册（locked）残留
+
+    rep = wr.reclaim(str(repo), str(root), apply=True, trash=str(tmp_path / "trash"),
+                     only=[str(wt)], branch_reclaim=True)
+    items = [i for i in rep["items"] if os.path.abspath(i["path"]) == os.path.abspath(str(wt))]
+    assert items, rep
+    assert items[0].get("branch_action") == "DELETED", rep
+    listing = _git(str(repo), "worktree", "list", "--porcelain").stdout
+    assert str(wt) not in listing, "悬挂注册未被摘除 ⟹ `git branch -D` 永久失败"
+    assert _git(str(repo), "show-ref", "--verify", "--quiet",
+                "refs/heads/feat").returncode != 0, \
+        "已并入的 feat 分支未删（回收链报 REMOVED 却留分支）"
+
+
+def test_pool_slot_is_released_not_deleted(tmp_path, monkeypatch):
+    """2026-11-10（热池 A）：`<root>/_pool/<repo>/slot-N` 是**池资产**。
+
+    回收链对它只能是「归还池」（清回基线 → free），**绝不能删目录**（否则下次派发退化冷建 34s）；
+    并须与池模块的 claim/TTL 语义一致（判据单源 = `gk_worktree_pool`）。
+    """
+    import gk_worktree_pool as P
+    from pathlib import Path
+
+    monkeypatch.setenv("GK_RECLAIM_CLAIM_GUARD", "0")
+    monkeypatch.setenv("GK_RECLAIM_ALLOW_FULL", "1")
+    repo = tmp_path / "main"
+    repo.mkdir()
+    _git(str(repo), "init", "-q", "-b", "master")
+    (repo / "a.txt").write_text("x", encoding="utf-8")
+    _git(str(repo), "add", "a.txt")
+    _git(str(repo), "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init")
+    root = tmp_path / "wts"
+    root.mkdir()
+    assert P.ensure_pool(str(repo), str(root), size=1, baseline="HEAD")["ok"]
+    slot = Path(P.pool_dir(str(repo), str(root))) / "slot-0"
+    dry = wr.reclaim(str(repo), str(root), apply=False)
+    dry_items = [i for i in dry["items"]
+                 if os.path.abspath(i["path"]) == os.path.abspath(str(slot))]
+    assert dry_items and dry_items[0]["action"] == "WOULD-POOL-RELEASE", dry
+
+    r = wr.reclaim(str(repo), str(root), apply=True, trash=str(tmp_path / "trash"))
+    items = [i for i in r["items"]
+             if os.path.abspath(i["path"]) == os.path.abspath(str(slot))]
+    assert items and items[0]["action"] == "POOL-RELEASED", r
+    assert slot.exists(), "热池 slot 被删（热池会退化成冷池）"

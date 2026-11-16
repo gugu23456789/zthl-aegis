@@ -58,6 +58,13 @@ scripts/_sc.json
 # 注：排除的是目录**内容**（`/*`）而非目录本身，故 `!…/*.md` 的再包含可生效。
 docs/analysis/subagent/*
 !docs/analysis/subagent/*.md
+# 2026-11-13 ECC-ARCHIVE：归档子目录**同样入库**（与 CONVENTIONS「归档臂报告 入库=是」对齐）。
+#   因由：2026-11-11 把 779 份跨月臂报告移入 `archive/`，但本文件未放行 ⟹ `git ls-files
+#   docs/analysis/subagent/archive` = 0，clone 者看不到证据链（计划文档里的引用悬空）。
+#   再包含必须**逐级**放行（目录 → 文件），否则父规则 `/*` 仍然胜出。**净 +2 行**。
+#   证据：`git check-ignore -v docs/analysis/subagent/archive/x.md` 命中上方 `/*`。
+!docs/analysis/subagent/archive/
+!docs/analysis/subagent/archive/*.md
 
 # Python
 __pycache__/
@@ -84,13 +91,29 @@ docs/plan-backup/
 .gatekeeper.failover.json.tmp
 # 写时 shellcheck 的病灶白名单命中缓存（纯运行时派生，键=文件内容哈希；不入库）
 .gatekeeper.shellcheck-cache.json
+# Gate R0.25 注释模版注入面的去重台账（键=路径+内容摘要；随编辑生成，纯运行时状态，不入库）
+.gatekeeper.comment-hint
+# 审计署 4B 生命周期 sidecar（state/pids/租约；运行时派生，随 tick 原子替换，不入库）
+.gatekeeper.audit_lifecycle.json
+.gatekeeper.audit_lifecycle.json.lock
+.gatekeeper.audit_lifecycle.json.tmp.*
 # 夜批静默窗运行时标记（内容为「过期时间戳|窗口名」，随窗口生成/消亡 ⟹ 纯运行时状态，非配置）
 .gatekeeper.no-ask
 # 提问挂起 kill 闸运行时台账（待答标记 `<ask_epoch>|<note>` + 结算台账 jsonl；随提问生成/消亡
 # ⟹ 纯运行时状态，非配置。判据单源 = pre_tool_hook._ask_hold_snapshot，消费点 = monitor --local）
 .gatekeeper.ask-hold*
+# 非法质询派发告警账本（2026-11-14 owner 令·强制击杀 + 立刻报警）：append-only 运行时取证数据，
+# 随每次非法派发 Attempt 增长 ⟹ 与 ask-hold 同族，不入库。
+.gatekeeper.illegal-dispatch*
+# narrow 任务派发文件（plan-refinement 按计划生成的窄任务清单；随计划/质询批次重生成，属运行期
+# 派发产物而非事实源 ⟹ 不入库。判据单源 = 计划质询入口的 narrow 输出）
+docs/plans/*.narrow.json
 # R-16 ⑤#7：flock 锁文件，唯一写点 gk_project_register.py、零读取点、不 unlink ⟹ 纯运行时废料
 .gatekeeper.scopes.json.lock
+# 2026-11-11 攻防诱饵面（gk_canary）：假 state/claims/池槽/凭据**只在本仓运行期存在**，
+# 注册表含诱饵路径清单（入库 = 直接告诉对方哪些是假的）⟹ 不入库，仅按需 install。
+.gatekeeper.canary*
+.gatekeeper-canary/
 .vk.json
 __test_*.sh
 
@@ -141,3 +164,5 @@ moa-chain-*.html
 _diag_*.py
 _env_chan.py
 .pytest-tmp/
+# 红队本地授权范围（本机私有，不入库/不导出；模板见 references/red-scope.example.json）
+references/red-scope.json

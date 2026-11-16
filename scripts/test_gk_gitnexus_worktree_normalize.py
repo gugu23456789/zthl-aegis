@@ -82,12 +82,40 @@ def test_non_repo_passthrough(tmp_path):
         f"非仓库目录被误改：{out!r}"
 
 
+def test_baseline_status_normalizes_worktree_before_probe(tmp_path):
+    """回归：基线门必须先归一到主仓根再查 fast-status（否则 worktree 恒 unavailable）。"""
+    fn = _extract_fn("_gitnexus_baseline_status")
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    argv_log = tmp_path / "argv.log"
+    fake_py = bindir / "python3"
+    fake_py.write_text(
+        '#!/bin/bash\nprintf "%s\\n" "$@" > "' + str(argv_log) + '"\necho current\n',
+        encoding="utf-8")
+    fake_py.chmod(0o755)
+    stub = (
+        '_gx_worktree_main_root() { echo "${1%/}-NORM"; }\n'
+        '_gx_store_root_for_node() { echo /fake/store; }\n'
+        '_gx_node_probe() { echo /fake/node; }\n'
+        'SKILL_DIR=/fake\n'
+    )
+    script = stub + fn + '\n_gitnexus_baseline_status "/fake/wt"\n'
+    env = dict(os.environ)
+    env["PATH"] = str(bindir) + os.pathsep + env.get("PATH", "")
+    r = subprocess.run(["bash", "-c", script], capture_output=True, text=True, env=env)
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.strip() == "current", r.stdout
+    argv = argv_log.read_text(encoding="utf-8")
+    assert "--cwd" in argv and "/fake/wt-NORM" in argv, argv
+
+
 if __name__ == "__main__":
     import tempfile
     failures = 0
     for fn_obj in (test_worktree_normalizes_to_main_root,
                    test_plain_repo_passthrough,
-                   test_non_repo_passthrough):
+                   test_non_repo_passthrough,
+                   test_baseline_status_normalizes_worktree_before_probe):
         with tempfile.TemporaryDirectory() as td:
             try:
                 fn_obj(Path(td))

@@ -3,7 +3,7 @@
 > 生成器：`scripts/gk_repo_index.py --write`；漂移由 `gk_release_preflight.py` 的 `repo_index` 项守。
 > 用途：**移动端**（GitHub App 没有 “Go to file”）与抓取工具一次拿到全量路径；点路径直达文件。
 
-**共 887 个文件。**
+**共 960 个文件。**
 
 ## 索引生成物
 
@@ -42,6 +42,7 @@
 
 ## RELEASE-NOTES/
 
+- [RELEASE-NOTES/RELEASE-NOTES-v0.10.0.md](RELEASE-NOTES/RELEASE-NOTES-v0.10.0.md) — ZTHL Aegis v0.10.0 — 发布说明
 - [RELEASE-NOTES/RELEASE-NOTES-v0.9.4.1.md](RELEASE-NOTES/RELEASE-NOTES-v0.9.4.1.md) — ZTHL Aegis v0.9.4.1 — 发布说明
 - [RELEASE-NOTES/RELEASE-NOTES-v0.9.4.2.md](RELEASE-NOTES/RELEASE-NOTES-v0.9.4.2.md) — ZTHL Aegis v0.9.4.2 — 发布说明
 - [RELEASE-NOTES/RELEASE-NOTES-v0.9.4.3.md](RELEASE-NOTES/RELEASE-NOTES-v0.9.4.3.md) — ZTHL Aegis v0.9.4.3 — 发布说明
@@ -157,9 +158,12 @@
 - [references/architecture-overview.md](references/architecture-overview.md) — 架构自述：数据流 / 门禁分层 / 真实形态
 - [references/archive.json](references/archive.json) — JSON 数据
 - [references/bench-baseline.json](references/bench-baseline.json) — JSON 数据
+- [references/ci-checklist.json](references/ci-checklist.json) — JSON 数据
 - [references/ci-external-paths.json](references/ci-external-paths.json) — JSON 数据
 - [references/ci-pipeline-template.md](references/ci-pipeline-template.md) — CI 模板与发版门禁（含发版前三步）
 - [references/cli-protocol.md](references/cli-protocol.md) — CLI Protocol — Gatekeeper Command Reference & PRM Monitor
+- [references/comment-template.md](references/comment-template.md) — 注释模板与写作规格（COMMENT-TEMPLATE）
+- [references/comment-templates.json](references/comment-templates.json) — JSON 数据
 - [references/convergence-evaluator.md](references/convergence-evaluator.md) — 收敛评估器（Convergence Evaluator）—— 机制正本
 - [references/credit-economy.md](references/credit-economy.md) — 额度银行 / 经济回路正本
 - [references/doc-align-contracts.json](references/doc-align-contracts.json) — JSON 数据
@@ -176,7 +180,9 @@
 - [references/plugin-loading-test-framework.md](references/plugin-loading-test-framework.md) — 插件加载安全网协议 + 插件导入测试安全网框架
 - [references/red-arm-templates.json](references/red-arm-templates.json) — JSON 数据
 - [references/red-external-map.json](references/red-external-map.json) — JSON 数据
+- [references/red-guard.md](references/red-guard.md) — 红队本地确定性护栏（Red Guard）
 - [references/red-intel-sources.json](references/red-intel-sources.json) — JSON 数据
+- [references/red-scope.example.json](references/red-scope.example.json) — JSON 数据
 - [references/red-vectors.json](references/red-vectors.json) — JSON 数据
 - [references/repo-index-annotations.json](references/repo-index-annotations.json) — JSON 数据
 - [references/research-408.md](references/research-408.md) — Research 408 — 计算机 408 四轴优化分析
@@ -188,6 +194,9 @@
 - [references/standard-maintenance-module.md](references/standard-maintenance-module.md) — 标准维护模块（自愈层）
 - [references/state-storage.md](references/state-storage.md) — 状态存储形态、卫星片与容量纪律
 - [references/superagent-comparison.md](references/superagent-comparison.md) — 与 dsh Super-agent 的一手材料对照
+- [references/template-registries.json](references/template-registries.json) — JSON 数据
+- [references/violation-charter.md](references/violation-charter.md) — 违约定义与处置条例（v1，2026-11-11 定稿）
+- [references/wasm-checklist.json](references/wasm-checklist.json) — JSON 数据
 - [references/wasm-engineering-template.md](references/wasm-engineering-template.md) — WASM 工程标准模板（通用）
 - [references/xspi-defense.md](references/xspi-defense.md) — XSPI 污染攻防机制正本（跨站/间接提示注入）
 
@@ -243,6 +252,7 @@
 - [scripts/cron_jobs.py](scripts/cron_jobs.py) — Gatekeeper Cron — Job Storage & Schedule Parsing
 - [scripts/cron_scheduler.py](scripts/cron_scheduler.py) — Gatekeeper Cron — Scheduler (Tick Loop)
 - [scripts/cron_tick.bat](scripts/cron_tick.bat) — 文件
+- [scripts/cron_tick_1m.bat](scripts/cron_tick_1m.bat) — 文件
 - [scripts/format_release_check.py](scripts/format_release_check.py) — Python 模块
 - [scripts/gk_accept_factor.py](scripts/gk_accept_factor.py) — Python 模块
 - [scripts/gk_accept_py.py](scripts/gk_accept_py.py) — Python 模块
@@ -265,9 +275,12 @@
 - [scripts/gk_audit_docs.py](scripts/gk_audit_docs.py) — Python 模块
 - [scripts/gk_audit_findings.py](scripts/gk_audit_findings.py) — Python 模块
 - [scripts/gk_audit_host.py](scripts/gk_audit_host.py) — Python 模块
+- [scripts/gk_audit_lifecycle.py](scripts/gk_audit_lifecycle.py) — Python 模块
 - [scripts/gk_audit_memory.py](scripts/gk_audit_memory.py) — Python 模块
+- [scripts/gk_audit_model_tick.py](scripts/gk_audit_model_tick.py) — Python 模块
 - [scripts/gk_audit_outcome.py](scripts/gk_audit_outcome.py) — Python 模块
 - [scripts/gk_audit_registry.py](scripts/gk_audit_registry.py) — Python 模块
+- [scripts/gk_audit_replay.py](scripts/gk_audit_replay.py) — Python 模块
 - [scripts/gk_audit_report.py](scripts/gk_audit_report.py) — Python 模块
 - [scripts/gk_audit_state.py](scripts/gk_audit_state.py) — Python 模块
 - [scripts/gk_balance_audit.py](scripts/gk_balance_audit.py) — Python 模块
@@ -280,6 +293,7 @@
 - [scripts/gk_bench_gate.py](scripts/gk_bench_gate.py) — Python 模块
 - [scripts/gk_bench_release.py](scripts/gk_bench_release.py) — Python 模块
 - [scripts/gk_bench_relevance.py](scripts/gk_bench_relevance.py) — Python 模块
+- [scripts/gk_bench_runtime.py](scripts/gk_bench_runtime.py) — Python 模块
 - [scripts/gk_bench_satellite.py](scripts/gk_bench_satellite.py) — Python 模块
 - [scripts/gk_bench_state.py](scripts/gk_bench_state.py) — Python 模块
 - [scripts/gk_bill_observe.py](scripts/gk_bill_observe.py) — Python 模块
@@ -287,8 +301,12 @@
 - [scripts/gk_budget_ledger.py](scripts/gk_budget_ledger.py) — Python 模块
 - [scripts/gk_budget_snap.py](scripts/gk_budget_snap.py) — Python 模块
 - [scripts/gk_cache_observe.py](scripts/gk_cache_observe.py) — Python 模块
+- [scripts/gk_canary.py](scripts/gk_canary.py) — Python 模块
 - [scripts/gk_chain.py](scripts/gk_chain.py) — Python 模块
 - [scripts/gk_ci_security_lint.py](scripts/gk_ci_security_lint.py) — Python 模块
+- [scripts/gk_comment_scaffold.py](scripts/gk_comment_scaffold.py) — Python 模块
+- [scripts/gk_commit_identity.py](scripts/gk_commit_identity.py) — Python 模块
+- [scripts/gk_commit_size_guard.py](scripts/gk_commit_size_guard.py) — Python 模块
 - [scripts/gk_commit_verify.py](scripts/gk_commit_verify.py) — Python 模块
 - [scripts/gk_context_build.py](scripts/gk_context_build.py) — Python 模块
 - [scripts/gk_convergence_estimator.py](scripts/gk_convergence_estimator.py) — Python 模块
@@ -298,7 +316,9 @@
 - [scripts/gk_cron_external_ref.py](scripts/gk_cron_external_ref.py) — Python 模块
 - [scripts/gk_cron_model_radar.py](scripts/gk_cron_model_radar.py) — Python 模块
 - [scripts/gk_cron_night_batch.py](scripts/gk_cron_night_batch.py) — Python 模块
+- [scripts/gk_cron_seed.py](scripts/gk_cron_seed.py) — Python 模块
 - [scripts/gk_crypto_cli.py](scripts/gk_crypto_cli.py) — Python 模块
+- [scripts/gk_dbg.py](scripts/gk_dbg.py) — Python 模块
 - [scripts/gk_defect_gen.py](scripts/gk_defect_gen.py) — Python 模块
 - [scripts/gk_discover_archive.py](scripts/gk_discover_archive.py) — Python 模块
 - [scripts/gk_discover_carry.py](scripts/gk_discover_carry.py) — Python 模块
@@ -355,6 +375,10 @@
 - [scripts/gk_main_repo.sh](scripts/gk_main_repo.sh) — Shell 脚本
 - [scripts/gk_mcp_loader.py](scripts/gk_mcp_loader.py) — MCP 加载安全网（声明 / 接线 / 决策 + 跨 SDK 版本）
 - [scripts/gk_mediation.py](scripts/gk_mediation.py) — Python 模块
+- [scripts/gk_merge_cli.py](scripts/gk_merge_cli.py) — Python 模块
+- [scripts/gk_merge_guard.py](scripts/gk_merge_guard.py) — Python 模块
+- [scripts/gk_merge_hook.py](scripts/gk_merge_hook.py) — Python 模块
+- [scripts/gk_merge_hook_install.py](scripts/gk_merge_hook_install.py) — Python 模块
 - [scripts/gk_moa_aggregate.py](scripts/gk_moa_aggregate.py) — Python 模块
 - [scripts/gk_moa_integrity.py](scripts/gk_moa_integrity.py) — Python 模块
 - [scripts/gk_moa_judge.py](scripts/gk_moa_judge.py) — Python 模块
@@ -366,6 +390,7 @@
 - [scripts/gk_monitor_envelope.py](scripts/gk_monitor_envelope.py) — Python 模块
 - [scripts/gk_monitor_fixture.py](scripts/gk_monitor_fixture.py) — Python 模块
 - [scripts/gk_monitor_payload.py](scripts/gk_monitor_payload.py) — monitor 落库载荷（自 `gatekeeper-cli.sh::cmd_monitor` 内联块逐字下沉，2026-11-04）。
+- [scripts/gk_monitor_rotation.py](scripts/gk_monitor_rotation.py) — Python 模块
 - [scripts/gk_narrow_route.py](scripts/gk_narrow_route.py) — Python 模块
 - [scripts/gk_node_guard.py](scripts/gk_node_guard.py) — Python 模块
 - [scripts/gk_norm.py](scripts/gk_norm.py) — Python 模块
@@ -385,6 +410,7 @@
 - [scripts/gk_public_bridge.py](scripts/gk_public_bridge.py) — gk_public_bridge.py — 私仓 → 公开仓的**单向**发布桥（2026-11-08，owner 裁定）。
 - [scripts/gk_receive_check.py](scripts/gk_receive_check.py) — Python 模块
 - [scripts/gk_red_arm_gen.py](scripts/gk_red_arm_gen.py) — Python 模块
+- [scripts/gk_red_guard.py](scripts/gk_red_guard.py) — Python 模块
 - [scripts/gk_red_intel.py](scripts/gk_red_intel.py) — Python 模块
 - [scripts/gk_red_keyleak.py](scripts/gk_red_keyleak.py) — Python 模块
 - [scripts/gk_red_parallel.sh](scripts/gk_red_parallel.sh) — Shell 脚本
@@ -400,11 +426,13 @@
 - [scripts/gk_review_pins.py](scripts/gk_review_pins.py) — Python 模块
 - [scripts/gk_role_regions.py](scripts/gk_role_regions.py) — Python 模块
 - [scripts/gk_route_center.py](scripts/gk_route_center.py) — Python 模块
+- [scripts/gk_route_check.py](scripts/gk_route_check.py) — Python 模块
 - [scripts/gk_sandbox.py](scripts/gk_sandbox.py) — Python 模块
 - [scripts/gk_sarif.py](scripts/gk_sarif.py) — Python 模块
 - [scripts/gk_satellite.py](scripts/gk_satellite.py) — 状态 WAL：append 片 + per-arm 索引叶
 - [scripts/gk_sbom.py](scripts/gk_sbom.py) — Python 模块
 - [scripts/gk_sdk_gate_align.py](scripts/gk_sdk_gate_align.py) — Python 模块
+- [scripts/gk_seal.py](scripts/gk_seal.py) — Python 模块
 - [scripts/gk_self_check.py](scripts/gk_self_check.py) — 环境自检（37 项，quick/full 两档）
 - [scripts/gk_session_identity.py](scripts/gk_session_identity.py) — Python 模块
 - [scripts/gk_source_scan.py](scripts/gk_source_scan.py) — Python 模块
@@ -420,6 +448,8 @@
 - [scripts/gk_subagent_report.py](scripts/gk_subagent_report.py) — Python 模块
 - [scripts/gk_swe_rb_loader.py](scripts/gk_swe_rb_loader.py) — Python 模块
 - [scripts/gk_task_gate.py](scripts/gk_task_gate.py) — Python 模块
+- [scripts/gk_template_audit.py](scripts/gk_template_audit.py) — Python 模块
+- [scripts/gk_threat.py](scripts/gk_threat.py) — Python 模块
 - [scripts/gk_threat_patterns.py](scripts/gk_threat_patterns.py) — Python 模块
 - [scripts/gk_trash_cron.sh](scripts/gk_trash_cron.sh) — Shell 脚本
 - [scripts/gk_tri_consistency.py](scripts/gk_tri_consistency.py) — gk_tri_consistency.py — 三面一致性闸（plan ↔ family ↔ finding_arms）。
@@ -432,6 +462,8 @@
 - [scripts/gk_worker.py](scripts/gk_worker.py) — Python 模块
 - [scripts/gk_worker_client.py](scripts/gk_worker_client.py) — Python 模块
 - [scripts/gk_worker_epoch.py](scripts/gk_worker_epoch.py) — Python 模块
+- [scripts/gk_worktree_owner.py](scripts/gk_worktree_owner.py) — Python 模块
+- [scripts/gk_worktree_pool.py](scripts/gk_worktree_pool.py) — Python 模块
 - [scripts/gk_worktree_reclaim.py](scripts/gk_worktree_reclaim.py) — worktree 回收链：**归档前置 + 回收**（finding `ECC-35AC08DA96F0`）。
 - [scripts/gk_write_claims.py](scripts/gk_write_claims.py) — Python 模块
 - [scripts/gk_zenodo_sync.py](scripts/gk_zenodo_sync.py) — Python 模块
@@ -443,6 +475,10 @@
 - [scripts/pre_tool_hook.py](scripts/pre_tool_hook.py) — hook 门禁执行面（Gate 0-9 + R0.x 家族）
 - [scripts/pre_tool_hook_wrapper.sh](scripts/pre_tool_hook_wrapper.sh) — Shell 脚本
 - [scripts/py_resolve.sh](scripts/py_resolve.sh) — Shell 脚本
+- [scripts/red_runtime/__init__.py](scripts/red_runtime/__init__.py) — red_runtime — 红队**运行时**攻防沙盘（骨架；408 方案 §2/§7）。
+- [scripts/red_runtime/runner.py](scripts/red_runtime/runner.py) — Python 模块
+- [scripts/red_runtime/scenarios.py](scripts/red_runtime/scenarios.py) — Python 模块
+- [scripts/run_tests.sh](scripts/run_tests.sh) — Shell 脚本
 - [scripts/run_verify.sh](scripts/run_verify.sh) — Shell 脚本
 - [scripts/run_w2a_web_pilot.sh](scripts/run_w2a_web_pilot.sh) — Shell 脚本
 - [scripts/run_w2a_web_pyramid.sh](scripts/run_w2a_web_pyramid.sh) — Shell 脚本
@@ -456,6 +492,7 @@
 - [scripts/test_anchor_verdict_engine.py](scripts/test_anchor_verdict_engine.py) — test_anchor_verdict_engine.py — 锚判决**单一源引擎**（红先，9 臂）。
 - [scripts/test_anchor_verdict_unify.py](scripts/test_anchor_verdict_unify.py) — test_anchor_verdict_unify.py — 锚判决单一源 + 处置前强制回环闸 + A v2（红先，15 臂）。
 - [scripts/test_apply_worktree_family_diag.py](scripts/test_apply_worktree_family_diag.py) — Python 模块
+- [scripts/test_apply_worktree_pool_cli.py](scripts/test_apply_worktree_pool_cli.py) — Python 模块
 - [scripts/test_apply_worktree_release_claim.py](scripts/test_apply_worktree_release_claim.py) — Python 模块
 - [scripts/test_b6_module_cli.py](scripts/test_b6_module_cli.py) — B6（RED-MIGRATE-INLINE）：模块自有 CLI 契约测试。
 - [scripts/test_baselines/baseline_achievements.json](scripts/test_baselines/baseline_achievements.json) — JSON 数据
@@ -507,6 +544,7 @@
 - [scripts/test_gk_adjudicate.py](scripts/test_gk_adjudicate.py) — test_gk_adjudicate.py -- Tests for gk_adjudicate.py
 - [scripts/test_gk_adjudicate_parity.py](scripts/test_gk_adjudicate_parity.py) — Python 模块
 - [scripts/test_gk_advance.py](scripts/test_gk_advance.py) — Test gk_advance.py — advance state machine (batch8 R-T6 Phase 7).
+- [scripts/test_gk_advance_audit_failures.py](scripts/test_gk_advance_audit_failures.py) — Python 模块
 - [scripts/test_gk_advance_transition_table.py](scripts/test_gk_advance_transition_table.py) — T9 两问的机检臂（2026-10-31 owner 裁定）。
 - [scripts/test_gk_agent_edit.py](scripts/test_gk_agent_edit.py) — F7 基座：edit 四道闸 + 原子写（red-first）。子进程门禁以 stub 注入。
 - [scripts/test_gk_agent_edit_create.py](scripts/test_gk_agent_edit_create.py) — Python 模块
@@ -517,6 +555,7 @@
 - [scripts/test_gk_api_key.py](scripts/test_gk_api_key.py) — Python 模块
 - [scripts/test_gk_appeal.py](scripts/test_gk_appeal.py) — test_gk_appeal.py -- Tests for gk_appeal.py
 - [scripts/test_gk_apply_worktree.py](scripts/test_gk_apply_worktree.py) — F7 基座：worktree 申请—分发（red-first）。真 git 仓 + 临时 root。
+- [scripts/test_gk_apply_worktree_autobind.py](scripts/test_gk_apply_worktree_autobind.py) — Python 模块
 - [scripts/test_gk_apply_worktree_claims.py](scripts/test_gk_apply_worktree_claims.py) — Python 模块
 - [scripts/test_gk_apply_worktree_cli.py](scripts/test_gk_apply_worktree_cli.py) — Python 模块
 - [scripts/test_gk_apply_worktree_close_out.py](scripts/test_gk_apply_worktree_close_out.py) — test_gk_apply_worktree_close_out.py -- T7 红先臂：处置链闭环出口 `apply-worktree --close-ou
@@ -526,6 +565,7 @@
 - [scripts/test_gk_ask_hold_kill.py](scripts/test_gk_ask_hold_kill.py) — Python 模块
 - [scripts/test_gk_audit_all_aggregation.py](scripts/test_gk_audit_all_aggregation.py) — Python 模块
 - [scripts/test_gk_audit_consumers.py](scripts/test_gk_audit_consumers.py) — Python 模块
+- [scripts/test_gk_audit_cost.py](scripts/test_gk_audit_cost.py) — Phase 4g AUDIT-COST — 动态攻防面防退化审计（红先，2026-11-11）。
 - [scripts/test_gk_audit_coverage.py](scripts/test_gk_audit_coverage.py) — test_gk_audit_coverage.py — E1 变更面证据探针（audit --coverage，2026-09-06 实装）
 - [scripts/test_gk_audit_credit_score.py](scripts/test_gk_audit_credit_score.py) — Python 模块
 - [scripts/test_gk_audit_cron.py](scripts/test_gk_audit_cron.py) — Python 模块
@@ -539,9 +579,14 @@
 - [scripts/test_gk_audit_findings.py](scripts/test_gk_audit_findings.py) — Python 模块
 - [scripts/test_gk_audit_gates.py](scripts/test_gk_audit_gates.py) — Python 模块
 - [scripts/test_gk_audit_host.py](scripts/test_gk_audit_host.py) — Python 模块
+- [scripts/test_gk_audit_lifecycle.py](scripts/test_gk_audit_lifecycle.py) — E1–E8：审计署 4B 决策模型自适应启停（408 计划 §7，2026-11-12 红先）。
+- [scripts/test_gk_audit_lifecycle_408params.py](scripts/test_gk_audit_lifecycle_408params.py) — 408 ②③⑪ 落地臂（2026-11-14）。
+- [scripts/test_gk_audit_lifecycle_wiring.py](scripts/test_gk_audit_lifecycle_wiring.py) — T3/T4 接线：sweep 每条 raise / monitor 每次 --api 各持一条生命周期租约（2026-11-12）。
 - [scripts/test_gk_audit_memory.py](scripts/test_gk_audit_memory.py) — Python 模块
+- [scripts/test_gk_audit_model_tick.py](scripts/test_gk_audit_model_tick.py) — T5：60s tick 作业体（gk_audit_model_tick）—— rc/reason 落日志 + sidecar 前进（2026-11-13）。
 - [scripts/test_gk_audit_outcome.py](scripts/test_gk_audit_outcome.py) — Python 模块
 - [scripts/test_gk_audit_registry.py](scripts/test_gk_audit_registry.py) — Python 模块
+- [scripts/test_gk_audit_replay.py](scripts/test_gk_audit_replay.py) — Python 模块
 - [scripts/test_gk_audit_report.py](scripts/test_gk_audit_report.py) — Python 模块
 - [scripts/test_gk_audit_report_sig.py](scripts/test_gk_audit_report_sig.py) — test_gk_audit_report_sig.py — 侧车签名：签→验 / 篡改→invalid / 无钥→unsigned / 门禁拦 invalid。
 - [scripts/test_gk_audit_state.py](scripts/test_gk_audit_state.py) — Python 模块
@@ -567,6 +612,7 @@
 - [scripts/test_gk_c47_ext.py](scripts/test_gk_c47_ext.py) — Python 模块
 - [scripts/test_gk_cache_observe.py](scripts/test_gk_cache_observe.py) — Python 模块
 - [scripts/test_gk_calibrate_edit_log.py](scripts/test_gk_calibrate_edit_log.py) — Python 模块
+- [scripts/test_gk_canary.py](scripts/test_gk_canary.py) — 自有仓诱饵面（gk_canary）—— 红先臂集（2026-11-11）。
 - [scripts/test_gk_chain.py](scripts/test_gk_chain.py) — Python 模块
 - [scripts/test_gk_ci_security_lint.py](scripts/test_gk_ci_security_lint.py) — test_gk_ci_security_lint.py — workflow 供应链/权限静态门。
 - [scripts/test_gk_cli_crlf_strip.py](scripts/test_gk_cli_crlf_strip.py) — 红先臂：plan-refinement 链的 id/字段捕获 CRLF 污染（Windows python print = \\r\\n）。
@@ -574,7 +620,10 @@
 - [scripts/test_gk_cli_skildir_guard.py](scripts/test_gk_cli_skildir_guard.py) — Python 模块
 - [scripts/test_gk_closeout_order_branch.py](scripts/test_gk_closeout_order_branch.py) — B 接线红先臂（2026-10-16，owner 裁定「accept → close → 回收」+「回收含 worktree→分支」）。
 - [scripts/test_gk_coder_scaffold_net.py](scripts/test_gk_coder_scaffold_net.py) — Python 模块
+- [scripts/test_gk_comment_scaffold.py](scripts/test_gk_comment_scaffold.py) — test_gk_comment_scaffold.py — 注释骨架登记表与发生器的安全网（2026-11-10）。
 - [scripts/test_gk_commit_guard.py](scripts/test_gk_commit_guard.py) — Python 模块
+- [scripts/test_gk_commit_identity.py](scripts/test_gk_commit_identity.py) — gk_commit_identity 提交身份臂（2026-11-10，红先）。
+- [scripts/test_gk_commit_size_guard.py](scripts/test_gk_commit_size_guard.py) — Python 模块
 - [scripts/test_gk_commit_verify_drvfs.py](scripts/test_gk_commit_verify_drvfs.py) — Python 模块
 - [scripts/test_gk_concurrent_write.py](scripts/test_gk_concurrent_write.py) — Python 模块
 - [scripts/test_gk_context_build.py](scripts/test_gk_context_build.py) — Python 模块
@@ -587,8 +636,10 @@
 - [scripts/test_gk_cron_model_radar.py](scripts/test_gk_cron_model_radar.py) — test_gk_cron_model_radar.py — 雷达（0 API）行为臂：基线 / 增量 / 抓取失败。
 - [scripts/test_gk_cron_night_batch.py](scripts/test_gk_cron_night_batch.py) — test_gk_cron_night_batch.py — 夜间批次（dream 窗口）cron 作业内核测试（T-SLEEP-03 实装）
 - [scripts/test_gk_cron_per_state.py](scripts/test_gk_cron_per_state.py) — Python 模块
+- [scripts/test_gk_cron_seed.py](scripts/test_gk_cron_seed.py) — T5 seed：cron 作业可重建（2026-11-14）。红先：seed 脚本落刀前本模块 ImportError。
 - [scripts/test_gk_cross_domain_dup.py](scripts/test_gk_cross_domain_dup.py) — Python 模块
 - [scripts/test_gk_crypto_cli.py](scripts/test_gk_crypto_cli.py) — test_gk_crypto_cli.py — B8 红先（2026-10-27，锚 RED-MIGRATE-INLINE）
+- [scripts/test_gk_dbg_shard.py](scripts/test_gk_dbg_shard.py) — Python 模块
 - [scripts/test_gk_discover_archive.py](scripts/test_gk_discover_archive.py) — Python 模块
 - [scripts/test_gk_discover_build_state.py](scripts/test_gk_discover_build_state.py) — Python 模块
 - [scripts/test_gk_discover_carry.py](scripts/test_gk_discover_carry.py) — `discover` 跨会话基础设施键保全（finding `ECC-A135BE8837AF`）单测。
@@ -650,6 +701,7 @@
 - [scripts/test_gk_finding_route_drift.py](scripts/test_gk_finding_route_drift.py) — Python 模块
 - [scripts/test_gk_finding_score.py](scripts/test_gk_finding_score.py) — Python 模块
 - [scripts/test_gk_finding_stale.py](scripts/test_gk_finding_stale.py) — Python 模块
+- [scripts/test_gk_finding_staleness.py](scripts/test_gk_finding_staleness.py) — Python 模块
 - [scripts/test_gk_finding_title_refresh.py](scripts/test_gk_finding_title_refresh.py) — Python 模块
 - [scripts/test_gk_force_teaching.py](scripts/test_gk_force_teaching.py) — Python 模块
 - [scripts/test_gk_foreign_content.py](scripts/test_gk_foreign_content.py) — Python 模块
@@ -685,6 +737,10 @@
 - [scripts/test_gk_main_repo.py](scripts/test_gk_main_repo.py) — Python 模块
 - [scripts/test_gk_mcp_loader.py](scripts/test_gk_mcp_loader.py) — test_gk_mcp_loader.py — MCP 加载安全网（声明 / 接线 / 决策 / SDK 版本适配）。
 - [scripts/test_gk_mediation.py](scripts/test_gk_mediation.py) — test_gk_mediation.py — P2-Mediation #4 上下文构造测试（2026-08-26 批次 2 剩余）。
+- [scripts/test_gk_merge_cleanup_remote.py](scripts/test_gk_merge_cleanup_remote.py) — `gk_merge_cli.py --cleanup-source-remote`：合并前置闸的**对偶闸**（方案 A，2026-11-14）。
+- [scripts/test_gk_merge_cli.py](scripts/test_gk_merge_cli.py) — R0.24 唯一合并入口（gk_merge_cli）：闸①→merge→闸②→提交/回滚 闭环（2026-11-13）。
+- [scripts/test_gk_merge_guard.py](scripts/test_gk_merge_guard.py) — 合并退化防护（2026-11-13）：旧分支 / 删除文件 / 合并冲突必须在 merge 前 BLOCK。
+- [scripts/test_gk_merge_hook.py](scripts/test_gk_merge_hook.py) — R0.24 合并闸（git reference-transaction）：**任何**主 ref 前进无票据必须被拒（2026-11-13）。
 - [scripts/test_gk_mimo_max_output_cap.py](scripts/test_gk_mimo_max_output_cap.py) — Python 模块
 - [scripts/test_gk_moa_accept.py](scripts/test_gk_moa_accept.py) — Python 模块
 - [scripts/test_gk_moa_aggregate.py](scripts/test_gk_moa_aggregate.py) — test_gk_moa_aggregate.py — MoA 聚合器测试（zthl-adapter governance/moa/ 对齐）
@@ -716,6 +772,7 @@
 - [scripts/test_gk_moa_emit_finding_default.py](scripts/test_gk_moa_emit_finding_default.py) — Python 模块
 - [scripts/test_gk_moa_finding_cover.py](scripts/test_gk_moa_finding_cover.py) — Python 模块
 - [scripts/test_gk_moa_finding_substance.py](scripts/test_gk_moa_finding_substance.py) — Python 模块
+- [scripts/test_gk_moa_html_identity.py](scripts/test_gk_moa_html_identity.py) — MoA 链尾 HTML 的**版本/轮次/批次**标识（2026-11-12，owner 令红先）。
 - [scripts/test_gk_moa_html_pollution.py](scripts/test_gk_moa_html_pollution.py) — Python 模块
 - [scripts/test_gk_moa_html_substance.py](scripts/test_gk_moa_html_substance.py) — Python 模块
 - [scripts/test_gk_moa_html_ux.py](scripts/test_gk_moa_html_ux.py) — Python 模块
@@ -740,6 +797,7 @@
 - [scripts/test_gk_monitor_fixture.py](scripts/test_gk_monitor_fixture.py) — `gk_monitor_fixture.py`（B2 等价夹具驱动）的机检臂，2026-11-04。
 - [scripts/test_gk_monitor_m1.py](scripts/test_gk_monitor_m1.py) — Python 模块
 - [scripts/test_gk_monitor_parity.py](scripts/test_gk_monitor_parity.py) — Python 模块
+- [scripts/test_gk_monitor_rotation.py](scripts/test_gk_monitor_rotation.py) — monitor 事件驱动 + 旋转门（gk_monitor_rotation）—— 红先臂集（2026-11-11）。
 - [scripts/test_gk_narrow_group_constraints.py](scripts/test_gk_narrow_group_constraints.py) — Python 模块
 - [scripts/test_gk_narrow_route.py](scripts/test_gk_narrow_route.py) — test_gk_narrow_route.py — 窄任务清单 → subagent 档位路由测试
 - [scripts/test_gk_narrow_route_register.py](scripts/test_gk_narrow_route_register.py) — test_gk_narrow_route_register.py — narrow_tasks[] **生产者**（--register）红先测试。
@@ -764,6 +822,7 @@
 - [scripts/test_gk_plan_refine_routing.py](scripts/test_gk_plan_refine_routing.py) — test_gk_plan_refine_routing.py — 红先臂：`plan-refinement <plan>` 的 **state 路由**
 - [scripts/test_gk_plan_refine_run.py](scripts/test_gk_plan_refine_run.py) — test_gk_plan_refine_run.py -- F6 红先臂：`plan-refinement --run` 单入口（形态臂）
 - [scripts/test_gk_plan_refinement_preflight.py](scripts/test_gk_plan_refinement_preflight.py) — Python 模块
+- [scripts/test_gk_plan_status_budget_seed.py](scripts/test_gk_plan_status_budget_seed.py) — 计划定稿门 + 域 state 种子盒（方案 A，owner 2026-11-14）。
 - [scripts/test_gk_plugin_manifest.py](scripts/test_gk_plugin_manifest.py) — test_gk_plugin_manifest.py — 插件 manifest + 生命周期测试（2026-08-25）。
 - [scripts/test_gk_plugin_manifest_redteam.py](scripts/test_gk_plugin_manifest_redteam.py) — test_gk_plugin_manifest_redteam.py — 插件加载安全网红队测试（2026-11-04）。
 - [scripts/test_gk_pr_batch_dispatch.py](scripts/test_gk_pr_batch_dispatch.py) — Python 模块
@@ -787,6 +846,7 @@
 - [scripts/test_gk_red_arm_gen.py](scripts/test_gk_red_arm_gen.py) — test_gk_red_arm_gen.py — 红先模版发生器安全网（2026-09-23，用户裁定「扩展红先测试模版」）。
 - [scripts/test_gk_red_findings_fix.py](scripts/test_gk_red_findings_fix.py) — Python 模块
 - [scripts/test_gk_red_gov.py](scripts/test_gk_red_gov.py) — Python 模块
+- [scripts/test_gk_red_guard.py](scripts/test_gk_red_guard.py) — test_gk_red_guard.py — 红队本地确定性护栏（红先，2026-11-09）。
 - [scripts/test_gk_red_intel.py](scripts/test_gk_red_intel.py) — Python 模块
 - [scripts/test_gk_red_json_sandbox.py](scripts/test_gk_red_json_sandbox.py) — Python 模块
 - [scripts/test_gk_red_stand.py](scripts/test_gk_red_stand.py) — test_gk_red_stand.py -- 红队常态化攻击机单测（gk_red_stand.py，2026-11-05）
@@ -805,6 +865,7 @@
 - [scripts/test_gk_review_pins.py](scripts/test_gk_review_pins.py) — Python 模块
 - [scripts/test_gk_review_role_guard.py](scripts/test_gk_review_role_guard.py) — Python 模块
 - [scripts/test_gk_route_center.py](scripts/test_gk_route_center.py) — Python 模块
+- [scripts/test_gk_route_resolve.py](scripts/test_gk_route_resolve.py) — P0-b 路由链（2026-11-13）：`pick_active_worktree` 四级优先级的红先臂。
 - [scripts/test_gk_sandbox.py](scripts/test_gk_sandbox.py) — Python 模块
 - [scripts/test_gk_sandbox_wiring.py](scripts/test_gk_sandbox_wiring.py) — A 沙箱接线红先臂（2026-10-16，owner 裁定「沙箱面向所有 subagent」「全接」）。
 - [scripts/test_gk_sarif.py](scripts/test_gk_sarif.py) — test_gk_sarif.py -- Tests for gk_sarif.py（门禁静态结果 → SARIF 2.1.0）
@@ -818,12 +879,14 @@
 - [scripts/test_gk_sdk_gate_align.py](scripts/test_gk_sdk_gate_align.py) — Python 模块
 - [scripts/test_gk_seal_chain.py](scripts/test_gk_seal_chain.py) — test_gk_seal_chain.py — D3a 红先臂：本地单调序号 + `prev_hash` 链。
 - [scripts/test_gk_seal_chain_b_attack.py](scripts/test_gk_seal_chain_b_attack.py) — test_gk_seal_chain_b_attack.py — 对 B（state 钉头）的**攻击实验**（决策证据，非生产实现）。
+- [scripts/test_gk_seal_scope.py](scripts/test_gk_seal_scope.py) — Python 模块
 - [scripts/test_gk_sealed_agent_score_merge.py](scripts/test_gk_sealed_agent_score_merge.py) — Python 模块
 - [scripts/test_gk_self_check.py](scripts/test_gk_self_check.py) — test_gk_self_check.py -- Tests for gk_self_check.py
 - [scripts/test_gk_selfcheck_ownership.py](scripts/test_gk_selfcheck_ownership.py) — Python 模块
 - [scripts/test_gk_selfcheck_speed.py](scripts/test_gk_selfcheck_speed.py) — Python 模块
 - [scripts/test_gk_session_identity.py](scripts/test_gk_session_identity.py) — gk_session_identity 判别臂（finding ECC-AB2FA16E9133）。
 - [scripts/test_gk_session_isolation.py](scripts/test_gk_session_isolation.py) — Python 模块
+- [scripts/test_gk_session_ownership_isolation.py](scripts/test_gk_session_ownership_isolation.py) — 会话身份与 worktree 归属隔离（2026-11-12，红先）。
 - [scripts/test_gk_session_state_landing.py](scripts/test_gk_session_state_landing.py) — 序④-A v5：会话副本 state 治理落刀（red-first）。
 - [scripts/test_gk_skill_dir_trusted.py](scripts/test_gk_skill_dir_trusted.py) — Python 模块
 - [scripts/test_gk_source_scan.py](scripts/test_gk_source_scan.py) — test_gk_source_scan.py — B9a 红先（2026-10-27，锚 RED-MIGRATE-INLINE）
@@ -855,6 +918,8 @@
 - [scripts/test_gk_tamper_detect.py](scripts/test_gk_tamper_detect.py) — Python 模块
 - [scripts/test_gk_task_gate.py](scripts/test_gk_task_gate.py) — test_gk_task_gate.py -- Tests for gk_task_gate.py（入站窄任务数据管道节点，F-REV-21）
 - [scripts/test_gk_task_gate_group_tasks.py](scripts/test_gk_task_gate_group_tasks.py) — Python 模块
+- [scripts/test_gk_template_audit.py](scripts/test_gk_template_audit.py) — test_gk_template_audit.py — 模板登记表统一审计的安全网（2026-11-11）。
+- [scripts/test_gk_threat.py](scripts/test_gk_threat.py) — per-sid 违约台账（gk_threat）—— 红先臂集（2026-11-11）。
 - [scripts/test_gk_threat_patterns.py](scripts/test_gk_threat_patterns.py) — test_gk_threat_patterns.py — 威胁模式单一来源（2026-11-04）。
 - [scripts/test_gk_trash_ttl_cron.py](scripts/test_gk_trash_ttl_cron.py) — 红先测试：`.gk-trash` 自动释放 —— TTL 默认 3 天 + cron 作业编排（W1，2026-10-06）。
 - [scripts/test_gk_turn_cache.py](scripts/test_gk_turn_cache.py) — Python 模块
@@ -869,6 +934,8 @@
 - [scripts/test_gk_worker_auth.py](scripts/test_gk_worker_auth.py) — Python 模块
 - [scripts/test_gk_worker_fastpath.py](scripts/test_gk_worker_fastpath.py) — Python 模块
 - [scripts/test_gk_worker_state_stamp.py](scripts/test_gk_worker_state_stamp.py) — Python 模块
+- [scripts/test_gk_worktree_owner.py](scripts/test_gk_worktree_owner.py) — gk_worktree_owner 归属臂（2026-11-10，红先）。
+- [scripts/test_gk_worktree_pool.py](scripts/test_gk_worktree_pool.py) — Python 模块
 - [scripts/test_gk_worktree_reclaim.py](scripts/test_gk_worktree_reclaim.py) — worktree 回收链 `apply-worktree --reclaim`（finding `ECC-35AC08DA96F0`）红先臂集。
 - [scripts/test_gk_worktree_reclaim_path_filter.py](scripts/test_gk_worktree_reclaim_path_filter.py) — Python 模块
 - [scripts/test_gk_worktree_route_visibility.py](scripts/test_gk_worktree_route_visibility.py) — F7 族（worktree/隔离·申请—分发）红先臂 —— **先看它红**，再落刀转绿。
@@ -883,11 +950,13 @@
 - [scripts/test_hook_main_tree_git_gate.py](scripts/test_hook_main_tree_git_gate.py) — Python 模块
 - [scripts/test_hook_pytest_interpreter_gate.py](scripts/test_hook_pytest_interpreter_gate.py) — Python 模块
 - [scripts/test_hook_state_delete_guard.py](scripts/test_hook_state_delete_guard.py) — Python 模块
+- [scripts/test_hook_worktree_owner_gate.py](scripts/test_hook_worktree_owner_gate.py) — hook 归属闸接线臂（Gate 3c / R0.22，2026-11-10，红先）。
 - [scripts/test_install_uninstall.py](scripts/test_install_uninstall.py) — test_install_uninstall.py — 安装/卸载的「不误装、不误删」契约（2026-11-01）
 - [scripts/test_main_repo_guard.py](scripts/test_main_repo_guard.py) — 主仓只读保护：运行时派生正则 + 两处 guard 的 fail-closed 臂。
 - [scripts/test_main_repo_value_sync.py](scripts/test_main_repo_value_sync.py) — 主仓路径**单源**判据（2026-10-31 开源前置；替代原「三处字面量逐字一致」）。
 - [scripts/test_opcap_evidence_alias.py](scripts/test_opcap_evidence_alias.py) — Python 模块
 - [scripts/test_pack_release.py](scripts/test_pack_release.py) — Python 模块
+- [scripts/test_plan_refine_gate_lockdown.py](scripts/test_plan_refine_gate_lockdown.py) — Python 模块
 - [scripts/test_pre_tool_hook.py](scripts/test_pre_tool_hook.py) — test_pre_tool_hook.py — Tests for pre_tool_hook.py (stdin-based Hook protocol)
 - [scripts/test_pre_tool_hook_malware_gate.py](scripts/test_pre_tool_hook_malware_gate.py) — test_pre_tool_hook_malware_gate.py — Gate R0.19 恶意代码模式拦截（EDIT 载荷）。
 - [scripts/test_precheck_lazy_index.py](scripts/test_precheck_lazy_index.py) — test_precheck_lazy_index.py — 处置前回环闸 · 惰性仓索引（§9-6），红先 5 臂。
@@ -899,6 +968,10 @@
 - [scripts/test_r2_state_serialization.py](scripts/test_r2_state_serialization.py) — Python 模块
 - [scripts/test_red_attacks.py](scripts/test_red_attacks.py) — test_red_attacks.py -- Tests for _red_attacks.py
 - [scripts/test_red_ctx_sig_race.py](scripts/test_red_ctx_sig_race.py) — 红队攻击向量：context 签名竞态（攻击者**不守锁**时的 fail-closed 面）
+- [scripts/test_red_diff_oracle.py](scripts/test_red_diff_oracle.py) — Python 模块
+- [scripts/test_red_poison_m_closure.py](scripts/test_red_poison_m_closure.py) — Python 模块
+- [scripts/test_red_runtime_sandbox.py](scripts/test_red_runtime_sandbox.py) — Python 模块
+- [scripts/test_red_runtime_scenarios.py](scripts/test_red_runtime_scenarios.py) — 红队运行时**场景层剧本**臂（6 条，2026-11-11，红先）。
 - [scripts/test_replay.py](scripts/test_replay.py) — test_replay.py -- Tests for _replay.py
 - [scripts/test_safe_termination_gate.py](scripts/test_safe_termination_gate.py) — Python 模块
 - [scripts/test_safety_net_convergence_node.py](scripts/test_safety_net_convergence_node.py) — Infra-4 红先臂：安全网模版「收敛预判节点」（A8/RCA）。

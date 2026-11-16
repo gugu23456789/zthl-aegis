@@ -169,23 +169,24 @@ class TestSessionMarkerShard:
 
 
 class TestSessionIdentityWorktreeAnchor:
-    """2026-10-02（finding ECC-AB2FA16E9133）：身份链**同源** —— env > worktree token > payload。
+    """身份链**同源** —— env > 宿主 payload sid > worktree token（仅无宿主身份时兜底）。
 
-    平台无关兜底：hook 由 `_CALL_TARGET`（目标路径）所在 git worktree 派生 token，与 CLI 侧由
-    `$PWD` 派生的**同一** token 对齐 ⟹ 消「hook 用宿主 sid / CLI 用 worktree token」两套账。
-    解析单源 = `gk_session_identity`（禁第二实现）。无 worktree 锚 ⟹ 回落 payload（零回归）。
+    2026-10-02（ECC-AB2FA16E9133）：平台无关兜底 = `_CALL_TARGET` 所在 worktree 的 token。
+    2026-11-12（会话身份隔离，同树双写事故）：**宿主会话号必须优先** —— 路径 token 是
+    「目标在谁的树里」，不是「我是谁」；让 token 覆盖 payload 会让两个 chat 身份相同。
+    解析单源 = `gk_session_identity`（禁第二实现）；无 worktree 锚/无宿主 sid ⟹ 兜底不变。
     """
 
     def test_identity_chain_same_source(self):
         src = (Path(__file__).parent / "pre_tool_hook.py").read_text(encoding="utf-8")
         assert "_gsi.derive(_CALL_TARGET)" in src, \
-            "hook 未由目标路径派生 worktree token（两套账未消）"
-        assert "_SESSION_ID = _env_sid or _wt_tok or _pay_sid" in src, \
-            "身份链优先级不符（应 env > worktree token > payload sid）"
+            "hook 未由目标路径派生 worktree token（平台无关兜底缺失）"
+        assert "resolve_session_id(_env_sid, _pay_sid, _wt_tok)" in src, \
+            "身份链优先级不符（应 env > payload sid > worktree token）"
         i_target = src.find('_CALL_TARGET = _fp_ctx or ""')
-        i_sess = src.find("_SESSION_ID = _env_sid or _wt_tok or _pay_sid")
+        i_sess = src.find("resolve_session_id(_env_sid, _pay_sid, _wt_tok)")
         assert i_target != -1 and i_sess != -1 and i_target < i_sess, \
-            "`_CALL_TARGET` 须先于身份计算（否则 token 档拿不到目标路径）"
+            "`_CALL_TARGET` 须先于身份计算（否则 token 兜底档拿不到目标路径）"
         assert "gk_session_identity" in src, "解析单源引用缺失"
 
     def test_worktree_target_yields_token(self, monkeypatch):
@@ -1292,7 +1293,7 @@ class TestWslFamilyStory:
     wsl 家族入口（wsl / wsl.exe / wslsh / WSLENV）的引号与编码陷阱。
     **关键认知**：wslsh 的「落临时 .sh」只保护 **wsl.exe 命令行层**，不保护 **PowerShell 层**
     —— `wslsh -c "…$VAR…"` 中的 `$VAR` 在 wslsh 拿到参数**之前**就被 PS 展开。
-    严格度：W1/W2 = BLOCK，W3/W4/W5 = WARN。
+    严格度：W1/W2 = BLOCK，W3/W4/W5/W6 = WARN。
     """
 
     def test_w1_wslsh_dq_var_block(self):
@@ -1335,6 +1336,34 @@ class TestWslFamilyStory:
 
     def test_w4_mnt_path_pass(self):
         assert pre_tool_hook._blue_fat_fish_wsl_story("wsl bash <home>/x.sh") is None
+
+    # ── W6（2026-11-13）：Windows 路径裸 token 在 bash 宿主被吞反斜杠 ──
+    def test_w6_powershell_file_bare_backslash_warn(self):
+        hit = pre_tool_hook._blue_fat_fish_wsl_story(
+            "powershell.exe -NoProfile -ExecutionPolicy Bypass -File "
+            "<home>\\AppData\\Local\\Temp\\e8_start.ps1")
+        assert hit is not None and hit[0] == "WARN" and "正斜杠" in hit[2]
+
+    def test_w6_pwsh_short_flag_warn(self):
+        hit = pre_tool_hook._blue_fat_fish_wsl_story("pwsh -f C:\\tmp\\x.ps1")
+        assert hit is not None and hit[0] == "WARN"
+
+    def test_w6_forward_slash_pass(self):
+        assert pre_tool_hook._blue_fat_fish_wsl_story(
+            "powershell.exe -File <home>/AppData/Local/Temp/e8_start.ps1") is None
+
+    def test_w6_single_quoted_pass(self):
+        assert pre_tool_hook._blue_fat_fish_wsl_story(
+            "powershell.exe -File '<home>\\x.ps1'") is None
+
+    def test_w6_double_quoted_pass(self):
+        assert pre_tool_hook._blue_fat_fish_wsl_story(
+            'powershell.exe -File "<home>\\x.ps1"') is None
+
+    def test_w6_quoted_payload_pass(self):
+        """外层引号包裹的载荷（bash 不吞 `\\`）不得误伤。"""
+        assert pre_tool_hook._blue_fat_fish_wsl_story(
+            "bash -c 'powershell.exe -File <home>\\x.ps1'") is None
 
     def test_empty_pass(self):
         assert pre_tool_hook._blue_fat_fish_wsl_story("") is None
@@ -2685,6 +2714,106 @@ class TestShellcheckSafenet:
         assert len(calls) == n1, "二次调用未走缓存 ⟹ 每条编辑都付一次 shellcheck 全量开销"
 
 
+class TestCommentTemplateHint:
+    """Gate R0.25 注释模版**编辑时注入面**（2026-11-13）。
+
+    病灶（owner 质询「模版自动加载咋回事」）：`gk_comment_scaffold.py` 与登记表早已在 master，
+    但 SKILL.md 无路由行、hook 无注入点 ⟹ 技能加载时拿不到入口。本闸在**编辑时**把可照做的
+    骨架命令推到 stderr（放行式主动注入，不拦截 —— 与 `_shellcheck_lint` 同族）。
+    """
+
+    @staticmethod
+    def _isolate(tmp_path, monkeypatch):
+        monkeypatch.setattr(pre_tool_hook, "SKILL_DIR", tmp_path)
+        monkeypatch.setattr(pre_tool_hook, "_COMMENT_HINT_FILE",
+                            tmp_path / ".gatekeeper.comment-hint", raising=False)
+        monkeypatch.delenv("GK_COMMENT_TEMPLATE_HINT", raising=False)
+        (tmp_path / "references").mkdir(exist_ok=True)
+        (tmp_path / "references" / "comment-templates.json").write_text(
+            json.dumps({"version": 1,
+                        "positions": ["file-header", "module-docstring", "anchor-line"],
+                        "templates": []}), encoding="utf-8")
+
+    def test_new_def_without_comment_hints(self, tmp_path, monkeypatch):
+        self._isolate(tmp_path, monkeypatch)
+        hit = pre_tool_hook._comment_template_hint(
+            "Write", {"file_path": str(tmp_path / "a.py"),
+                      "content": "def foo():\n    return 1\n"})
+        assert hit and "gk_comment_scaffold.py" in hit, hit
+        assert "scaffold" in hit and "--changed-only" in hit, hit
+
+    def test_docstring_present_is_silent(self, tmp_path, monkeypatch):
+        """负臂：已有 docstring ⟹ 不再提示（否则噪声化）。"""
+        self._isolate(tmp_path, monkeypatch)
+        hit = pre_tool_hook._comment_template_hint(
+            "Write", {"file_path": str(tmp_path / "b.py"),
+                      "content": 'def foo():\n    """为什么这样。"""\n    return 1\n'})
+        assert hit is None, hit
+
+    def test_comment_above_is_silent(self, tmp_path, monkeypatch):
+        """负臂：def 上一行是注释 ⟹ 已有意图说明，不提示。"""
+        self._isolate(tmp_path, monkeypatch)
+        hit = pre_tool_hook._comment_template_hint(
+            "Write", {"file_path": str(tmp_path / "c.py"),
+                      "content": "# 为什么：避免重复扣费\ndef foo():\n    return 1\n"})
+        assert hit is None, hit
+
+    def test_non_code_file_is_silent(self, tmp_path, monkeypatch):
+        self._isolate(tmp_path, monkeypatch)
+        hit = pre_tool_hook._comment_template_hint(
+            "Write", {"file_path": str(tmp_path / "d.md"),
+                      "content": "def foo():\n    return 1\n"})
+        assert hit is None, hit
+
+    def test_kill_switch_disables(self, tmp_path, monkeypatch):
+        self._isolate(tmp_path, monkeypatch)
+        monkeypatch.setenv("GK_COMMENT_TEMPLATE_HINT", "0")
+        hit = pre_tool_hook._comment_template_hint(
+            "Write", {"file_path": str(tmp_path / "e.py"),
+                      "content": "def foo():\n    return 1\n"})
+        assert hit is None, hit
+
+    def test_dedupe_same_path_and_digest(self, tmp_path, monkeypatch):
+        """同一文件同一内容重复编辑 ⟹ 只提示一次（hook 每次调用是新进程，须落盘去重）。"""
+        self._isolate(tmp_path, monkeypatch)
+        payload = {"file_path": str(tmp_path / "f.py"),
+                   "content": "def foo():\n    return 1\n"}
+        assert pre_tool_hook._comment_template_hint("Write", payload)
+        assert pre_tool_hook._comment_template_hint("Write", payload) is None
+
+    def test_positions_come_from_registry(self, tmp_path, monkeypatch):
+        """提示里的 position 候选来自登记表（禁第二份硬编码清单）。"""
+        self._isolate(tmp_path, monkeypatch)
+        hit = pre_tool_hook._comment_template_hint(
+            "Write", {"file_path": str(tmp_path / "g.py"),
+                      "content": "class Foo:\n    pass\n"})
+        assert "anchor-line" in hit and "module-docstring" in hit, hit
+
+    def test_registry_missing_still_hints(self, tmp_path, monkeypatch):
+        """登记表不可读 ⟹ 仍给出命令（advisory 不得因自身缺件而静默失效）。"""
+        self._isolate(tmp_path, monkeypatch)
+        (tmp_path / "references" / "comment-templates.json").unlink()
+        hit = pre_tool_hook._comment_template_hint(
+            "Write", {"file_path": str(tmp_path / "h.py"),
+                      "content": "def foo():\n    return 1\n"})
+        assert hit and "scaffold" in hit, hit
+
+    def test_edit_new_str_hints(self, tmp_path, monkeypatch):
+        self._isolate(tmp_path, monkeypatch)
+        hit = pre_tool_hook._comment_template_hint(
+            "Edit", {"file_path": str(tmp_path / "i.py"),
+                     "old_str": "x = 1", "new_str": "def bar():\n    return 2"})
+        assert hit and "gk_comment_scaffold.py" in hit, hit
+
+    def test_no_new_definition_is_silent(self, tmp_path, monkeypatch):
+        """负臂：只是改值、未新增定义 ⟹ 不提示。"""
+        self._isolate(tmp_path, monkeypatch)
+        hit = pre_tool_hook._comment_template_hint(
+            "Edit", {"file_path": str(tmp_path / "j.py"),
+                     "old_str": "x = 1", "new_str": "x = 2"})
+        assert hit is None, hit
+
+
 # ── Gate R0.8 夹具：**拼接构造**（不写完整字面量）—— 门禁落地后本文件自身仍可编辑 ──
 _SEC_SK = "sk-" + "A1b2C3d4E5f6G7h8I9j0" * 2
 _SEC_TP = "tp-" + "cakjr1ghr99il84iejjlnj7" * 2
@@ -3538,11 +3667,11 @@ class TestT6VerifyTelemetryScopeOut:
         assert self._steps(st) == [], "GK_STEP_LOG=0 未生效（scope-out 仍写 step）"
         assert [r["kind"] for r in self._rows(st)] == ["verify"], "步数开关误伤了 verify 采集"
 
-    def test_alias_routes_verify_to_worktree_token(self, tmp_path, monkeypatch):
-        """同一对话的**两个身份**：载荷 sid（命令侧）↔ worktree token（Edit 计费侧）。
+    def test_alias_does_not_override_payload_sid_for_verify(self, tmp_path, monkeypatch):
+        """2026-11-16（hook 会话派生一致性）：别名只服务 threat freeze，**不得**改写遥测 session。
 
-        实测病象：verify 落载荷桶、编辑记 token 桶 ⟹ `(session,node)` 分组永不交集 ⟹ T6
-        永不销账。本臂锁「有别名 ⟹ verify 归位到 token」。
+        病象（实测）：别名 `payload_sid → worktree token` 存在时，verify/step 落到 token 桶，
+        而 Edit 计费自 2026-11-12 起用载荷 sid ⟹ `(session,node)` 永不交集 ⟹ file_cap/T6 不销账。
         """
         st = self._mk(tmp_path, monkeypatch)
         monkeypatch.setattr(pre_tool_hook, "_SESSION_FILE", tmp_path / ".gatekeeper.session")
@@ -3550,7 +3679,9 @@ class TestT6VerifyTelemetryScopeOut:
         assert pre_tool_hook._read_session_alias("s-t6") == "budget-probe"
         assert self._run("pytest -q") == 0
         rows = self._rows(st)
-        assert rows and rows[-1]["session"] == "budget-probe", rows
+        assert rows and rows[-1]["session"] == "s-t6", rows
+        steps = self._steps(st)
+        assert steps and steps[-1]["session"] == "s-t6", steps
 
     def test_alias_absent_falls_back_to_payload_sid(self, tmp_path, monkeypatch):
         """反臂：无别名 ⟹ 不得凭空改身份（回落载荷 sid）。"""
@@ -3698,3 +3829,97 @@ def test_main_tree_write_exits_2(monkeypatch, capsys, tmp_path):
     out = capsys.readouterr().out
     assert rc == 2, f"主树写未以 exit 2 拒绝（rc={rc}）⟹ 宿主会继续落盘"
     assert "MAIN_TREE_READONLY" in out
+
+
+# ── Gate R0.3b：`wslsh <script>` 形态的脚本体扫描（2026-11-10）──────────────
+# 病象（本会话实证）：`_scan_script_content` 只认 `bash|sh|source <file>`，
+#   不认 `wslsh <file>` ⟹ 把 `git worktree remove` / `git branch -D` /
+#   `git push origin HEAD:master` 写进临时 .sh 再 `wslsh 那个.sh` 执行，
+#   命令行里一个字都没有 ⟹ **四道门（R0.3/R0.9/R0.15/R0.17）全部放行**。
+#   本轮补：`wslsh <file>` 纳入发现 + 逐行跑 R0.17（worktree 生命周期）与
+#   R0.15（主树写，含跨行 `cd` 累积）。
+def _mk_script(tmp_path, body, name="tmp.sh"):
+    p = tmp_path / name
+    p.write_text("#!/bin/bash\n" + body, encoding="utf-8", newline="\n")
+    return p
+
+
+def test_wslsh_script_worktree_remove_blocked(tmp_path):
+    p = _mk_script(tmp_path, "git -C /mnt/c/x worktree remove --force /mnt/c/x/wt\n")
+    r = pre_tool_hook._scan_script_content("wslsh %s" % p)
+    assert r and "worktree" in r[0].lower(), r
+
+
+def test_wslsh_script_branch_force_delete_blocked(tmp_path):
+    p = _mk_script(tmp_path, "git branch -D feature/gone\n")
+    r = pre_tool_hook._scan_script_content("wslsh %s" % p)
+    assert r and "branch" in r[0].lower(), r
+
+
+def test_wslsh_script_main_tree_write_via_cd_blocked(tmp_path, monkeypatch):
+    """跨行 `cd <主树>` 后写主树：单行扫描看不见 cwd，须按行累积。"""
+    main = tmp_path / "mainrepo"
+    (main / "scripts").mkdir(parents=True)
+    p = _mk_script(tmp_path, "cd %s\n\ngit commit -m x -- scripts/a.py\n" % main)
+    monkeypatch.setattr(pre_tool_hook, "SKILL_DIR", main)
+    r = pre_tool_hook._scan_script_content("wslsh %s" % p)
+    assert r and "主树" in r[0], r
+
+
+def test_wslsh_script_direct_push_master_blocked(tmp_path):
+    p = _mk_script(tmp_path, "git push origin HEAD:master\n")
+    r = pre_tool_hook._scan_script_content("wslsh %s" % p)
+    assert r and "push" in r[0].lower(), r
+
+
+def test_wslsh_script_harmless_is_silent(tmp_path):
+    p = _mk_script(tmp_path, "echo hello\ngit -C /tmp/other status\n")
+    assert pre_tool_hook._scan_script_content("wslsh %s" % p) is None
+
+
+def test_bash_script_direct_push_master_blocked(tmp_path):
+    p = _mk_script(tmp_path, "git push origin main\n")
+    r = pre_tool_hook._scan_script_content("bash %s" % p)
+    assert r and "push" in r[0].lower(), r
+
+
+# ── Gate R0.21：直推主线检测体（单元级）──────────────────────────────────
+def test_push_mainline_blocks_master_and_head_master():
+    assert pre_tool_hook._git_push_mainline_gate("git push origin master")
+    assert pre_tool_hook._git_push_mainline_gate("git push origin HEAD:master")
+    assert pre_tool_hook._git_push_mainline_gate("git -C /r push origin main")
+
+
+def test_push_mainline_allows_feature_branch_and_plain_status():
+    assert pre_tool_hook._git_push_mainline_gate("git push origin feature/x") is None
+    assert pre_tool_hook._git_push_mainline_gate("git push") is None
+    assert pre_tool_hook._git_push_mainline_gate("git status") is None
+
+
+def test_push_mainline_escape_hatch(monkeypatch):
+    assert pre_tool_hook._git_push_mainline_gate(
+        "GK_ALLOW_DIRECT_PUSH=1 git push origin master") is None
+    monkeypatch.setenv("GK_PUSH_MAINLINE_GATE", "0")
+    assert pre_tool_hook._git_push_mainline_gate("git push origin master") is None
+
+
+# ── Gate R0.24（2026-11-13）：裸合并落主树一律拦（R0.15 显式放过 merge 的洞）────────────
+
+def test_raw_merge_gate_blocks_main_tree():
+    main = str(pre_tool_hook.SKILL_DIR)
+    assert pre_tool_hook._git_merge_main_gate("git -C %s merge feature" % main)
+    assert pre_tool_hook._git_merge_main_gate("git -C %s pull" % main)
+    assert pre_tool_hook._git_merge_main_gate("git -C %s branch -f master abc1234" % main)
+
+
+def test_raw_merge_gate_allows_worktree_merge():
+    """worktree 内把主线并进自己分支是合法协作 ⟹ 不拦。"""
+    assert pre_tool_hook._git_merge_main_gate("git -C /tmp/other-wt merge origin/master") is None
+    assert pre_tool_hook._git_merge_main_gate("git -C /tmp/x branch -f feature master") is None
+    assert pre_tool_hook._git_merge_main_gate("git status") is None
+
+
+def test_raw_merge_escape_hatch():
+    main = str(pre_tool_hook.SKILL_DIR)
+    assert pre_tool_hook._git_merge_main_gate(
+        "GK_ALLOW_RAW_MERGE=1 git -C %s merge feature" % main) is None

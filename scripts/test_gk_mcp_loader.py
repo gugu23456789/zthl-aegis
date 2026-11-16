@@ -193,3 +193,6 @@ def test_tools_flag_rejected_outside_connect(tmp_path):
         == L._EXIT_MANIFEST
     assert L.main(["check", "--manifest", mp, "--tools", str(tf), "--json"]) \
         == L._EXIT_MANIFEST
+
+
+

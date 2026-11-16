@@ -194,21 +194,21 @@ def test_apply_worktree_honors_main_repo_flag():
 
 
 def test_session_identity_worktree_token_chain():
-    """ECC-AB2FA16E9133（2026-10-02）— 身份链 = env > worktree token > marker(legacy)。
+    """身份链 = env > payload/allocated sid > worktree token；marker 走**分片读面**。
 
-    病象：单槽 `.gatekeeper.session` 被并发会话（含 subagent）覆写 ⟹ CLI 自解析到**外来 sid**
-    ⟹ 其 `.gatekeeper.plan.<sid>` 缺失 ⟹ **静默**落默认 state（实测：6 条 `plan-refinement
-    --task` 入队仅 1 条落域、5 条落默认）。
-    修法：由本进程 `$PWD` 所在 git worktree 派生**平台无关** token（不依赖任何宿主 hook API ⟹
-    Trae / WorkBuddy 通用；worktree 天然按会话隔离 ⟹ 无共享单槽、无竞态）。token 档须在 marker
-    裸读**之前**（Q3a：env > token > marker）。解析单源 = `scripts/gk_session_identity.py`。
+    2026-10-02（ECC-AB2FA16E9133）：由 `$PWD` 所在 worktree 派生平台无关 token 作兜底。
+    2026-11-12（单槽并发覆盖修复）：marker 不再裸读单槽 —— 改为
+    `gk_worktree_owner.py marker`（分片 `.gatekeeper.session.<sid>` + 同源 cwd + TTL 选唯一
+    候选；多候选 = ambiguous ⟹ 不猜）。token 兜底档仍须在 marker 之前。
     """
     txt = _txt(CLI)
     i_tok = txt.find('gk_session_identity.py" derive --path "$PWD"')
     assert i_tok != -1, "启动块未接 worktree 身份 token 派生（平台无关兜底缺失）"
-    i_marker = txt.find('.gatekeeper.session" ]; then')
-    assert i_marker != -1, "未找到 marker 裸读锚（结构已变，判据须重校）"
-    assert i_tok < i_marker, "token 档须在 marker 裸读**之前**（Q3a：env > token > marker）"
+    i_marker = txt.find('gk_worktree_owner.py" marker')
+    assert i_marker != -1, "未找到 marker 分片读面锚（结构已变，判据须重校）"
+    assert i_tok < i_marker, "token 兜底档须在 marker 读面**之前**"
+    assert '.gatekeeper.session" ]; then' not in txt, "单槽裸读未移除（并发覆盖入口仍在）"
+    assert 'SESSION_MARKER_AMBIGUOUS' in txt, "多候选未 fail-loud（strict 模式缺出口）"
     assert "*[!0-9A-Za-z_-]*)" in txt, "缺 token 非法字符护栏（须文件名安全）"
 
 

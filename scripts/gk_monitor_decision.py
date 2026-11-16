@@ -117,12 +117,34 @@ def run(stage: str, endpoint: str = "", worktree: str = "", branch: str = "",
     except Exception as e:  # noqa: BLE001 — 边界：单源 transport 不可用 ⟹ 具名失败
         return {"ok": False, "error": "transport_unavailable: %s" % (e,)}
     url = ep.rstrip("/") + "/v1/systemone"
+    lease = ""
     try:
+        # T4（2026-11-12）：每次 `monitor --api` 记一条 `kind=monitor` 租约；先确保模型单元就绪。
+        #   未配置启停命令 ⟹ `ensure` 返回 advisory（旧部署/单测零回归）。
+        if os.environ.get("GK_AUDIT_MODEL_LIFECYCLE_WIRING", "1") != "0":
+            try:
+                import gk_audit_lifecycle as LC
+            except Exception as e:  # noqa: BLE001 — 接线不可用 ⟹ 具名失败
+                return {"ok": False, "error": "lifecycle_unavailable: %s" % (e,),
+                        "verdict": "UNKNOWN", "score": None}
+            lc = LC.ensure("monitor", owner_pid=os.getpid(),
+                           ttl_s=max(120.0, float(timeout) + 30.0))
+            if not lc.get("ok"):
+                return {"ok": False, "error": "lifecycle: %s" % lc.get("error"),
+                        "verdict": "UNKNOWN", "score": None}
+            lease = lc.get("lease_id") or ""
         resp = AO._post_json(url, build_request(stage, worktree, branch, evidence),
                              timeout=timeout)
     except Exception as e:  # noqa: BLE001 — 边界：后端不可达/非 JSON 一律 fail-closed
         return {"ok": False, "error": "backend_error: %s" % (e,), "verdict": "UNKNOWN",
                 "score": None}
+    finally:
+        if lease:
+            try:
+                import gk_audit_lifecycle as LC
+                LC.drop_lease(lease)
+            except Exception:  # noqa: BLE001 — 回收失败不覆盖主结果
+                pass
     out = parse_response(resp)
     out["stage"] = stage
     return out

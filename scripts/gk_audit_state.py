@@ -5,7 +5,7 @@ Gatekeeper Audit — State domain (batch8 R-T6 Phase 4a)
 Migrates `cmd_audit --state` bash heredoc (15 deterministic checks) to a
 standalone Python module, reusing `gk_state.py` for state read (incl. SHA256
 checksum warning).  Plus Phase 4c-4f extension checks (hint/self/hook/red)
-aggregated by `run_all()` — 45 项 total (state 19 + hint 4 + self 4 + hook 6 + red 12)。
+aggregated by `run_all()` — 57 项 total (state 21 + hint 4 + self 5 + hook 6 + red 12 + cost 9)。
 (历史：batch8 计划 L1007-1019 为 38；2026-09-02 HOOK-05/06 提权绕过防线+实时越权监控 +2；
 state 域 hook_block_log 意图记忆可审计性 +1；2026-09-27 C3③ subagent_reports +1；
 2026-10-02 ② 单一权威 state_forms +1（并订正 state 域计数滞后：18→21）。
@@ -24,8 +24,8 @@ Contract (compatible with bash heredoc, see docs/analysis/2026-08-10-audit-4to5-
 
 Usage:
   python3 scripts/gk_audit_state.py --state  [--state-file <f>] [--skill-dir <d>]
-  python3 scripts/gk_audit_state.py --hint | --self | --hook | --red   (Phase 4c-4f)
-  python3 scripts/gk_audit_state.py --all                               (45 项聚合)
+  python3 scripts/gk_audit_state.py --hint | --self | --hook | --red | --cost  (Phase 4c-4g)
+  python3 scripts/gk_audit_state.py --all                               (57 项聚合)
 
 Exit codes: 0 = OK (JSON on stdout), 1 = error JSON (stderr not swallowed).
 2026-08-19: Phase 4a — 从 cmd_audit bash heredoc L4952-5115 迁移。
@@ -90,19 +90,47 @@ def reconcile_subagent_reports(gd: dict, skill_dir: str = _SKILL_DIR) -> dict:
     `aged_out`/`legacy`（仅计数）、`ok`（窗口内双向缺口皆空）、`issues`（可读摘要）。
     """
     hist = [e for e in (gd.get("subagent_history") or []) if isinstance(e, dict)]
-    entry_set = {str(e.get("subagent_id") or "") for e in hist}
-    entry_set.discard("")
+    entry_by_id = {}
+    for e in hist:
+        sid = str(e.get("subagent_id") or "")
+        if sid:
+            entry_by_id[sid] = e
+    entry_set = set(entry_by_id)
+    # 2026-11-12（ECC-7BC2E1474652 真修·其二）：条目自带 `report_file`/`output_file` 指针，
+    #   指针里的 id 与 `subagent_id` **未必同名**（实测 `sub-1794412237-569-1317` 的报告实为
+    #   `_pool/.../slot-1/.../sub-1794411954-569-8151.md`，文件真实存在）⟹ 指针所指文件
+    #   **实存**即判该条目报告已落盘（直接证据，强于按 id 猜名）；不存在则仍按 id 名判定。
+    declared_stems, declared_ok = set(), set()
+    for sid, e in entry_by_id.items():
+        for k in ("report_file", "output_file"):
+            p = str(e.get(k) or "").strip()
+            if not p:
+                continue
+            stem = Path(p.replace("\\", "/")).stem
+            if stem:
+                declared_stems.add(stem)
+            if Path(p).is_file():
+                declared_ok.add(sid)
     rdir = Path(skill_dir) / "docs" / "analysis" / "subagent"
-    files = sorted(p.stem for p in rdir.glob("*.json")) if rdir.is_dir() else []
+    # 2026-11-12（ECC-7BC2E1474652 真修）：臂报告落 `*.md`，旧判据却扫 `*.json` ⟹ 恒报
+    #   `entries_without_files`；且历史报告已归档到 `archive/`（仍在库）⟹ 两处都要扫。
+    files = []
+    if rdir.is_dir():
+        stems = {p.stem for p in rdir.glob("*.md")} | {p.stem for p in rdir.glob("*.json")}
+        adir = rdir / "archive"
+        if adir.is_dir():
+            stems |= {p.stem for p in adir.glob("*.md")}
+        files = sorted(stems)
     file_set = set(files)
 
-    entries_without_files = sorted(x for x in entry_set if x not in file_set)
+    entries_without_files = sorted(x for x in entry_set
+                                   if x not in file_set and x not in declared_ok)
     eps = [e for e in (_epoch_of_report_id(x) for x in entry_set) if e is not None]
     window_start = min(eps) if eps else None
 
     files_without_entries, aged_out, legacy = [], 0, 0
     for f in files:
-        if f in entry_set:
+        if f in entry_set or f in declared_stems:
             continue
         e = _epoch_of_report_id(f)
         if e is None:
@@ -123,11 +151,14 @@ def reconcile_subagent_reports(gd: dict, skill_dir: str = _SKILL_DIR) -> dict:
         issues.append("aged_out=%d（配额滑出，非异常）" % aged_out)
     if legacy:
         issues.append("legacy_named=%d（无 epoch 命名，不参与窗口判定）" % legacy)
+    if declared_ok:
+        issues.append("resolved_by_declared_path=%d（条目指针所指报告实存）" % len(declared_ok))
 
     return {"entries": len(entry_set), "files": len(files), "window_start": window_start,
             "entries_without_files": entries_without_files,
             "files_without_entries": files_without_entries,
             "aged_out": aged_out, "legacy": legacy,
+            "resolved_by_declared_path": len(declared_ok),
             "ok": not entries_without_files and not files_without_entries,
             "issues": issues}
 
@@ -163,6 +194,57 @@ def _edit_budget_raises(state_path: str) -> tuple:
         return _cr(state_path)
     except Exception:
         return (0, 0)
+
+
+def debt_source_coverage(state_path: str) -> dict:
+    """D6b 可见性覆盖（2026-11-16，owner 选「可见性覆盖」）：提额事件 ↔ credit 记账行差集。
+
+    口径：**不新增 raise** —— owner 2026-10-19 方案 a 已把预算记账定为 `bookkeeping`
+    （中性 delta=0，`reconcile` 不计债）。本函数只读，把「有提额、无 credit 记账」的差额
+    显形；`raise_backed` 单列，供对照。
+    覆盖 = 每个 budget-log 提额事件都有一条 credit 记账行（`bookkeeping` 或 `raise`）。
+    只读；日志/账本不可读 ⟹ `match=False` + 具名 detail（不静默当 0）。
+    """
+    out = {"field": "debt_source_coverage", "overrides": 0, "credited": 0,
+           "raise_backed": 0, "uncovered": 0, "match": True, "status": "PASS",
+           "detail": ""}
+    try:
+        import sys as _sys
+        _sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from gk_opcap_export import OVERRIDE_SOURCES, read_budget_events
+        events = read_budget_events(state_path)
+    except Exception as e:  # noqa: BLE001 — 边界：读数不可用 ⟹ 显式 WARN
+        out.update({"match": False, "status": "WARN",
+                    "detail": "budget-log unreadable: %s" % type(e).__name__})
+        return out
+    ov = sum(1 for r in events if str(r.get("source") or "") in OVERRIDE_SOURCES)
+    credited = raises = 0
+    led = Path(str(state_path) + ".credit-ledger.jsonl")
+    if led.exists():
+        try:
+            lines = led.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            lines = []
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            k = str((rec or {}).get("kind") or "")
+            if k in ("bookkeeping", "raise"):
+                credited += 1
+                if k == "raise":
+                    raises += 1
+    uncovered = max(0, ov - credited)
+    out.update({"overrides": ov, "credited": credited, "raise_backed": raises,
+                "uncovered": uncovered, "match": uncovered == 0,
+                "status": "PASS" if uncovered == 0 else "WARN",
+                "detail": ("%d 提额事件 / %d credit 记账（raise=%d）⟹ 未覆盖 %d"
+                           % (ov, credited, raises, uncovered)) if ov or credited else "无提额事件"})
+    return out
 
 
 # E23（2026-10-29，owner 批准「收紧版」）：`ecc_findings` 旧判据 `open == 0` 是
@@ -446,19 +528,33 @@ def check_state_file(state_path: str, skill_dir: str = _SKILL_DIR) -> dict:
                    "issues": _rep["issues"][:5]})
 
     # 8. block_log — D14 命令集中度 + G-14 频率趋势
+    # 2026-11-12（ECC-69F9DC1D5D4F 真修）：原判据按 `command` 在**最近 10 条**里计数，但生产
+    #   hook 写入的 `command` 恒为入口名 `pre-tool-check`（实测 100/100）⟹ 只要有 ≥3 条 block
+    #   就**恒判 concentrated**（结构性不可达：判决不取决于行为，且 `declared="N entries"` 无法
+    #   复现该判决 ⟹ 审计每次自动登记一条「不可复现」finding）。现判据三条：
+    #     ① 维度 = `reason`（真正拦截原因；缺失才回落 `command`）——`edit_gate:…` / `file_cap:…`
+    #        才是「被拦的动作」，入口名不是；
+    #     ② 只看**尾部连续同因**（≥3）= 「**仍然**卡在同一个动作」的活循环；历史爆发会随新 block
+    #        出尾而自动消解（原判据让一次事故永久钉红，且永不可清）；
+    #     ③ `declared` 带被判切片（tail_run / recent / older）⟹ 第三方可由声明值复现判决。
     bl = gd.get("block_log", []) or []
     bl_ok, bl_issues = True, []
+    tail_key, tail_run, recent_n, older_n = "", 0, 0, 0
     if len(bl) >= 3:
-        cmds = [e.get("command", "") for e in bl[-10:] if isinstance(e, dict)]
-        freq = {}
-        for c in cmds:
-            freq[c] = freq.get(c, 0) + 1
-        if freq:
-            top_cmd = max(freq, key=freq.get)
-            top_count = freq.get(top_cmd, 0)
-            if top_count >= 3:
-                bl_ok = False
-                bl_issues.append(f"concentrated:{top_cmd}={top_count}")
+
+        def _bl_key(e):
+            return str(e.get("reason") or e.get("command") or "")
+
+        keys = [_bl_key(e) for e in bl if isinstance(e, dict)]
+        if keys:
+            tail_key = keys[-1]
+            for k in reversed(keys):
+                if k != tail_key:
+                    break
+                tail_run += 1
+        if tail_key and tail_run >= 3:
+            bl_ok = False
+            bl_issues.append(f"concentrated:tail {tail_key}×{tail_run}")
         timestamps = []
         for e in bl[-20:]:
             if isinstance(e, dict):
@@ -471,13 +567,15 @@ def check_state_file(state_path: str, skill_dir: str = _SKILL_DIR) -> dict:
         if len(timestamps) >= 4:
             ts_sorted = sorted(timestamps)
             mid_ts = ts_sorted[len(ts_sorted) // 2]
-            recent_count = sum(1 for t in ts_sorted if t >= mid_ts)
-            older_count = len(ts_sorted) - recent_count
-            if recent_count > older_count * 1.5 and recent_count >= 3:
+            recent_n = sum(1 for t in ts_sorted if t >= mid_ts)
+            older_n = len(ts_sorted) - recent_n
+            if recent_n > older_n * 1.5 and recent_n >= 3:
                 bl_ok = False
-                bl_issues.append(f"frequency_increasing:recent={recent_count} vs older={older_count}")
-    checks.append({"field": "block_log", "declared": f"{len(bl)} entries",
-                   "replay": "check concentration+frequency", "match": bl_ok,
+                bl_issues.append(f"frequency_increasing:recent={recent_n} vs older={older_n}")
+    checks.append({"field": "block_log",
+                   "declared": (f"{len(bl)} entries; tail={tail_key or '-'}×{tail_run}; "
+                                f"recent={recent_n}/older={older_n}"),
+                   "replay": "check reason concentration (tail run) + frequency", "match": bl_ok,
                    "issues": bl_issues[:3] if bl_issues else []})
 
     # 9. sealed_agent_score — D10: ECO-EDIT 完成但无密封分 = 失败
@@ -489,6 +587,19 @@ def check_state_file(state_path: str, skill_dir: str = _SKILL_DIR) -> dict:
             if f not in seal:
                 seal_ok = False
                 seal_issues.append(f"missing:{f}")
+        # 2026-11-12（RED-SCOPE-02 真修）：盖上完整性戳后，审计面须**验戳**（内容改过 ⟹ 不符）。
+        #   无戳（历史遗留 / 绕过写侧）不在本项判 FAIL —— 该缺口由红队 `red_scope` 报 SCOPE-02。
+        if seal.get("hash"):
+            try:
+                _d = os.path.dirname(os.path.abspath(__file__))
+                if _d not in sys.path:
+                    sys.path.insert(0, _d)
+                import gk_seal
+                if not gk_seal.verify(seal):
+                    seal_ok = False
+                    seal_issues.append("hash_mismatch")
+            except Exception:  # noqa: BLE001 — 单源不可用 ⟹ 不做臆断（红队面仍会报）
+                pass
     else:
         if eco_edit_completed:
             seal_ok = False
@@ -745,7 +856,9 @@ def check_state_file(state_path: str, skill_dir: str = _SKILL_DIR) -> dict:
             "audit_summary": {"total_fields": len(checks),
                               "matches": sum(1 for c in checks if c.get("match"))},
             # 2026-10-30（裁①）：只读观测，非 check（不进 total_fields）。
-            "credit_score": credit_score_block(state_path)}
+            "credit_score": credit_score_block(state_path),
+            # D6b（2026-11-16）：只读观测，非 check（不进 total_fields）。
+            "debt_source_coverage": debt_source_coverage(state_path)}
 
 
 # ---------------------------------------------------------------------------
@@ -791,11 +904,12 @@ def check_hint(skill_dir: str = _SKILL_DIR) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Phase 4d: AUDIT-SELF — gk_self_check.py 自检完整性 (4 项, 计划 L1984-1988)
+# Phase 4d: AUDIT-SELF — gk_self_check.py 自检完整性 (5 项, 计划 L1984-1988；
+#   2026-11-11 增 SELF-05 cron dead-man switch)
 # ---------------------------------------------------------------------------
 
 def check_self(skill_dir: str = _SKILL_DIR) -> dict:
-    """4 checks: run_all 注册 / try-except 隔离 / 动态提取 / gitnexus runner."""
+    """5 checks: run_all 注册 / try-except 隔离 / 动态提取 / gitnexus runner / cron dead-man。"""
     checks = []
     sc_path = Path(skill_dir) / "scripts" / "gk_self_check.py"
     sc_text = sc_path.read_text(encoding="utf-8", errors="replace") if sc_path.exists() else ""
@@ -846,7 +960,33 @@ def check_self(skill_dir: str = _SKILL_DIR) -> dict:
                    "replay": "scan check_gitnexus body (.gitnexus/run.cjs runner)", "match": gn_ok,
                    "issues": [] if gn_ok else ["project-local runner missing"]})
 
+    # SELF-05（2026-11-11）：cron **dead-man switch** —— 委托 `gk_self_check.check_cron_health`
+    #   （判据**单源**，本处禁复制阈值）。动因：该检测器 2026-11-01 就存在，但只在人工跑
+    #   `self-check` 时才执行 ⟹ 从不进常驻链 ⟹ tick 停摆 / 作业连续失败**永不被审计发现**
+    #   （实测 model-radar streak=3、11-10 与 11-11 各缺一次 tick，均无告警）。
+    cron = {"status": "SKIP", "detail": "gk_self_check 不可用"}
+    try:
+        _sd = str(Path(skill_dir) / "scripts")
+        if _sd not in sys.path:
+            sys.path.insert(0, _sd)
+        from gk_self_check import check_cron_health
+        cron = check_cron_health()
+    except Exception as e:  # noqa: BLE001 — 边界：单体检查不可用不得拖垮审计
+        cron = {"status": "WARN", "detail": "cron_health 不可用: %s: %s" % (type(e).__name__, e)}
+    checks.append({"field": "self_cron_health",
+                   "declared": "tick 新鲜 + 无逾期 + 无连续失败",
+                   "replay": "gk_self_check.check_cron_health()（单源委托，dead-man switch）",
+                   "match": cron.get("status") in ("PASS", "SKIP"),
+                   "status": cron.get("status"),
+                   "detail": cron.get("detail", ""),
+                   "tick_age_s": cron.get("tick_age_s"),
+                   "overdue": cron.get("overdue") or [],
+                   "failed_jobs": cron.get("failed_jobs") or []})
+
     return {"self_checks": checks,
+            "self_failures": [{"field": c["field"], "severity": "high",
+                               "detail": c.get("detail", "")}
+                              for c in checks if c.get("status") == "FAIL"],
             "audit_summary": {"total_fields": len(checks),
                               "matches": sum(1 for c in checks if c.get("match"))}}
 
@@ -1053,24 +1193,251 @@ def check_red(skill_dir: str = _SKILL_DIR) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Aggregator — 43 项全量 (Phase 4a state 18 + hint 4 + self 4 + hook 6 + red 11)
+# Phase 4g: AUDIT-COST — 动态攻防面**防退化**（2026-11-11）
+#   编制定位：诱饵 / 违约台账 / 事件驱动 monitor 若无人巡检，删诱饵、放宽阈值、
+#   monitor 永不运行都不会有人发现。本段只做**确定性只读**检查；失败登记 finding。
+# ---------------------------------------------------------------------------
+def _opaque_line_ok(line: str) -> bool:
+    """被隔离方可见行必须**单行零信息**（不含路径/state/worktree/canary/内部前缀）。"""
+    s = str(line or "").strip()
+    if not s or "\n" in s or "\r" in s:
+        return False
+    low = s.lower()
+    return not any(x in low for x in ("/", "state", "worktree", "canary", "gatekeeper-", "sid"))
+
+
+def _hook_order_ok(text: str) -> bool:
+    """`_deception_gate(` **调用**必须早于 scope 解析（`scope_out = False`），且存在 `_opaque_block(`。"""
+    t = text or ""
+    i = t.rfind("_deception_gate(")          # 最后一次出现 = 调用点（首次是 def）
+    j = t.find("scope_out = False")
+    return (t.find("def _deception_gate(") >= 0 and i >= 0 and j >= 0
+            and i < j and "_opaque_block(" in t)
+
+
+def _advance_freeze_wired(skill_dir: str) -> bool:
+    """`gk_advance` 必须仍调 `_threat_budget_cap(` → `gk_threat.budget_freeze(`（防「删接线」）。"""
+    try:
+        t = (Path(skill_dir) / "scripts" / "gk_advance.py").read_text(
+            encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+    return "_threat_budget_cap(" in t and "budget_freeze(" in t
+
+
+def _bank_key(sid: str, sessions: dict, alias: str = ""):
+    """违约台账明文 sid ↔ 额度银行会话键（`edit_budget.sessions.<key>`）。
+
+    两侧命名空间不一致：台账 = hook 的 `_env_sid or _pay_sid`（载荷 sid，常见 24 hex），
+    银行 = CLI 的 `GK_SESSION_ID`（worktree token，常见 8 hex）。两者通常**不是**同一哈希的
+    截断 ⟹ 首选 `alias`（`gk_threat.session_alias` 的别名分片）；其次精确相等；最后才允许
+    前缀对齐（短者 ≥8）。返回键或 None（None = 键错配，审计须 FAIL 暴露）。
+    """
+    if not isinstance(sessions, dict):
+        return None
+    for cand in (alias, sid):
+        if not cand:
+            continue
+        if cand in sessions:
+            return cand
+        for k in sessions:
+            k = str(k or "")
+            if not k:
+                continue
+            short, long_ = (k, cand) if len(k) <= len(cand) else (cand, k)
+            if len(short) >= 8 and long_.startswith(short):
+                return k
+    return None
+
+
+def _threat_budget_projection(threat, state_path: str, skill_dir: str) -> dict:
+    """只读投影：冷却期内的违约 sid ↔ 额度银行会话盒（**不写状态、不改额度**）。
+
+    返回 `{ok, detail}`；`ok=False` 只在「有违约但键对不上」或「接线被删」时为真失败。
+    """
+    wired = _advance_freeze_wired(skill_dir)
+    if not state_path:
+        return {"ok": True, "detail": "wired=%s no_state" % wired}
+    try:
+        cd = threat.cooldown_s()
+        evs = threat.events_all(state=state_path, window=cd)
+    except Exception as e:  # noqa: BLE001 — 审计不得因台账读失败而崩
+        return {"ok": False, "detail": "%s: %s" % (type(e).__name__, e)}
+    if not evs:
+        return {"ok": wired, "detail": "wired=%s cooldown=%ds no_violation" % (wired, cd)}
+    sids = sorted({str(e.get("sid") or "") for e in evs if str(e.get("sid") or "")})
+    gd = (_load_state(state_path) or {}).get("gate_data") or {}
+    sessions = (gd.get("edit_budget") or {}).get("sessions") or {}
+    boxes, unmatched = {}, []
+    for sid in sids:
+        key = _bank_key(sid, sessions, threat.session_alias(sid, state=state_path))
+        if key is None:
+            if sessions:            # 有银行账户却对不上 ⟹ 联动静默失联，必须 FAIL
+                unmatched.append(sid)
+            continue
+        box = sessions.get(key) or {}
+        boxes[key] = {k: box.get(k) for k in ("max", "used", "remaining")}
+    ok = wired and not unmatched
+    detail = ("wired=%s cooldown=%ds events=%d sids=%d boxes=%s unmatched=%s"
+              % (wired, cd, len(evs), len(sids), boxes, unmatched[:5]))
+    return {"ok": ok, "detail": detail}
+
+
+def check_cost(skill_dir: str = _SKILL_DIR, state_path: str = "", repo: str = "") -> dict:
+    """Phase 4g：动态攻防面防退化（9 项，只读、确定性、0 API）。
+
+    `repo` 缺省 = `skill_dir`（诱饵装在哪个仓就查哪个仓）；`state_path` 只用于
+    「monitor 是否在消费」这一项（窗口内有信号但游标滞后 >24h ⟹ 失效）。
+    """
+    checks, failures = [], []
+
+    def add(field: str, ok: bool, why: str = "", severity: str = "medium") -> None:
+        checks.append({"field": field, "declared": "AUDIT-COST",
+                       "replay": "AUDIT-COST 防退化（只读）", "match": bool(ok),
+                       "detail": why})
+        if not ok:
+            failures.append({"field": field, "severity": severity, "detail": why})
+
+    try:
+        scripts = Path(skill_dir) / "scripts"
+        if str(scripts) not in sys.path:
+            sys.path.insert(0, str(scripts))
+        import gk_canary as canary
+        import gk_monitor_rotation as monitor
+        import gk_threat as threat
+    except Exception as e:  # noqa: BLE001 — 模块不可得 ⟹ 具名失败（不静默通过）
+        add("cost_modules", False, "%s: %s" % (type(e).__name__, e), "high")
+        return {"cost_checks": checks, "cost_failures": failures, "cost_registry": {},
+                "audit_summary": {"total_fields": len(checks), "matches": 0}}
+
+    rr = Path(repo or skill_dir)
+    reg = canary.load(rr)
+    installed = (rr / canary.DECOY_DIRNAME).exists()
+    add("cost_canary_registry", (reg is not None) if installed else True,
+        "installed=%s registry=%s" % (installed, bool(reg)), "high")
+
+    decoys = (reg or {}).get("decoys") or []
+    missing = [d.get("rel") for d in decoys
+               if d.get("rel") and not (rr / str(d["rel"]).rstrip("/")).exists()]
+    add("cost_canary_paths", (not missing) if reg else True,
+        "missing=%s" % (missing[:5],), "high")
+
+    bad_hash = []
+    if reg:
+        for d in decoys:
+            if d.get("kind") == "registry" or not d.get("sha256"):
+                continue                       # 注册表自哈希在写前计算 ⟹ 天然不自洽，跳过
+            p = rr / str(d.get("rel") or "").rstrip("/")
+            if p.is_file() and canary._sha256(p) != d.get("sha256"):
+                bad_hash.append(d.get("rel"))
+    add("cost_canary_hashes", (not bad_hash) if reg else True,
+        "mismatch=%s" % (bad_hash[:5],), "high")
+
+    slots = (reg or {}).get("slots") or []
+    cap = canary.MAX_SLOTS * 8 + 1
+    add("cost_canary_bounded",
+        (len(slots) <= canary.MAX_SLOTS and len(decoys) <= cap) if reg else True,
+        "slots=%d decoys=%d cap=%d" % (len(slots), len(decoys), cap), "high")
+
+    th_ok = (threat.SUSPICIOUS_AT_DEFAULT == 1 and threat.QUARANTINE_AT_DEFAULT == 3
+             and threat.WINDOW_S_DEFAULT == 3600
+             and threat.quarantine_at() >= threat.suspicious_at())
+    add("cost_threat_thresholds", th_ok,
+        "suspicious=%s quarantine=%s window=%s"
+        % (threat.SUSPICIOUS_AT_DEFAULT, threat.QUARANTINE_AT_DEFAULT,
+           threat.WINDOW_S_DEFAULT), "high")
+
+    add("cost_threat_zero_info", _opaque_line_ok(threat.SINGLE_LINE),
+        "line=%r" % (threat.SINGLE_LINE,), "high")
+
+    # 2026-11-11（违约 → 额度银行）：审计只读投影 —— 冷却期内的违约 sid 必须能在
+    # `edit_budget.sessions.<key>` 找到对应账户，且 advance 接线不得被删。不写任何状态。
+    proj = _threat_budget_projection(threat, state_path, skill_dir)
+    add("cost_threat_budget", proj["ok"], proj["detail"], "high")
+
+    hook_text = ""
+    try:
+        hook_text = (Path(skill_dir) / "scripts" / "pre_tool_hook.py").read_text(
+            encoding="utf-8", errors="replace")
+    except OSError:
+        pass
+    add("cost_hook_wiring", _hook_order_ok(hook_text),
+        "deception_gate 必须先于 scope 解析", "high")
+
+    fresh_ok, why = True, "no_signal_24h"
+    if state_path:
+        try:
+            evs = threat.events_all(state=state_path, window=86400)
+            if evs:
+                cur = float(monitor.status(state=state_path).get("cursor") or 0)
+                now_ts = datetime.now(timezone.utc).timestamp()
+                fresh_ok = cur >= now_ts - 86400
+                why = "events=%d cursor=%.0f" % (len(evs), cur)
+        except Exception as e:  # noqa: BLE001
+            fresh_ok, why = False, "%s: %s" % (type(e).__name__, e)
+    add("cost_monitor_freshness", fresh_ok, why, "medium")
+
+    return {"cost_checks": checks, "cost_failures": failures,
+            "cost_registry": {"installed": installed,
+                              "generation": int((reg or {}).get("generation") or 0),
+                              "slots": slots, "decoys": len(decoys)},
+            "audit_summary": {"total_fields": len(checks),
+                              "matches": sum(1 for c in checks if c["match"])}}
+
+
+_FINDING_LABELS = {
+    "cost": ("AUDIT-COST 退化: ", "AUDIT-COST / Phase 4g"),
+    "self": ("AUDIT-SELF 失效: ", "AUDIT-SELF / Phase 4c"),
+}
+
+
+def _register_audit_findings(state_path: str, failures: list, domain: str = "cost") -> None:
+    """失败项登记 finding（幂等：root_key = `<domain>:<field>`；来源 = audit，owner = security）。
+
+    `domain` 决定 root_key 前缀与文案；只有 **FAIL** 才登记（WARN = advisory，不产 finding，
+    否则「单次漏跳」也会变成 defs 噪声，与 `_register_cost_findings` 原口径一致）。
+    """
+    if not state_path or not failures:
+        return
+    try:
+        import gk_finding as F  # noqa: PLC0415 — 只在聚合写侧 lazy import
+    except Exception:  # noqa: BLE001
+        return
+    prefix, note = _FINDING_LABELS.get(domain, _FINDING_LABELS["cost"])
+    for f in failures:
+        try:
+            F.register(state_path, prefix + str(f.get("field")), "audit",
+                       root_key="%s:%s" % (domain, f.get("field")),
+                       severity=str(f.get("severity") or "medium"),
+                       owner="security", source_note=note)
+        except Exception:  # noqa: BLE001 — 登记失败不阻断审计输出
+            continue
+
+
+# ---------------------------------------------------------------------------
+# Aggregator — 57 项全量 (Phase 4a state 21 + hint 4 + self 5 + hook 6 + red 12 + cost 9)
 # ---------------------------------------------------------------------------
 
 def run_all(state_path: str, skill_dir: str = _SKILL_DIR) -> dict:
-    """Aggregate all Phase 4a-4f checks into one dict (41 checks total:
-    state 17 + hint 4 + self 4 + hook 6 + red 10)."""
+    """Aggregate all Phase 4a-4g checks into one dict (57 checks total:
+    state 21 + hint 4 + self 5 + hook 6 + red 12 + cost 9)."""
     out = {}
     out.update(check_state_file(state_path, skill_dir))
     out.update(check_hint(skill_dir))
     out.update(check_self(skill_dir))
     out.update(check_hook(skill_dir, state_path))
     out.update(check_red(skill_dir))
+    out.update(check_cost(skill_dir, state_path))
     all_checks = (out.get("state_checks", []) + out.get("hint_checks", [])
                   + out.get("self_checks", []) + out.get("hook_checks", [])
-                  + out.get("red_checks", []))
+                  + out.get("red_checks", []) + out.get("cost_checks", []))
     out["audit_summary"] = {"total_fields": len(all_checks),
                             "matches": sum(1 for c in all_checks if c.get("match"))}
-    out["domains"] = ["state", "hint", "self", "hook", "red"]
+    out["domains"] = ["state", "hint", "self", "hook", "red", "cost"]
+    # 失败项登记 finding（source=audit / owner=security）；登记失败不阻断审计输出。
+    # 2026-11-11：self 域同样登记 —— dead-man switch 的价值就在「FAIL 必须变成可见 finding」。
+    _register_audit_findings(state_path, out.get("cost_failures") or [], "cost")
+    _register_audit_findings(state_path, out.get("self_failures") or [], "self")
     return out
 
 
@@ -1083,7 +1450,7 @@ def main(argv=None):
     i = 0
     while i < len(args):
         a = args[i]
-        if a in ("--state", "--hint", "--self", "--hook", "--red", "--all"):
+        if a in ("--state", "--hint", "--self", "--hook", "--red", "--cost", "--all"):
             mode = a.lstrip("-")
         elif a == "--state-file" and i + 1 < len(args):
             state_path = args[i + 1]
@@ -1108,6 +1475,8 @@ def main(argv=None):
             result = check_hook(skill_dir, state_path)
         elif mode == "red":
             result = check_red(skill_dir)
+        elif mode == "cost":
+            result = check_cost(skill_dir, state_path)
         elif mode == "all":
             result = run_all(state_path, skill_dir)
             # 2026-10-08（§23.3 对策①②）：edit-log 维护 = **区外低频**边界（审计）。

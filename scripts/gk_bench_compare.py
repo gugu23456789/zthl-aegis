@@ -50,7 +50,8 @@ def _git_head() -> str:
 #   bench 探针测到的物理行为（写路径/锁/卫星/claim），是「机制变化」的判据面。
 _MECH_MODULES = (
     "scripts/gk_json_utils.py", "scripts/gk_state.py", "scripts/gk_satellite.py",
-    "scripts/gk_state_patch.py", "scripts/gk_write_claims.py", "gatekeeper-cli.sh",
+    "scripts/gk_state_patch.py", "scripts/gk_state_wal.py", "scripts/gk_write_claims.py",
+    "gatekeeper-cli.sh",
 )
 
 
@@ -72,6 +73,33 @@ def _has_amp_state(bench: dict) -> bool:
         if "amp_per_state" in s:
             return True
     return False
+
+
+def _p99(scenario: dict):
+    """p99 读取：真实 bench 把延迟放在 `latency.p99_ms`；旧夹具/旧基线在顶层。
+
+    2026-11-14 修正：原实现只读顶层键 ⟹ 真实 full/quick 报告的 p99 对比**恒为空操作**。
+    """
+    s = scenario or {}
+    lat = s.get("latency") or {}
+    v = lat.get("p99_ms")
+    return s.get("p99_ms") if v is None else v
+
+
+def _amp_key(b: dict, c: dict) -> str:
+    """两侧都有**正值** `amp_per_state` 时用它；否则回落兼容别名 `write_amp`。
+
+    2026-11-14：amp_per_state 在 2 位小数时代会被舍成 0.0 ⟹ 不能拿 0 当分母；
+    现在 bench 侧保留 4 位小数，且这里显式要求两侧 > 0 才切换口径。
+    """
+    bv = (b or {}).get("amp_per_state")
+    cv = (c or {}).get("amp_per_state")
+    try:
+        if bv is not None and cv is not None and float(bv) > 0 and float(cv) > 0:
+            return "amp_per_state"
+    except (TypeError, ValueError):
+        pass
+    return "write_amp"
 
 
 def _commits_since(base_head: str, repo: str = ".") -> int:
@@ -126,7 +154,7 @@ def diagnose(res: dict, baseline: dict, current: dict, repo: str = ".") -> dict:
 
 
 def _ratio(label: str, scenario: str, base, cur, tol: float, res: dict,
-           soft: bool = False) -> None:
+           soft: bool = False, field: str = "") -> None:
     if base in (None, 0) or cur is None:
         return
     if float(cur) > float(base) * float(tol):
@@ -136,6 +164,8 @@ def _ratio(label: str, scenario: str, base, cur, tol: float, res: dict,
             "detail": "%.2fx > %.2fx（baseline × %.2f）"
                       % (float(cur) / float(base), float(tol), float(tol)),
         }
+        if field:
+            item["field"] = field
         (res["warnings"] if soft else res["violations"]).append(item)
 
 
@@ -157,9 +187,10 @@ def compare(baseline: dict, current: dict, tolerance: float = 1.25,
                 res["violations"].append({"metric": "state.scenario", "scenario": name,
                                           "detail": "当前结果缺该场景"})
                 continue
-            _ratio("state.write_amp", name, b.get("write_amp"), c.get("write_amp"),
-                   tolerance, res, no_ratio)
-            _ratio("state.p99_ms", name, b.get("p99_ms"), c.get("p99_ms"),
+            amp_key = _amp_key(b, c)
+            _ratio("state.write_amp", name, b.get(amp_key), c.get(amp_key),
+                   tolerance, res, no_ratio, field=amp_key)
+            _ratio("state.p99_ms", name, _p99(b), _p99(c),
                    tolerance, res, no_ratio)
             if int(c.get("success_ops", 0) or 0) < int(c.get("total_ops", 0) or 0):
                 res["violations"].append({
@@ -252,6 +283,14 @@ def _sanitize(obj):
 
 
 def _write_baseline(path: str, current: dict) -> dict:
+    # 2026-11-14：重采基线不得丢掉人工维护字段（pending_checks / stale_after_commits）。
+    prev = {}
+    if os.path.isfile(path):
+        try:
+            with open(path, encoding="utf-8") as f:
+                prev = json.load(f) or {}
+        except (OSError, ValueError):
+            prev = {}
     base = {
         "schema": "gk-bench-baseline/v1",
         "created_at": datetime.now(timezone.utc).isoformat(),
@@ -261,6 +300,9 @@ def _write_baseline(path: str, current: dict) -> dict:
                        for k in ("state", "satellite", "gate", "release")
                        if current.get(k) is not None},
     }
+    for key in ("pending_checks", "stale_after_commits"):
+        if key in prev:
+            base[key] = prev[key]
     os.makedirs(os.path.dirname(os.path.abspath(path)) or ".", exist_ok=True)
     with open(path, "w", encoding="utf-8", newline="\n") as f:
         json.dump(base, f, ensure_ascii=False, indent=2)

@@ -90,6 +90,67 @@ bash gatekeeper-cli.sh finding verify <id> true | finding close <id> <来源> | 
 `anchors` · `facets` · `root_key` · `closure_oracle` · `cover_layers`；并附
 `source_note = "promoted from <文件名> sha256=<前16位>"` 留痕来源。
 
+### 3.1 关单**对偶验收门**（`_accept_gate`；2026-10-13 起，2026-11-12 收紧）
+
+关单不是「填个来源」，而是**验收** —— 对偶于 `register` 的 `route_hard` 准入预检：
+
+| `closure_oracle` | 允许的关单证据 | 说明 |
+|---|---|---|
+| `mechanical` / 空 | `commit:<可解析 sha>` · `tests:<用例/结果>` · `arm:<臂>` · `crossr:<交叉复核>` · `red:<红队>` · `monitor:<监控>` | **必须至少一段**可核验证据 |
+| `judgment` | 同上，或 `--ack-accept`（落 journal `accept_ack`） | 判断类才允许人工确认 |
+
+- **`review:` 单独不算证据**（自证）；与其它证据拼接时（如 `tests:…;review:…`）只认前者。
+- 伪证据 fail-loud：`commit:<不可解析 sha>` ⟹ `ECC_CLOSE_ACCEPT_FAIL`，status 不变。
+- **多源台账**（同 id 在默认域与 `--domain` 域并存）必须 `--all-sources`，否则拒绝并给冲突清单
+  （`finding conflicts` 支持 `--converge --apply` / `--dedupe --apply`）。
+- 逃生舱：`--ack-accept` **仅** `closure_oracle=judgment` 可用；机械类不得用 ack 绕过。
+- 零回归：模块内调用 `accept_hard=False` 不设门；`GK_FINDING_ACCEPT=0` 可关。
+
+### 3.2 时效性置信度（**只读标签**；2026-11-12 起）
+
+`finding status` 输出附 `stale_labels`（只读派生：**不写盘 / 不改 status / 不参与门禁**）：
+
+- 基准 = 最近一次**复核**（`verified_at` / `last_modified` / `closed_at` / `created_at` 取最大）；
+- 分档（**阈值不写死在本节**，见 §3.3 事实块 —— 自动取自代码）：`fresh`（不展示）｜
+  `aging`「可能已过时」｜`stale`「大概率已失真」｜无时间戳 = `unknown`（不臆造时间）；
+- 唯一作用 = **提醒**：条目放太久，内容可能已与现状不符，据此决策前须重新核实；
+- ⚠ 与 `finding stale`（TTL 巡检，可 `--apply` 标记过期）是**两件事**：前者永远只读，后者才写 state。
+
+### 3.3 机械事实块（**自动刷新**，勿手改）
+
+> 本节由 `scripts/gk_docgen_facts.py --write` 从 `scripts/gk_finding.py` 的**登记点**生成；
+> `docgen --check` / `doc-align` / `audit --docs` 会验它与活代码是否逐字一致。
+> 改白名单/阈值只改代码，然后重跑生成器 —— **不要**手改下表。
+
+<!-- GK-FINDING-FACTS:START（由 scripts/gk_docgen_facts.py 生成，勿手改） -->
+| 事实 | 值 | 来源（可复算） |
+|:--|:--|:--|
+| `source` 合法值 | `manual` · `crossr` · `crossrev` · `red` · `review` · `audit` · `monitor` · `prose` · `subagent-promoted` | `gk_finding._ECC_SOURCES` |
+| `verify_source` 合法 kind | `manual` · `commit` · `tests` · `arm` · `review` · `crossr` · `red` · `monitor` · `register-only` | `gk_finding._VERIFY_SOURCES` |
+| 关单可接受证据 kind | `commit` · `arm` · `tests` · `review` · `crossr` · `red` · `monitor` | `gk_finding._ACCEPT_KINDS` |
+| 其中视为**弱证据**（不可单独） | `review` | `gk_finding._WEAK_ACCEPT_KINDS` |
+| `closure_oracle` 合法值 | `mechanical` · `judgment` | `gk_finding._CLOSURE_ORACLES` |
+| `severity` 合法值（升序） | `info` · `low` · `medium` · `high` · `critical` | `gk_finding._SEVERITIES` |
+| `--from-report` 允许字段 | `title` · `summary` · `family` · `anchors` · `facets` · `root_key` · `closure_oracle` · `cover_layers` | `gk_finding._REPORT_ALLOWED` |
+| 时效 `aging` 下界（天） | 14 | `gk_finding.STALE_AGING_DAYS` |
+| 时效 `stale` 下界（天） | 30 | `gk_finding.STALE_STALE_DAYS` |
+<!-- GK-FINDING-FACTS:END -->
+
+### 3.4 台账收缩守卫与跨代际丢失审计（2026-11-12 起）
+
+- **收缩守卫**（`gk_finding.save_findings`，唯一落盘口）：整份写回时若 `id` 集合变小且未显式声明，
+  **拒写**（`ECC_LEDGER_SHRINK_REFUSED`）。合法收缩（`spillover_open` / `archive_closed` /
+  `prune_duplicates` / `register --merge-into` / `conflicts --dedupe`）须传
+  `allow_shrink=True` + `shrink_reason`；写成功后 journal 落一条
+  `{"event":"shrink","removed_fids":[...],"reason":...}` ⟹ **任何删条都有痕**。
+- **跨代际审计**（`gk_finding.reconcile`）：除代际窗口内的四类异常外，另报 `legacy_loss` ——
+  `gen_start` 之前 register、无终态事件、未被 `epoch.purged_fids` 或 `shrink` 声明、且不在
+  活台账的 fid。**只报不阻断**（`ok`/`anomalies` 不变）；出清方式 =
+  `finding epoch --purged-fids <ids> --reason <...>`，且 **ts 须复用原 `gen_start`**
+  （否则把代际起点推到今天 = 顺手关掉那段的对账能力）。
+- 现场依据：2026-10-02 `discover` 重建 state 曾抹掉 30 条 live finding（`ECC-01E84B0E87F5`），
+  journal 只剩 `register`、reconcile 恒报 ok ⟹ 本双闸即该事故的防线。
+
 ## 4. `EccOutput`（subagent）与台账的边界
 
 > 单一事实源 = `subagent_runner.EccOutput`（Pydantic）；下表的字段名与该模型逐字对表。

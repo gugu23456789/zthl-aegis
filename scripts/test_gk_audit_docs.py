@@ -103,8 +103,43 @@ class TestDocsChecks:
     def test_cli_style_json(self):
         r = _run_cli_style()
         assert "docs_checks" in r and "summary" in r
-        assert r["summary"]["total"] == 8  # C1-C3 各 1 + C4 展开 3 + C5 分类学 1 + C6 回写对齐 1 = 8
-        assert 4 <= r["summary"]["matches"] <= 8
+        # C1-C3 各 1 + C4 展开 3 + C5 分类学 1 + C6 回写对齐 1 + C7 模板登记 1 + C8 事实块 1 = 10
+        # （2026-11-13 合并：master 的「模板登记」与本分支的「事实块」编号撞车 ⟹ 两者都保留，
+        #  模板登记 = C7、事实块顺延 = C8；缺任一即回到假绿）
+        assert r["summary"]["total"] == 10
+        assert 4 <= r["summary"]["matches"] <= 10
+        assert "skipped" in r["summary"], "摘要缺 skipped ⟹ 有意跳过会冒充绿（假绿）"
+
+
+class TestFactsBlockInAudit:
+    """2026-11-12（owner 质询「audit-docs 是不是有假绿？」）：两处假绿的红先臂。"""
+
+    def test_audit_covers_facts_blocks(self):
+        """事实块（合并后 C8）必须在审计面里，且现网为 PASS。"""
+        r = gad.check_docs(SKILL_DIR)
+        c = next((c for c in r["docs_checks"]
+                  if "GK-FACTS" in str(c.get("check"))), None)
+        assert c is not None, "审计面缺「事实块」检查 ⟹ docgen 漂移时 audit 仍报绿"
+        assert c["match"] is True, c
+
+    def test_facts_drift_turns_audit_red(self, monkeypatch):
+        """接线臂：生成器报 FAIL ⟹ 审计必须转红（不得吞掉）。"""
+        import gk_docgen_facts as dg
+
+        def _fail(_sd=""):
+            return {"check": "gk_facts", "status": "FAIL", "detail": "注入的漂移"}
+
+        monkeypatch.setattr(dg, "check", _fail)
+        r = gad.check_docs(SKILL_DIR)
+        c = next(c for c in r["docs_checks"] if "GK-FACTS" in str(c.get("check")))
+        assert c["match"] is False, c
+        assert r["summary"]["failures"] >= 1, r["summary"]
+
+    def test_skipped_not_counted_as_match(self):
+        """`_summarize`：skipped 不得计入 matches（原实现 `sum(match)` 把跳过算绿）。"""
+        s = gad._summarize([{"match": True}, {"match": True, "skipped": True},
+                            {"match": False}])
+        assert (s["total"], s["matches"], s["skipped"], s["failures"]) == (3, 1, 1, 1), s
 
 
 class TestC2NotVacuous:

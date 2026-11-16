@@ -2875,12 +2875,23 @@ def _repair_enabled() -> bool:
     return str(os.environ.get("GK_SELFCHECK_REPAIR_WORKTREE", "")).strip() in ("1", "true", "yes")
 
 
-def check_cron_health(now_ts=None, grace_s: int = 3600, stale_s: int = 7200) -> dict:
-    """cron 调度**新鲜度 + 逾期作业**（2026-11-01 根因：`cron_tick.bat` 的 `cd ~/.trae` 在
-    WSL root 下解析为 `/root/.trae` ⟹ 每小时 rc=1、作业全部逾期而无人察觉）。
+def check_cron_health(now_ts=None, grace_s: int = 3600, stale_s: int = 7200,
+                      fail_s: int = 21600, max_fail_streak: int = 3) -> dict:
+    """cron 调度**dead-man switch**：停摆 / 逾期 / 连续失败三面判决。
 
-    判据：tick.log 缺失或年龄 > `stale_s` ⟹ WARN；任一启用作业 `next_run_at` 超期 >
-    `grace_s` ⟹ WARN（逐名列出）。仅 WARN（调度可被人为暂停），不阻断。
+    来历（2026-11-01 根因）：`cron_tick.bat` 的 `cd ~/.trae` 在 WSL root 下解析为
+    `/root/.trae` ⟹ 每小时 rc=1、作业全部逾期而无人察觉。
+    2026-11-11 升级（用户裁定「cron 总是时不时失灵没啥大用」）：原实现**恒 WARN**（WARN 不进
+    `issues`、不产 finding）⟹ 检测器存在但永远不会报警。现分档：
+
+      · FAIL：tick 年龄 > `fail_s`（默认 6h = 连续漏掉 6 次每小时触发）⟹ 调度器已死；
+      · FAIL：任一启用作业 `failure_streak >= max_fail_streak`（默认 3，实测 model-radar 长期
+        streak=3 却无任何告警）⟹ 作业在跑但恒失败（空转）；
+      · WARN：tick 年龄 > `stale_s`（默认 2h）或 `next_run_at` 超期 > `grace_s`（默认 1h）
+        —— 单次漏跳/人为暂停属合法形态，只告警不阻断；
+      · PASS：tick 新鲜且无逾期且无连续失败。
+
+    `tick.log` 缺失 ⟹ WARN（首装未 tick 与「从未启动」不可区分，不升级为 FAIL 以免首次部署即红）。
     """
     result = {"check": "cron_health"}
     home = os.environ.get("HOME") or str(Path.home())
@@ -2898,19 +2909,33 @@ def check_cron_health(now_ts=None, grace_s: int = 3600, stale_s: int = 7200) -> 
         return result
     jobs = data if isinstance(data, list) else data.get("jobs", [])
     now = now_ts if now_ts is not None else time.time()
-    overdue = []
+    overdue, failed_jobs = [], []
     for j in jobs or []:
         if not isinstance(j, dict) or not j.get("enabled"):
             continue
+        name = str(j.get("name"))
         ts = _iso_ts(j.get("next_run_at"))
         if ts is not None and now - ts > grace_s:
-            overdue.append(str(j.get("name")))
+            overdue.append(name)
+        try:
+            streak = int(j.get("failure_streak") or 0)
+        except (TypeError, ValueError):
+            streak = 0
+        if streak >= max_fail_streak:
+            failed_jobs.append("%s(%d)" % (name, streak))
     tick_age = int(now - tick_log.stat().st_mtime) if tick_log.exists() else None
-    result.update({"overdue": overdue, "tick_age_s": tick_age,
+    result.update({"overdue": overdue, "failed_jobs": failed_jobs, "tick_age_s": tick_age,
+                   "fail_s": fail_s, "max_fail_streak": max_fail_streak,
                    "enabled": sum(1 for j in jobs or [] if isinstance(j, dict) and j.get("enabled"))})
     if tick_age is None:
         result["status"] = "WARN"
         result["detail"] = "tick.log 不存在 ⟹ 调度器从未 tick"
+    elif failed_jobs:
+        result["status"] = "FAIL"
+        result["detail"] = "作业连续失败: %s" % ",".join(failed_jobs[:5])
+    elif tick_age > fail_s:
+        result["status"] = "FAIL"
+        result["detail"] = "调度器停摆: tick 年龄 %ds > %ds" % (tick_age, fail_s)
     elif tick_age > stale_s or overdue:
         result["status"] = "WARN"
         result["detail"] = "tick 年龄 %ds / 逾期 %d 个: %s" % (

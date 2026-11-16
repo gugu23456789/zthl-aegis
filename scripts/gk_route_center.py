@@ -55,6 +55,7 @@ import json
 import os
 import re
 import subprocess
+import time
 import sys
 from pathlib import Path
 
@@ -115,9 +116,10 @@ SEARCH_DIRS = (
 # 域 token 形式 <repo>.<plan>，对齐 T15/A2 域化命名前向接口；未声明 → 路由启发式兜底）
 # 2026-09-10: 新增可选 source_docs —— 计划引用的源文档清单（逗号分隔路径），供 advance 自动
 # 注入 node_guard --source-docs（P1：自动路径原无该前置的自动源 → 恒 missing；未声明 → info 跳过）
+# 2026-11-14: 新增 plan_status —— 计划定稿判据（`frozen` 缺省 / `draft`），方案 A 的路由开关
 _META_FIELDS = ("phases", "target_repo", "project_type", "worktree_needed",
                 "work_dir", "commit_obj", "commit_format", "review", "state_domain",
-                "source_docs", "edit_budget_declared")
+                "source_docs", "edit_budget_declared", "plan_status")
 
 
 # ────────────────────────── L1 plan 解析 ──────────────────────────
@@ -161,6 +163,21 @@ def declared_from_meta(meta: dict) -> int:
     if v < 0:
         return 0
     return min(v, DECLARED_HARD_CAP)
+
+
+# ── 计划定稿门（owner 2026-11-14 方案 A）───────────────────────────────────
+# `plan_status` 是计划生命周期的**唯一**定稿判据；**缺省 = `frozen`**（owner 同日改判：
+# 存量计划未标注时不得因缺省值而失去域路由；未定稿必须**显式**写 `draft`）。
+# 方案 A：**未定稿（显式 draft）⟹ 编辑额度记在主 state（standing 节点盒），计划不落域 state**；
+# 定稿（frozen / 缺省）域 state 才接路由，并由 META `edit_budget_declared` 注入**种子盒**。
+PLAN_STATUS_DRAFT = "draft"
+PLAN_STATUS_FROZEN = "frozen"
+
+
+def plan_status(meta: dict) -> str:
+    """META `plan_status` → `"draft"` / `"frozen"`；缺省 / 空 / 非法值一律 `"frozen"`。"""
+    v = str((meta or {}).get("plan_status") or "").strip().lower()
+    return PLAN_STATUS_DRAFT if v == PLAN_STATUS_DRAFT else PLAN_STATUS_FROZEN
 
 
 def resolve_plan(plan_file: str = "", skill_dir: str = "", main_repo_wsl: str = "",
@@ -268,12 +285,44 @@ def resolve_bound_plan(state_file: str = "", plan_pointer: str = "",
         name = name[:-3]
     if not name:
         return {"plan": "", "plan_file": "", "source": "none"}
-    for cand in (Path(mr, "docs", "plans", name + ".md"),
-                 Path(sd, "docs", "plans", name + ".md"),
-                 Path(sd, "references", name + ".md")):
+    return {"plan": name, "plan_file": _plan_file_by_stem(name, sd, mr), "source": source}
+
+
+def _plan_file_by_stem(name: str, skill_dir: str = "", main_repo_wsl: str = "") -> str:
+    """裸计划名（可带 `.md`）→ **精确同名**且实存的计划路径；无 ⟹ `""`。
+
+    **禁**走 `resolve_plan` 的 5 层金字塔兜底（未命中会取 mtime 最新的一份 = 误采他计划）。
+    """
+    n = str(name or "").strip()
+    if n.endswith(".md"):
+        n = n[:-3]
+    if not n:
+        return ""
+    sd = skill_dir or str(DEFAULT_SKILL)
+    mr = main_repo_wsl or _main_repo_wsl()
+    for cand in (Path(mr, "docs", "plans", n + ".md"),
+                 Path(sd, "docs", "plans", n + ".md"),
+                 Path(sd, "references", n + ".md")):
         if cand.is_file():
-            return {"plan": name, "plan_file": str(cand), "source": source}
-    return {"plan": name, "plan_file": "", "source": source}
+            return str(cand)
+    return ""
+
+
+def plan_is_draft(plan: str, skill_dir: str = "") -> bool:
+    """计划是否**未定稿**（`META.plan_status != frozen`，方案 A 的路由判据）。
+
+    `plan` 可为路径或裸名。**解析不到计划文件 ⟹ False**（无可判定对象 ⟹ 不改既有路由；
+    历史指针 / 测试夹具的 `plan` 不一定落到 `docs/plans/`，此支保零回归）。
+    只有「计划文件确实存在且未声明 frozen」才判 draft ⟹ 回主 state（不跟随指针 / 不落域）。
+    """
+    p = str(plan or "").strip()
+    if not p:
+        return False
+    path = p if (p.endswith(".md") and Path(p).is_file()) else _plan_file_by_stem(p, skill_dir)
+    if not path:
+        return False
+    meta = resolve_plan(path, skill_dir).get("meta") or {}
+    return plan_status(meta) != PLAN_STATUS_FROZEN
 
 
 # ────────────────────────── L2 repo 解析 ──────────────────────────
@@ -487,10 +536,118 @@ def _skill_dir_env_trusted(skill_dir: str) -> bool:
     return status.stdout.strip() == ""
 
 
-def resolve_worktree(skill_dir: str = "", main_repo_wsl: str = "", branch_lines=None) -> dict:
+def _wt_key(p: str) -> str:
+    """路径**比较键**（四形态归一）：`C:\\x` / `C:/x` / `/mnt/c/x` / `/c/x` 同键。
+
+    只用于相等/前缀比较，不用于展示（返回小写正斜杠）。空 ⟹ 空串。
+    """
+    s = _norm_path(str(p or "").strip().replace("\\", "/"))
+    if not s:
+        return ""
+    m = re.match(r"^([A-Za-z]):/(.*)$", s)          # Windows 盘符形态
+    if m:
+        s = "/" + m.group(1).lower() + "/" + m.group(2)
+    m2 = re.match(r"^/mnt/([A-Za-z])/(.*)$", s)     # WSL 挂载形态
+    if m2:
+        s = "/" + m2.group(1).lower() + "/" + m2.group(2)
+    return os.path.normpath(s).lower()
+
+
+def pick_active_worktree(state_worktree: str = "", cwd: str = "", worktrees=None,
+                         lease=None, main_repo: str = "", now=None) -> dict:
+    """P0-b 唯一路由链（2026-11-13）：四级优先级，纯函数、无 I/O。
+
+    ① `state_worktree` —— **必须存在且在 `worktrees`（git worktree list）内**；否则视为失效
+       （事故形态：reclaim 删树后中枢仍指向该路径 ⟹ 写面永远落空），并在 `stale_state` 回显。
+    ② `cwd` 精确命中已注册树（realpath/四形态归一后比较）。
+    ③ 未过期的池槽租约（`{"path", "expires_at"}`，且 path 在列表内）。
+    ④ 主树（`read_only=True`，只读语义由下游闸执行）。
+
+    纪律：`worktrees` 是**权威**（来自 git），state/lease 只是提示；四级全空 ⟹ FAIL-LOUD
+    （`ok=False, reason="NO_ROUTE"`），**不得**静默退回 cwd。
+
+    返回 `{ok, worktree, source, read_only, stale_state, reason}`；
+    `source ∈ state|cwd|lease|main`。
+    """
+    wts = {}
+    for w in (worktrees or ()):
+        k = _wt_key(w)
+        if k:
+            wts.setdefault(k, str(w))
+    main_k = _wt_key(main_repo)
+
+    def out(wt, source, stale=None, reason=None):
+        k = _wt_key(wt)
+        return {"ok": True, "worktree": wts.get(k, str(wt)), "source": source,
+                "read_only": bool(main_k and k == main_k),
+                "stale_state": stale, "reason": reason}
+
+    stale = None
+    # ① state 提示：存活才采用
+    if state_worktree:
+        k = _wt_key(state_worktree)
+        if k and k in wts:
+            return out(state_worktree, "state")
+        stale = str(state_worktree)              # 悬空：回显但不采用（本次事故判据）
+    # ② cwd 命中已注册树
+    ck = _wt_key(cwd)
+    if ck:
+        for k, w in wts.items():
+            if ck == k or ck.startswith(k + "/"):
+                r = out(w, "cwd", stale)
+                return r
+    # ③ 池槽租约（TTL 校验）
+    if isinstance(lease, dict) and lease.get("path"):
+        exp = lease.get("expires_at")
+        cur = now if now is not None else time.time()
+        try:
+            alive = exp is None or float(exp) > float(cur)
+        except (TypeError, ValueError):
+            alive = False
+        k = _wt_key(lease["path"])
+        if alive and k and k in wts:
+            return out(lease["path"], "lease", stale)
+    # ④ 主树（只读）
+    if main_k and main_k in wts:
+        return out(main_repo, "main", stale)
+    return {"ok": False, "worktree": "", "source": None, "read_only": False,
+            "stale_state": stale, "reason": "NO_ROUTE"}
+
+
+def _git_worktree_paths(main_repo: str) -> list:
+    """`git worktree list --porcelain` 的 path 列（权威树集）；失败 ⟹ 空列表（不猜）。"""
+    if not main_repo:
+        return []
+    try:
+        r = subprocess.run(["git", "-C", main_repo, "worktree", "list", "--porcelain"],
+                           capture_output=True, text=True, timeout=15)
+    except Exception:
+        return []
+    if r.returncode != 0:
+        return []
+    return [ln.split(" ", 1)[1].strip() for ln in (r.stdout or "").splitlines()
+            if ln.startswith("worktree ")]
+
+
+def resolve_worktree(skill_dir: str = "", main_repo_wsl: str = "", branch_lines=None,
+                     state_worktree: str = "", worktrees=None) -> dict:
     """L3: 定位 feature worktree（对齐 CLI cmd_discover：git branch 在主仓库 cwd 跑）。
     返回 {"branch", "worktree", "r_phase", "detected"}。
-    branch_lines 可注入（测试用）；缺省 → 实跑 git branch --list。"""
+    branch_lines 可注入（测试用）；缺省 → 实跑 git branch --list。
+
+    2026-11-13（P0-b）：先过 `pick_active_worktree` 的唯一路由链 —— **存活的** state 提示
+    直接胜出（`route="state"`）；**悬空**提示不采用、回落原探测（`stale_state` 随结果回显），
+    避免「中枢指向已删树 ⟹ 写面静默落空」。
+    """
+    mr0 = main_repo_wsl or _main_repo_wsl()
+    _wts = worktrees if worktrees is not None else _git_worktree_paths(mr0)
+    _pick = pick_active_worktree(state_worktree=state_worktree, cwd=os.getcwd(),
+                                 worktrees=_wts, main_repo=mr0)
+    if state_worktree and _pick.get("source") == "state":
+        return {"branch": "", "worktree": _pick["worktree"], "r_phase": "",
+                "detected": True, "route": "state", "read_only": _pick["read_only"]}
+    _stale = _pick.get("stale_state") or ""
+    out_extra = {"stale_state": _stale} if _stale else {}
     mr = main_repo_wsl or _main_repo_wsl()
     prefix = os.environ.get("GATEKEEPER_WORKTREE_ROOT", "")
     if prefix:
@@ -633,6 +790,42 @@ def resolve_worktree(skill_dir: str = "", main_repo_wsl: str = "", branch_lines=
                         continue
                     if best is None or mt > best[1]:
                         best = ("/".join(rel[1:]), mt, r_phase, str(d), _route)
+        # ── 池槽（2026-11-11）：`<root>/_pool/<repo>/slot-N` ──────────────────────────────
+        # 病象：上面三条 `WORKTREE_ROUTES` 路径规则**推不出**槽的分支名（目录名恒 `slot-N`，
+        #   真分支在 HEAD 上，可能是 `agent/session/<sha8>`）⟹ 中枢走池派发后 discover 探不回
+        #   （`GK_WT_POOL_HUB=1` 因此一直被挡）。判据 = 读槽 HEAD（`gk_worktree_pool.slot_branch`，
+        #   0 子进程）；空闲槽 `gk-pool/N` 不是会话树 ⟹ 跳过。与其它 route 同台比 mtime（最新胜）。
+        for root in DEV_WORKTREE_ROOTS:
+            _poolbase = Path(_norm_path(root)) / "_pool"
+            if not _poolbase.is_dir():
+                continue
+            try:
+                _slots = sorted(_poolbase.glob("*/slot-*"),
+                                key=lambda p: p.stat().st_mtime, reverse=True)
+            except Exception:
+                continue
+            for d in _slots:
+                try:
+                    rel = d.relative_to(_poolbase).parts
+                except ValueError:
+                    continue
+                if len(rel) != 2 or ".." in rel or not d.is_dir():
+                    continue
+                if repo_hint and rel[0].lower() != repo_hint:
+                    continue
+                try:
+                    import gk_worktree_pool as _wp
+                    br = _wp.slot_branch(str(d))
+                except Exception:
+                    continue
+                if not br or br.startswith("gk-pool/") or br in ("master", "main"):
+                    continue
+                try:
+                    mt = d.stat().st_mtime
+                except OSError:
+                    continue
+                if best is None or mt > best[1]:
+                    best = (br, mt, "", str(d), "pool")
         if best:
             return {"branch": best[0], "worktree": best[3],
                     "r_phase": best[2], "detected": True, "route": best[4]}
@@ -843,6 +1036,52 @@ def _git_workflow_entry(skill_dir: str = "") -> str:
     return ""
 
 
+def _guide() -> tuple:
+    """派发回包的自动化流程引导（**单源** = `gk_worktree_pool.GUIDE_*`，禁第二份文案）。"""
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import gk_worktree_pool as _p
+        return _p.GUIDE_NOTE, _p.GUIDE_NEXT
+    except Exception:  # noqa: BLE001
+        return "", ""
+
+
+def _pool_hub_enabled() -> bool:
+    """中枢是否走热池（2026-11-11 起**默认开**）：`GK_WT_POOL_HUB=0` 才是关。
+
+    原先默认关的理由（`resolve_worktree`/discover 不认 `_pool/<repo>/slot-N`）已消除 ——
+    L3 现在读槽 HEAD 识别池槽（`test_resolve_worktree_sees_pool_slot`）。派发失败面不变：
+    池未建 / 池满 / 任何异常 ⟹ 原路回落冷建（不阻断派发）。
+    """
+    return os.environ.get("GK_WT_POOL_HUB", "1") != "0"
+
+
+def _attach_owner(out: dict, worktree: str) -> dict:
+    """给派发回包补**归属**（2026-11-11，与元数据中枢对接）：`owner` / `owner_source`。
+
+    非池槽再**预认领**（`gk-owner.json`，ids = 路径 token）—— 防「外人首写把树认成自己的」。
+    池槽不写认领：其权威是**租约**（`slot-N.lease.json`），两套判据同时存在会互相遮蔽。
+    失败静默（归属是**附加面**，不得阻断派发主流程）。
+    """
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import gk_worktree_owner as _own
+        loc = _own.locate(worktree)
+        out["owner"] = loc.get("owner", "")
+        out["owner_source"] = loc.get("source", "")
+        if loc.get("kind") == "worktree" and loc.get("owner") and "/_pool/" not in _norm_path(worktree) + "/":
+            _own.claim(loc["worktree"], [loc["owner"]])
+    except Exception:  # noqa: BLE001 — 边界：归属面不可得时保持原回包
+        pass
+    # 自动化流程引导（冷建 / 复用 / 池 三条路径**统一**带上；禁 agent 自己拼命令）
+    _n, _x = _guide()
+    if _n:
+        out.setdefault("note", _n)
+    if _x:
+        out.setdefault("next", _x)
+    return out
+
+
 def apply_worktree(main_repo_wsl: str, finding_id: str, family: str,
                    root: str = "", plan_stem: str = "") -> dict:
     """按 finding 交付一个专用 feature worktree（用户公理 A2：唯一合法来源 = 本中枢）。
@@ -895,9 +1134,41 @@ def apply_worktree(main_repo_wsl: str, finding_id: str, family: str,
             _nw = _norm_path(_w)
             if ".." not in _nw.split("/") and any(
                     _nw.lower().startswith(_norm_path(r).lower()) for r in DEV_WORKTREE_ROOTS):
-                return {"ok": True, "worktree": _nw, "branch": branch,
-                        "reused": True, "created": False}
+                return _attach_owner({"ok": True, "worktree": _nw, "branch": branch,
+                                      "reused": True, "created": False}, _nw)
             break
+    # ── 热池优先（2026-11-11，用户裁定「与元数据中枢对接」）──────────────────────────
+    # 病象：池派发只接在 CLI 的 `--session` 分支（bash 直调），**中枢**（本函数，finding/family/
+    #   plan/code-fix 全走它）仍是冷建 = 物化 2052 文件（drvfs 实测 31s）。判据/清理全在
+    #   `gk_worktree_pool`（单源）；池未就绪 / 池满 / 任何异常 ⟹ **原路回落**（零回归）。
+    # **默认开**（`GK_WT_POOL_HUB=0` 关闭）：discover 已认 `_pool` 布局（L3 读槽 HEAD），
+    #   中枢派发后能被探回，不再有「门禁有、路由断」。
+    # 2026-11-16：池不可用（满 / 未建 / 异常）时把**降级标记**带进冷建回包 —— 原先回落是
+    #   完全静默的，调用方拿到一棵 34s 冷建的树却看不出「本可以走热槽」。
+    _pool_fallback = {}
+    if _pool_hub_enabled():
+        try:
+            sys.path.insert(0, str(Path(__file__).resolve().parent))
+            import gk_worktree_pool as _pool
+            _acq = _pool.acquire(main_repo_wsl, base_root, short, branch, baseline="HEAD")
+            if _acq.get("ok"):
+                _pw = _norm_path(_acq["worktree"])
+                if ".." not in _pw.split("/") and any(
+                        _pw.lower().startswith(_norm_path(r).lower()) for r in DEV_WORKTREE_ROOTS):
+                    return _attach_owner(
+                        {"ok": True, "worktree": _pw, "branch": branch,
+                         "reused": bool(_acq.get("reused")), "created": True,
+                         "pool": {"slot": _acq.get("slot"), "ttl_s": _acq.get("ttl_s")},
+                         # 自动化流程引导（与 CLI `--session` 同源，禁让 agent 自己拼命令）
+                         "note": _pool.GUIDE_NOTE, "next": _pool.GUIDE_NEXT}, _pw)
+            _pool_fallback = {"attempted": True, "ok": False,
+                              "error": _acq.get("error") or "POOL_UNAVAILABLE",
+                              "degraded": "cold-build",
+                              "next": _acq.get("next") or ""}
+        except Exception as e:  # noqa: BLE001 — 边界：池不可用 ⟹ 回落冷建（不阻断派发）
+            _pool_fallback = {"attempted": True, "ok": False, "error": "POOL_UNAVAILABLE",
+                              "detail": "%s: %s" % (type(e).__name__, e),
+                              "degraded": "cold-build"}
     # ── 收编（2026-09-23，ECC-A91DC4562198）：创建**委托** git-workflow，禁第二实现 ──
     # 原实现裸调 `git worktree add` ⟹ 门禁技能内自建**第二套** worktree 机制（用户质询点名）。
     # 现：唯一创建入口 = `git-workflow worktree create --from <ref> --json`；返回单行 JSON 机读。
@@ -939,8 +1210,9 @@ def apply_worktree(main_repo_wsl: str, finding_id: str, family: str,
     if str(resp.get("branch") or "") != branch:
         raise RouteError("git-workflow 返回分支不符（期望 %s，得 %s）"
                          % (branch, resp.get("branch")))
-    return {"ok": True, "worktree": nw, "branch": branch,
-            "reused": bool(resp.get("reused")), "created": bool(resp.get("created"))}
+    return _attach_owner({"ok": True, "worktree": nw, "branch": branch,
+                          "reused": bool(resp.get("reused")), "created": bool(resp.get("created")),
+                          **({"pool": _pool_fallback} if _pool_fallback else {})}, nw)
 
 
 def apply_worktree_plan(main_repo_wsl: str, plan_file: str, skill_dir: str = "",
@@ -1044,7 +1316,12 @@ def derive_state_seed(plan_file: str = "", skill_dir: str = "", state_file: str 
       · `r_phase`/`stage` **取计划 META**（`project_type=standard` → `STAGE_0`；其余 → 首相位）；
       · `branch`/`worktree` 取 `resolve_worktree`（缺 → `skill_dir`）；
       · 骨架形状对齐 `cmd_discover` 的**规范骨架**（r_phase/stage/branch/worktree/gate_data/
-        monitor_scores/history）—— **非**新造 schema。
+        monitor_scores/history）—— **非**新造 schema；
+      · **种子盒**（方案 A，owner 2026-11-14）：META `edit_budget_declared > 0` ⟹
+        `gate_data.edit_budget = {max:declared, used:0, remaining:declared, overrides:[]}`。
+        病象：原骨架 `gate_data={}` ⟹ 域 state 顶层 `edit_budget` 缺失 ⟹ hook 回退 `max=-1`
+        或 advance 前的一批编辑被 0/0 死锁；声明额度只在 standing 注入（`gk_advance`）时才落地，
+        域建库侧**从未**消费 = 「每个计划有独立额度」长期是模糊机制。
     计划无 `phases` / 推不出 `domain` ⟹ 返回 `{"error": ...}`（fail-loud，**不产 IDLE**）。
     单一事实源 = L1 `resolve_plan`（禁第二份 META 解析）。
     """
@@ -1063,12 +1340,18 @@ def derive_state_seed(plan_file: str = "", skill_dir: str = "", state_file: str 
     branch = wt.get("branch") or ""
     worktree = wt.get("worktree") or skill_dir or str(DEFAULT_SKILL)
     r_phase = wt.get("r_phase") or first_phase
+    gate_data = {}
+    # 种子盒（方案 A）：声明额度是计划自己的**节点盒**起点，而非等 advance 注入。
+    _declared = declared_from_meta(meta)
+    if _declared > 0:
+        gate_data["edit_budget"] = {"max": _declared, "used": 0,
+                                    "remaining": _declared, "overrides": []}
     seed = {
         "r_phase": r_phase or None,
         "stage": stage,
         "branch": branch or None,
         "worktree": worktree or None,
-        "gate_data": {},
+        "gate_data": gate_data,
         "monitor_scores": {},
         "history": [],
     }
@@ -1107,9 +1390,13 @@ def resolve_state_cli(skill_dir: str = "", state_file: str = "", plan_pointer: s
     _dom_plan = plan_override or plan_file
     if not _dom_plan and derive_domain:
         _dom_plan = os.environ.get("GK_PLAN_FILE", "")
+    _dom = domain or meta_state_domain(_dom_plan, skill_dir)
+    # 方案 A（owner 2026-11-14）：**META 域来源**且计划未定稿 ⟹ 不落域（回主 state）。
+    #   显式 `--domain` 属人工逃生舱，不受此门约束（只拦计划声明驱动的那一路）。
+    if _dom and not domain and plan_is_draft(_dom_plan, skill_dir):
+        _dom = ""
     return resolve_state(skill_dir, state_file, plan_pointer,
-                         extra_roots=extra_roots or None,
-                         domain=domain or meta_state_domain(_dom_plan, skill_dir))
+                         extra_roots=extra_roots or None, domain=_dom)
 
 
 def flat_route(d) -> str:
@@ -1169,7 +1456,22 @@ def resolve_state(skill_dir: str = "", state_file: str = "",
     except Exception:  # noqa: BLE001 — 边界：拿不到指针面时退化为「不跟随」（fail-safe）
         _pp = {"pointer": "", "own": "", "followed": False, "reason": "", "plan": "",
                "domain": ""}
-    _eff_pointer = plan_pointer or (_pp.get("pointer", "") if _pp.get("followed") else "")
+    # 方案 A（owner 2026-11-14）：指针绑定的计划**未定稿** ⟹ 不跟随（编辑额度回主 state）。
+    #   判据单源 = `plan_is_draft`；指针未绑定可解析计划（历史指针 / 测试夹具）⟹ 不判 draft。
+    #   ⚠ 启动块会把**已选定指针**经 argv 显式传入（②b）⟹ 显式面也要过同一判据，
+    #   否则 `plan_pointer or …` 会把 draft 指针重新拉回（门只拦 `_pp` = 假绿）。
+    _ptr_plan = ""
+    if plan_pointer and Path(plan_pointer).is_file():
+        try:
+            _ptr_plan = str(json.loads(Path(plan_pointer).read_text(encoding="utf-8"))
+                            .get("plan") or "")
+        except Exception:
+            _ptr_plan = ""
+    _plan_draft = plan_is_draft(_ptr_plan or _pp.get("plan", ""), sd)
+    if _plan_draft:
+        _pp = dict(_pp, followed=False, reason="plan_draft")
+    _eff_pointer = ("" if _plan_draft else plan_pointer) or (
+        _pp.get("pointer", "") if _pp.get("followed") else "")
     # `pointer_authoritative=True`：`_eff_pointer` 是**本门面经 `select_plan_pointer` 的定论**
     # （含「判定不跟随 ⟹ 空」）⟹ 禁止 `gk_state_route.resolve_state` 再回落全局 `.gatekeeper.plan`
     # （否则「有身份但本会话无绑定 ⟹ 不采纳全局」/「域 kill switch=0 ⟹ 不跟随域化指针」等判定

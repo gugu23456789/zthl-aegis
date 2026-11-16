@@ -170,3 +170,29 @@ class TestDocFreshnessC6:
         r = check_doc_freshness(str(tmp_path), release=True)
         assert r["status"] == "SKIP"
         assert "导出排除面" in r["detail"]
+
+    def test_retired_total_is_skip(self, tmp_path):
+        """2026-11-11 退役：显式声明「已退役为历史归档」+ 指向活文档 ⟹ SKIP 并指路。
+
+        动机（实测）：总表停更 47 天仍 PASS —— `RECENT_BATCH_TS` 是写死的 pin，只校验字符串在不在。
+        退役后必须**显式**降级，不得让死表继续冒充活台账、也不得靠删 pin 骗过检查。
+        """
+        text = ("# T\n\n> **状态：已退役为历史归档（2026-11-11）。**\n"
+                "> 现行承载面：`references/violation-charter.md`\n")
+        self._total(tmp_path, text)
+        r = check_doc_freshness(str(tmp_path))
+        assert r["status"] == "SKIP", r
+        assert "violation-charter.md" in r["detail"]
+
+    def test_retirement_marker_requires_live_pointer(self, tmp_path):
+        """只写退役标记、不指活文档 ⟹ 不认退役（回落旧判据 FAIL）：防「删 pin 逃检」。"""
+        text = "# T\n\n> **状态：已退役为历史归档（2026-11-11）。**\n"
+        self._total(tmp_path, text)
+        r = check_doc_freshness(str(tmp_path))
+        assert r["status"] == "FAIL", r
+
+    def test_repo_total_is_retired(self):
+        """真实仓：总表已退役 ⟹ SKIP（不是 PASS —— PASS 会掩盖「这张表早就不动了」）。"""
+        r = check_doc_freshness(str(SCRIPTS.parent))
+        assert r["status"] == "SKIP", r
+        assert "violation-charter.md" in r["detail"]

@@ -92,7 +92,8 @@ class TestCliWiring:
         text = _CLI.read_text(encoding="utf-8", errors="replace")
         assert "from gk_node_guard import report_evidence_ok" in text, \
             "CLI 未调用 python 侧单一事实源"
-        assert "report_evidence_ok(s)" in text
+        assert re.search(r"report_evidence_ok\(s,\s*os\.environ\.get\('STATE_FILE'", text), \
+            "CLI 调用未传 state_file ⟹ B3b 登记双读失效（2026-11-16）"
 
     def test_cli_无残留内联硬编码(self):
         text = _CLI.read_text(encoding="utf-8", errors="replace")

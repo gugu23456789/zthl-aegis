@@ -113,6 +113,23 @@ def test_apply_worktree_same_finding_reuses(origin):
     assert a["worktree"] == b["worktree"]
 
 
+def test_apply_worktree_pool_exhausted_marks_degraded(origin):
+    """池满回落冷建时，回包必须带**降级标记**（原先完全静默：拿到 34s 冷建的树却看不出来）。"""
+    repo, root = origin
+    import gk_worktree_pool as P
+    P.ensure_pool(repo, root, size=1, baseline="HEAD")
+    hold = P.acquire(repo, root, sid="holder", branch="agent/hold/holder", baseline="HEAD")
+    assert hold.get("ok"), hold
+
+    out = rc.apply_worktree(repo, "ECC-POOLFULL", "F3-state-write-integrity")
+    assert out["ok"] is True and out["created"] is True, out
+    pool = out.get("pool") or {}
+    assert pool.get("error") == "POOL_EXHAUSTED", out
+    assert pool.get("degraded") == "cold-build", out
+    assert pool.get("next"), "降级必须给可执行路径（sweep / 扩容）"
+    assert out["worktree"] != hold["worktree"], "池满仍复用了被占槽"
+
+
 def test_apply_worktree_rejects_path_traversal_family(origin):
     repo, root = origin
     with pytest.raises(rc.RouteError):

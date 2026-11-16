@@ -33,6 +33,7 @@ red-first 对照臂：修复前 CLI **无** `_gx_analyze_embeddings` ⟹ 抽取�
 """
 import re
 import subprocess
+import time
 from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -184,4 +185,55 @@ def test_store_residue_triggers_drop_embeddings_retry(tmp_path):
     assert len(recorded) == 2, f"store 残态应有且仅有 1 次重试，实际 {recorded}"
     assert FALLBACK_FLAG in recorded[1], f"store 残态重试臂未带自愈旗标：{recorded[1]}"
     assert FALLBACK_FLAG not in recorded[0], f"首试不应预设自愈旗标：{recorded[0]}"
+
+
+def test_lock_busy_is_bounded_and_skips_analyze(tmp_path):
+    """判据⑥（2026-11-14 派发挂死根因）：锁被另一进程持有时**有界等待**，不得无限阻塞。
+
+    事故链（实测）：`monitor --subagent` → ctx 自愈 `context --update` →
+    `_gx_analyze_embeddings` → 原 `flock`（**无超时**）卡在另一个残留
+    `gitnexus analyze --embeddings` 的锁上 ⟹ 派发 600s 零输出、runner 根本没被拉起。
+    红先性：修复前本臂会一直挂在 `flock`，由 `subprocess.run(timeout=45)` 判红。
+    """
+    body = _extract_function(CLI.read_text(encoding="utf-8"), FUNC_NAME)
+    w = _wsl(tmp_path)
+    tmpdir = tmp_path / "tmpdir"
+    tmpdir.mkdir()
+    lock = "%s/gk-gx-refresh.%s.lock" % (_wsl(tmpdir), re.sub(r"[^A-Za-z0-9]", "_", w))
+    ready = "%s/ready" % w
+    calls = tmp_path / "calls.txt"
+    harness = tmp_path / "harness_busy.sh"
+    harness.write_text("\n".join([
+        "#!/usr/bin/env bash",
+        'export TMPDIR="%s"' % _wsl(tmpdir),
+        'GK_DBG_LOG="%s/dbg.log"' % w,
+        'CALLS_FILE="%s"' % _wsl(calls),
+        ': > "$GK_DBG_LOG"; : > "$CALLS_FILE"',
+        '_run_gitnexus() { printf "%s\\n" "$*" >> "$CALLS_FILE"; }',
+        '_gitnexus_baseline_status() { echo stale; }',
+        '_gx_store_residual_evidence() { return 1; }',
+        # 另一进程持锁（模拟残留的 gitnexus analyze）；ready 文件保证先拿锁再调函数
+        "flock '%s' bash -c 'touch \"%s\"; sleep 8' >/dev/null 2>&1 &" % (lock, ready),
+        'HOLDER=$!',
+        'for _ in 1 2 3 4 5 6 7 8 9 10; do [ -f "%s" ] && break; sleep 0.1; done' % ready,
+        "",
+        body,
+        "",
+        'GK_GX_LOCK_WAIT_S=1 %s "%s"' % (FUNC_NAME, w),
+        'echo "RC=$?"',
+        'pkill -P "$HOLDER" 2>/dev/null || true',
+        'kill "$HOLDER" 2>/dev/null || true',
+    ]), encoding="utf-8", newline="\n")
+    t0 = time.monotonic()
+    r = subprocess.run(["bash", _wsl(harness)], capture_output=True, text=True, timeout=45)
+    elapsed = time.monotonic() - t0
+    out = r.stdout + r.stderr
+    rc = re.search(r"^RC=(\d+)$", out, re.M)
+    assert rc, f"harness 未输出 RC：{out[:500]}"
+    assert rc.group(1) != "0", f"锁被占用时必须 fail-soft 非 0：{out}"
+    recorded = calls.read_text(encoding="utf-8").split() if calls.exists() else []
+    assert not recorded, f"锁被占用时不得自跑 analyze（会与持锁进程并发踩踏）：{recorded}"
+    dbg = (tmp_path / "dbg.log").read_text(encoding="utf-8")
+    assert "lock busy" in dbg, f"未留下 lock busy 证据：{dbg!r}"
+    assert elapsed < 20, f"锁等待未收敛（{elapsed:.1f}s）⟹ 仍会挂死派发"
 

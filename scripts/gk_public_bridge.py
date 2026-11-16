@@ -79,6 +79,65 @@ def _fail(code, msg, detail=""):
     return {"ok": False, "error": code, "message": msg, "detail": detail}
 
 
+# ── git-workflow 检测 / 推送（2026-11-09，用户裁定「塞进自动化发布管线」）────────
+# 旧副本（/root/.codebuddy）把 push 死委托给 `github_push.py git-push`（该子命令不存在）；
+# 新版（.trae/skills）才是原生 `timeout git push` 实现。检测用**正向原生标记**，
+# 避免只按文件名命中旧副本（强化命中成功率）。
+_GW_NATIVE_MARK = 'timeout "$timeout" git push "$push_url" "$branch"'
+
+
+def _gw_candidates():
+    out = []
+    out += [
+        os.path.expanduser("~/.codebuddy/skills/git-workflow/scripts/git-workflow.sh"),
+        "<home>/.trae/skills/git-workflow/scripts/git-workflow.sh",
+        r"<home>\.trae\skills\git-workflow\scripts\git-workflow.sh",
+    ]
+    w = shutil.which("git-workflow")
+    if w:
+        out.append(w)
+    return out
+
+
+def detect_git_workflow(candidates=None, use_env=True):
+    """返回**可用** git-workflow 脚本路径；不可用返回 ""。
+
+    命中判据：文件可读 + 含原生实现标记 `timeout "$timeout" git push ...`。
+    旧副本（github_push.py git-push 死委托）没有该标记 ⟹ 不会被误命中。
+    """
+    cands = list(candidates) if candidates is not None else _gw_candidates()
+    if use_env:
+        env = os.environ.get("GK_GIT_WORKFLOW", "")
+        if env and env not in cands:
+            cands.insert(0, env)
+    for p in cands:
+        if not p:
+            continue
+        try:
+            text = open(p, encoding="utf-8", errors="replace").read()
+        except OSError:
+            continue
+        if _GW_NATIVE_MARK in text:
+            return p
+    return ""
+
+
+def push_branch(repo, refspec, gw=None, runner=None):
+    """推分支：git-workflow 优先（有界超时/重试在其内部），失败回退原生 git。
+
+    返回 (rc, out, err, used)；used ∈ {"git-workflow", "git"}。
+    """
+    run = runner or (lambda cmd, cwd=None: _run(cmd, cwd=cwd))
+    gw = gw if gw is not None else detect_git_workflow()
+    if gw:
+        rc, out, err = run(["bash", gw, "push", "push", "--branch", refspec,
+                            "--timeout", "60"], cwd=repo)
+        if rc == 0:
+            return rc, out, err, "git-workflow"
+    rc, out, err = run(["git", "-C", repo, "push", "origin", refspec])
+    return rc, out, err, "git"
+
+
 # ── 纯步骤（可单测） ────────────────────────────────────────────────────────────
 def _tree_files(root):
     """目录内全部文件相对路径（跳过顶层 `.git`）。"""
@@ -308,8 +367,9 @@ def release(version, public_dir=DEFAULT_PUBLIC_DIR, notes="", apply=False, push=
         rep["tags_created"] = True
         # ⑥ push（永不 force）
         if push:
-            rc, out, err = _git(public_dir, "push", "origin", "HEAD:main")
+            rc, out, err, _via = push_branch(public_dir, "HEAD:main")
             rep["public_push_rc"] = rc
+            rep["public_push_via"] = _via
             if rc != 0:
                 return _fail("PUBLIC_PUSH_FAILED", "公开仓 push 失败", (err or out)[-400:])
             rc, out, err = _git(public_dir, "push", "origin", version)

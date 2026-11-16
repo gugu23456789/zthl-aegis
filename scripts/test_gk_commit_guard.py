@@ -70,7 +70,10 @@ def _mk_repo(tmp_path: Path, name: str = "repo") -> Path:
 
 
 def _cli(sb: Path, args: str, timeout: int = 300):
-    return _sh('cd "%s" && bash gatekeeper-cli.sh %s' % (_wsl(sb), args), timeout=timeout)
+    # 宿主 hook 会注入**空** STATE_FILE；CLI 对 set-but-empty 是 fail-loud（早于任何命令逻辑），
+    # 原样继承会把「环境问题」伪装成 commit 门禁失败 ⟹ 统一剥离，测的才是门禁本身。
+    return _sh('cd "%s" && env -u STATE_FILE bash gatekeeper-cli.sh %s'
+               % (_wsl(sb), args), timeout=timeout)
 
 
 def _last_json(out: str) -> dict:
@@ -274,3 +277,40 @@ def test_arm39_non_git_wrapper_does_not_block_reclaim(tmp_path):
             decoy.wait(timeout=10)
         except Exception:
             decoy.kill()
+
+
+# ── ④c 提交面提示（2026-11-10）：warn 不阻断 + 判据来自 guard 脚本 ──────────
+def test_arm40_multi_module_commit_warns_but_still_succeeds(tmp_path):
+    """warn 模式（默认）：跨 3 个模块提交 → ok=true，但输出带 COMMIT_TOO_LARGE 提示。"""
+    sb = _mk_skillroot(tmp_path)
+    rp = _mk_repo(tmp_path)
+    for d in ("scripts", "references", "docs"):
+        (rp / d).mkdir()
+    for rel in ("scripts/a.py", "references/b.md", "docs/c.md"):
+        (rp / rel).write_text("x\n", encoding="utf-8")
+
+    r = _cli(sb, 'commit --repo "%s" --add scripts/a.py references/b.md docs/c.md -m "arm40"'
+             % _wsl(rp))
+    out = r.stdout + r.stderr
+    d = _last_json(out)
+    assert d.get("ok") is True, f"warn 模式不得阻断提交：{out[:700]}"
+    assert d.get("warnings") and d["warnings"][0]["id"] == "COMMIT_TOO_LARGE", d
+
+
+def test_arm41_block_mode_rejects_multi_module_commit(tmp_path):
+    """block 模式：命中 ⟹ ok=false + COMMIT_TOO_LARGE，且 HEAD 不前进。"""
+    sb = _mk_skillroot(tmp_path)
+    rp = _mk_repo(tmp_path)
+    for d in ("scripts", "references", "docs"):
+        (rp / d).mkdir()
+    for rel in ("scripts/a.py", "references/b.md", "docs/c.md"):
+        (rp / rel).write_text("x\n", encoding="utf-8")
+    head_before = _head(rp)
+
+    r = _sh('cd "%s" && env -u STATE_FILE GK_COMMIT_GUARD=block bash gatekeeper-cli.sh '
+            'commit --repo "%s" --add scripts/a.py references/b.md docs/c.md -m "arm41"'
+            % (_wsl(sb), _wsl(rp)))
+    out = r.stdout + r.stderr
+    d = _last_json(out)
+    assert d.get("ok") is False and d.get("error") == "COMMIT_TOO_LARGE", out[:700]
+    assert _head(rp) == head_before, "block 模式下提交仍发生了"

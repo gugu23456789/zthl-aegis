@@ -138,3 +138,37 @@ def test_audit_state_emits_subagent_reports_check(tmp_path):
     out = gk_audit_state.check_state_file(sp, skill_dir=sd)
     fields = [c.get("field") for c in out["state_checks"]]
     assert "subagent_reports" in fields, fields
+
+
+# ─────────── ECC-7BC2E1474652：条目指针（report_file）优先对账臂 ───────────
+
+def test_reconcile_resolves_entry_by_declared_report_file(tmp_path):
+    """⑤d 条目指针所指报告**实存**即判已落盘（id 与文件名可不同 id，实测 slot-1 案例）。"""
+    pool = tmp_path / "_pool" / "slot-1" / "docs" / "analysis" / "subagent"
+    pool.mkdir(parents=True, exist_ok=True)
+    rp = pool / "sub-1000-1-9.md"
+    rp.write_text("# report", encoding="utf-8")
+    sd, _ = _mk(tmp_path, [], [])
+    gd = {"subagent_history": [{"subagent_id": "sub-1001-1-2", "report_file": str(rp)}]}
+    r = _recon()(gd, sd)
+    assert r["entries_without_files"] == [], r
+    assert r["resolved_by_declared_path"] == 1, r
+
+
+def test_reconcile_declared_path_missing_still_fails(tmp_path):
+    """⑤e 指针指向**不存在**的文件 ⟹ 不得放行（防用指针洗白缺口）。"""
+    sd, _ = _mk(tmp_path, [], [])
+    gd = {"subagent_history": [{"subagent_id": "sub-1001-1-2",
+                                "report_file": str(tmp_path / "nope" / "sub-1001-1-2.md")}]}
+    r = _recon()(gd, sd)
+    assert r["entries_without_files"] == ["sub-1001-1-2"], r
+    assert r["resolved_by_declared_path"] == 0, r
+
+
+def test_reconcile_declared_stem_not_flagged_as_orphan_file(tmp_path):
+    """⑤f 目录内文件名与条目 id 不同、但等于条目指针 stem ⟹ 不判 `files_without_entries`。"""
+    sd, _ = _mk(tmp_path, [], ["sub-3000-1-7"])
+    gd = {"subagent_history": [{"subagent_id": "sub-3001-1-8",
+                                "report_file": "/nowhere/sub-3000-1-7.md"}]}
+    r = _recon()(gd, sd)
+    assert r["files_without_entries"] == [], r

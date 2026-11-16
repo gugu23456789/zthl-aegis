@@ -8,10 +8,39 @@ RED-POSTEX: verify defenses
 RED-REPORT: generate ECC-FINDING
 RED-DIFF: differential probing — oracle-derived attacks from contract model (2026-08-31, F3)
 """
-import glob, json, os, sys, hashlib, datetime, re, io, tokenize
+import glob, json, os, sys, hashlib, datetime, re, io, tokenize, subprocess
 
 SKILL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-STATE_FILE = os.environ.get("STATE_FILE", os.path.join(SKILL_DIR, ".gatekeeper.state"))
+
+
+def _resolve_default_state(skill_dir: str) -> str:
+    """默认 state 落点：worktree ⟹ 主树（与 gatekeeper-cli.sh L352-370 **同判据**）。
+
+    2026-11-10 修复（空转实测）：原式恒 `SKILL_DIR/.gatekeeper.state`，而 worktree 里该文件
+    不存在（state 归主树）⟹ red_scope/exploit/postex/route/poison 全部 `RED-*-ERR` 空转。
+    fail-safe：git 不可用 / 主树无 state ⟹ 保持本地落点，不新造路径（与 CLI 双保险一致）。
+    """
+    local = os.path.join(skill_dir, ".gatekeeper.state")
+    if "/worktrees/" not in skill_dir.replace("\\", "/"):
+        return local
+    try:
+        r = subprocess.run(["git", "-C", skill_dir, "rev-parse", "--git-common-dir"],
+                           capture_output=True, text=True, timeout=10)
+        common = (r.stdout or "").strip() if r.returncode == 0 else ""
+        if common:
+            main = os.path.dirname(os.path.abspath(os.path.join(skill_dir, common)))
+            cand = os.path.join(main, ".gatekeeper.state")
+            if os.path.isfile(cand):
+                return cand
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return local
+
+
+# 显式注入非空 STATE_FILE 优先；set-but-empty（宿主 hook 注入失败）按未设置处理 ——
+# 与 CLI 的 `-z "${STATE_FILE:-}"` 默认分支同向，避免空串 open("") 伪装成「state 读取错误」。
+STATE_FILE = ((os.environ.get("STATE_FILE") or "").strip()
+              or _resolve_default_state(SKILL_DIR))
 
 def red_scope():
     """RED-SCOPE: enumerate attack surface from state + gatekeeper-cli.sh"""
@@ -25,10 +54,28 @@ def red_scope():
                 if not res.get("ed25519_sig"):
                     findings.append({"id": "RED-SCOPE-01", "severity": "high", "title": f"Resolution {gate} missing Ed25519 signature", "description": "Resolution without signature can be forged"})
         # Check for unsigned state fields
-        if gd.get("_sealed_agent_score") and not gd["_sealed_agent_score"].get("hash"):
-            findings.append({"id": "RED-SCOPE-02", "severity": "medium", "title": "Sealed score missing integrity hash", "description": "Sealed score can be tampered"})
+        # 2026-11-12（RED-SCOPE-02 真修）：写侧已盖 `hash`（`gk_seal`）⟹ 本检从「有无字段」
+        #   升级为「**内容是否与戳一致**」：无戳 = 未密封（历史遗留/绕过写侧），戳不符 = 已篡改。
+        seal = gd.get("_sealed_agent_score")
+        if seal:
+            try:
+                import gk_seal as _sealmod
+                _ok = _sealmod.verify(seal)
+            except Exception:  # 边界：读侧不得因摘要异常静默放行
+                _ok = False
+            if not _ok:
+                findings.append({"id": "RED-SCOPE-02", "severity": "medium",
+                                 "title": "Sealed score missing integrity hash",
+                                 "description": ("Sealed score can be tampered"
+                                                 if not (isinstance(seal, dict) and seal.get("hash"))
+                                                 else "Sealed score hash mismatch (content changed after seal)")})
         # Check for empty gate_data
-        if not gd.get("_advance_log"):
+        # 2026-11-12（RED-SCOPE-03 真修）：判据「有无重放历史」不得只看 `_advance_log` ——
+        #   ① 根因已修：`discover` 重建 state 时 `_advance_log` **不在保全清单** ⟹ 任一并发会话
+        #      跑一次 discover 即把重放明细抹掉（`gk_discover_carry` 现纳入 `CARRY_GATE_LIST_KEYS`）；
+        #   ② 持久转移记录 `eco_completions`（`{completed_at, transitioned_to}`）是**另一份**
+        #      生命周期证据，两者皆无 = 从未推进 / 被抹净 ⟹ 才是「无可重放」。
+        if not gd.get("_advance_log") and not gd.get("eco_completions"):
             findings.append({"id": "RED-SCOPE-03", "severity": "low", "title": "No advance log", "description": "No gate execution history for replay"})
     except Exception as e:
         findings.append({"id": "RED-SCOPE-ERR", "severity": "info", "title": f"State read error: {e}"})
@@ -932,10 +979,13 @@ def red_poison_matrix():
                          "description": "整词藏 U+E0000-E007F，剥离后无可见字符 ⟹ 匹配面必漏，须告警面兜底"})
 
     # P3 XSPI 回读（输出侧跨租户 + 无路径伪归属）
+    # 2026-11-12（P3B 同批）：样本原用**字面量 `<user>` 占位**（`C:\Users\<user>\…`）——
+    #   占位符本身不是泄漏向量（模板/文档里合法出现），检测面刻意不把它当外租户 ⟹ 该样本
+    #   恒为「漏检」，属**探针夹具失真**而非防护缺口。改用具体外部用户名（真实泄漏形态）。
     try:
         from subagent_runner import _check_foreign_content
-        p3 = [r"结论见 C:\Users\<user>\secret\x.md",
-              "结论见 C:/Users/<user>/secret/x.md",
+        p3 = [r"结论见 <home>\secret\x.md",
+              "结论见 <home>/secret/x.md",
               "拉取 xhs-copilot 的缓存"]
         miss = [p for p in p3 if not _check_foreign_content(p)]
         if miss:
@@ -1391,6 +1441,92 @@ def red_gov(contract: dict | None = None):
     return findings
 
 
+# ── RED-DIFF-DECL: 自描述契约双通道对拍（2026-11-10）────────────────────────
+# 病灶：原 red_diff 全部向量依赖**外部 SWE 契约**，本仓恒无契约 ⟹ 恒走
+#   RED-DIFF-CONTRACT info，实际永不打（用户质询"静态向量打不出东西"）。
+# 修法：oracle 换成本仓两通道互拍，**不手写期望值**（防飞轮自证）：
+#   A 实现面：gatekeeper-cli.sh 的 `_CMD_REG` 注册项与 `fn()` 定义；
+#             _red_attacks.py 的 phase 分支 → 实际调用函数
+#   B 声明面：references/cli-protocol.md 的 `### <fn>` 小节；
+#             gk_chain.py 的 Step("RED-*") 序列；red-vectors.json 的 stations
+# 判据：B 声称的必须能在 A 找到实现（缺 = 注册指向死函数 / 站静默空跑 / 文档漂移）。
+_DECL_CMD_RE = re.compile(r'_CMD_REG\[([\w-]+)\]="([\w-]+)\|(\w+)\|([\w-]+)\|([\w,]*)')
+_DECL_FUNC_RE = re.compile(r"^([a-z_][\w]*)\(\)\s*\{", re.M)
+_DECL_DOC_RE = re.compile(r"^### (\w+)", re.M)
+_DECL_STEP_RE = re.compile(r'Step\("(RED-[\w-]+)"')
+_DECL_PHASE_RE = re.compile(
+    r'if phase in \("all",\s*"([\w-]+)"\):\s*\n\s*(?:all_findings\.extend|result = )\(?(\w+)\(')
+
+
+def red_diff_decl(skill_dir: str = "") -> list:
+    """RED-DIFF-DECL: 本仓自描述契约对拍（默认 oracle，不依赖外部 SWE 契约）。
+
+    `skill_dir` 可注入（变异门测试用）；文件缺失 → 单条 high（不可对拍不得静默 PASS）。
+    确定性、0 网络、0 API。
+    """
+    sd = skill_dir or SKILL_DIR
+    paths = {
+        "cli": os.path.join(sd, "gatekeeper-cli.sh"),
+        "attacks": os.path.join(sd, "scripts", "_red_attacks.py"),
+        "chain": os.path.join(sd, "scripts", "gk_chain.py"),
+        "registry": os.path.join(sd, "references", "red-vectors.json"),
+        "protocol": os.path.join(sd, "references", "cli-protocol.md"),
+    }
+    missing = sorted(k for k, p in paths.items() if not os.path.isfile(p))
+    if missing:
+        return [{"id": "RED-DIFF-DECL-MISSING", "severity": "high",
+                 "title": "自描述契约文件缺失（不可对拍）",
+                 "description": "缺少: " + ", ".join(missing),
+                 "fix": "恢复文件或显式传 skill_dir；不可对拍不得静默 PASS"}]
+
+    def _read(key):
+        with open(paths[key], encoding="utf-8", errors="replace") as f:
+            return f.read()
+
+    cli, attacks = _read("cli"), _read("attacks")
+    chain, proto = _read("chain"), _read("protocol")
+    findings = []
+
+    reg = {m.group(1): m.group(2) for m in _DECL_CMD_RE.finditer(cli)}
+    funcs = set(_DECL_FUNC_RE.findall(cli))
+    docs = set(_DECL_DOC_RE.findall(proto))
+
+    dead = sorted(c for c, fn in reg.items() if fn not in funcs)
+    if dead:
+        findings.append({"id": "RED-DIFF-DECL-REG", "severity": "high",
+                         "title": f"差分: {len(dead)} 条命令注册指向不存在的函数",
+                         "description": f"_CMD_REG 声明但无函数定义: {dead[:10]}",
+                         "fix": "新增/改名命令须同批维护 _CMD_REG 与 cmd_* 定义"})
+    undoc = sorted(c for c, fn in reg.items() if fn not in docs)
+    if undoc:
+        findings.append({"id": "RED-DIFF-DECL-DOC", "severity": "medium",
+                         "title": f"差分: {len(undoc)} 条命令缺 CLI 协议小节",
+                         "description": f"注册表有、cli-protocol.md 无 ### <fn>: {undoc[:10]}",
+                         "fix": "跑 docgen 重生成 references/cli-protocol.md（禁手改）"})
+
+    phase_calls = dict(_DECL_PHASE_RE.findall(attacks))
+    orphan = sorted(p for p, fn in phase_calls.items()
+                    if not re.search(r"^def %s\(" % re.escape(fn), attacks, re.M))
+    if orphan:
+        findings.append({"id": "RED-DIFF-DECL-PHASE", "severity": "high",
+                         "title": f"差分: {len(orphan)} 个红队 phase 无实现函数",
+                         "description": f"phase 分支调用但无 def: {orphan[:10]}",
+                         "fix": "phase 分支与 red_* 实现同批维护（防站静默空跑）"})
+
+    try:
+        with open(paths["registry"], encoding="utf-8") as f:
+            stations = {s.get("id") for s in (json.load(f).get("stations") or [])}
+    except (OSError, json.JSONDecodeError, AttributeError):
+        stations = set()
+    unreg = sorted(set(_DECL_STEP_RE.findall(chain)) - stations)
+    if unreg:
+        findings.append({"id": "RED-DIFF-DECL-STATION", "severity": "high",
+                         "title": f"差分: {len(unreg)} 个红队站未登记向量归属",
+                         "description": f"gk_chain Step 有、red-vectors.json stations 无: {unreg[:10]}",
+                         "fix": "新增站须同批登记 references/red-vectors.json.stations"})
+    return findings
+
+
 def red_diff(ctx: dict | None = None):
     """RED-DIFF: 差分对拍 — 从契约模型派生差分攻击向量，对候选提交确定性实测。
 
@@ -1493,7 +1629,7 @@ def red_diff(ctx: dict | None = None):
         _info = {"id": "RED-DIFF-CONTRACT", "severity": "info",
                  "title": "差分契约模型未找到",
                  "description": "设置 RED_DIFF_CONTRACT=<contract.json> 或先在 state.gate_data.srb.contract_json 登记（swe-rb analyze --out）"}
-        return [_info] + (red_gov(_gov) if _gov else [])
+        return [_info] + red_diff_decl() + (red_gov(_gov) if _gov else [])
 
     # 候选提交目录：ctx/env 显式 → 当前 worktree（仅非 ctx 隔离时，A2 通道隔离）
     if not submit_root and not _ctx_isolated:
@@ -1506,7 +1642,7 @@ def red_diff(ctx: dict | None = None):
     if not submit_root or not os.path.isdir(submit_root):
         return [{"id": "RED-DIFF-SUBMIT", "severity": "info",
                  "title": "候选提交目录不可用",
-                 "description": "设置 RED_DIFF_SUBMIT=<repo_dir> 或修正 state worktree（ctx 隔离模式须显式传 submit_root）"}]
+                 "description": "设置 RED_DIFF_SUBMIT=<repo_dir> 或修正 state worktree（ctx 隔离模式须显式传 submit_root）"}] + red_diff_decl()
 
     def _exists(rel: str) -> bool:
         return os.path.exists(os.path.join(submit_root, rel.replace("/", os.sep)))
@@ -1678,6 +1814,8 @@ def red_diff(ctx: dict | None = None):
 
     if (contract or {}).get("governance_contract"):
         findings.extend(red_gov(contract))
+    # 自描述通道：外部契约齐全时同样对拍本仓声明面（0 依赖、恒可跑）
+    findings.extend(red_diff_decl())
     return findings
 
 
@@ -2377,8 +2515,25 @@ def red_ctx_sig_race():
         return cli[i:j if j > 0 else len(cli)]
 
     def _update_body():
+        """`context --update` 分支全文：从 build 调用回溯 1600 字符，直到分支结束 `;;`。
+
+        2026-11-10（AV-9）：锁/签名/发布已重排为「锁外 build → 锁内 sign+发布」，
+        原窗口（build 之前 1600 字符）不再包含取锁调用 ⟹ 必须按**分支边界**取全文，
+        否则合法修复会被误判成 RED-CTX-02。
+        """
         i = cli.find('scripts/gk_context_build.py" build')
-        return cli[max(0, i - 1600):i] if i > 0 else ""
+        if i <= 0:
+            return ""
+        j = cli.find("\n      ;;", i)
+        return cli[max(0, i - 1600):j if j > 0 else min(len(cli), i + 4000)]
+
+    def _rotate_body():
+        """密钥轮换分支（`# G1: Generate new key FIRST` → 分支结束）。"""
+        i = cli.find("# G1: Generate new key FIRST")
+        if i < 0:
+            return ""
+        j = cli.find(";;", i)
+        return cli[i:j if j > 0 else min(len(cli), i + 6000)]
 
     def _lock_helper_body():
         """可重入独占锁助手（`_ctx_lock_acquire`）—— 写者唯一取锁入口。"""
@@ -2423,6 +2578,22 @@ def red_ctx_sig_race():
         ("RED-CTX-06", "构建器非原子落盘（无 os.replace）",
          "os.replace" in builder, "medium",
          "就地 truncate+write ⟹ 读者可解析到半截 JSON"),
+        # ── 2026-11-10（AV-9 修复配套静态判据）─────────────────────────────────
+        # 三条都是「动态竞态」的静态投影：只要代码形态退回旧实现，就以 high 报出，
+        # 不必等 6 臂并发复现。动态组合向量见 references/red-vectors.json::dynamic_vectors。
+        ("RED-CTX-07", "写者先发布 JSON、后签 .sig（发布窗口秒级）",
+         ('_tmp_ctx' in _upd and '.sig.tmp' in _upd
+          and 'mv -f "$_tmp_ctx"' in cli and 'mv -f "$_tmp_sig"' in cli
+          and 'context publish verify failed' in cli), "high",
+         "非临时对发布 ⟹ fail-open 读者在整段签名时间内读到「新 JSON + 旧 .sig」"),
+        ("RED-CTX-08", "密钥轮换非串行/非原子（固定 .new、无锁内复核、无回滚）",
+         all(k in _rotate_body() for k in (
+             ".new.$$", "not_expired", "flock -w 30 9",
+             'sign-raw "$tmp_priv"', "rolled back")), "high",
+         "6 臂并发轮换互相覆盖 .new / 连换 N 次 / 半换后仍报 ok ⟹ 密钥消失或签名错配"),
+        ("RED-CTX-09", "读者 fail-open 无有界退避重读",
+         "sleep 0.02" in _probe_body(), "medium",
+         "两次 rename 之间的微秒窗口被 fail-open 路径撞上 ⟹ 偶发 sig_invalid"),
     ]
     for cid, title, ok, sev, why in checks:
         if not ok:

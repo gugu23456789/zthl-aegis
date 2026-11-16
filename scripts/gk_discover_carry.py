@@ -41,20 +41,28 @@
   事故清单**点名**（"一并丢失"），却**未**进任何 CARRY 元组 ⟹ **判据零覆盖的第三态**：既未
   保全、也未显式归入「仍清空」参数集 ⟹ 每次 `discover` 仍静默抹掉（生产者
   `gatekeeper-cli.sh` 的 `gd['subagent_last']=entry` 仍在写）⟹ 纳入保全（dict 值 → `CARRY_GATE_KEYS`）。
+- 2026-11-12（`RED-SCOPE-03` 真修）：`_advance_log`（门禁推进的重放明细：`to_stage`/`all_ok`/
+  `gates_count`/`entropy_rate`）原**不在**保全清单 ⟹ 任一并发会话跑一次 `discover` 即抹掉重放
+  历史，而 `eco_completions` 因**不是** gate_data 的保全键同样被清 ⟹ 状态「推进过但无历史」
+  （现场：`eco_completions` 有 ECO-EDIT/AUDIT/DOC 记录、`_advance_log` 为空）。两键现均保全
+  （`_advance_log` ∈ LIST、`eco_completions` 见 `_TOP_…` 说明），红队 `red_scope` 判据同批对表。
 
 实现纪律：本模块只提供**纯函数** `carry_over(old, new)`；落盘由调用方（bash `_state_write`）
 经 `gk_json_utils` **单一出纳**完成 —— 本模块**不**自己写 state（禁第二写者）。
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 __all__ = ["CARRY_GATE_KEYS", "CARRY_GATE_LIST_KEYS", "CARRY_GATE_SCALAR_KEYS",
-           "CARRY_TOP_KEYS", "carry_over"]
+           "CARRY_TOP_KEYS", "CarryLossError", "carry_over"]
 
 # 保全清单（单一登记点；新增键只改这里 + 本模块 docstring 判据）
 CARRY_GATE_KEYS = ("edit_budget", "t_star", "satellite_index", "jti_store",
                    "_sealed_agent_score", "subagent_last")   # gate_data 内的跨会话/跨轮键（dict 值）
 CARRY_GATE_LIST_KEYS = ("ecc_findings", "task_pipeline", "subagent_history",
-                        "hook_block_log")           # 跨轮台账（list 值；hook_block_log=ember 意图记忆链）
+                        "hook_block_log", "_advance_log")  # 跨轮台账（list 值；hook_block_log=ember 意图记忆链；
+                                                          # _advance_log=门禁重放明细，2026-11-12 RED-SCOPE-03 真修）
 CARRY_GATE_SCALAR_KEYS = ("edit_count",)           # 跨轮计数器（int 值）
 CARRY_TOP_KEYS = ("worktrees_extra",)              # 顶层跨会话键（写面允许集）
 
@@ -68,11 +76,48 @@ def _ensure_gd(new: dict) -> dict:
     return new_gd
 
 
-def carry_over(old: dict, new: dict) -> dict:
+class CarryLossError(RuntimeError):
+    """`discover` 承接会丢 finding ⟹ **阻断**（2026-11-13，owner 令）。
+
+    阈值 = **1 条**：判据是 id 集合差（`old_ids - new_ids`），不是净条数
+    —— 丢 A 加 B 净 0 同样会丢，条数差抓不到。
+    文案必须给**可执行**的合法推进流程（禁止手工拼接/编辑 state）。
+    """
+
+    def __init__(self, missing: list, state_file: str = ""):
+        self.missing = sorted(missing)
+        self.state_file = state_file
+        n = len(self.missing)
+        ids = ",".join(self.missing[:10]) + ("…" if n > 10 else "")
+        super().__init__(
+            "ECC-CARRY_LOSS_BLOCKED: discover 承接将丢 %d 条 finding（%s）。"
+            "原 state 已回滚（快照恢复，未覆盖）。\n"
+            "合法推进（任选其一，均留痕；禁止手工拼接/编辑 state）：\n"
+            "  1) 先看差异：python3 scripts/gk_finding.py status <state>\n"
+            "  2) 归并重复：python3 scripts/gk_finding.py prune-duplicates <state>\n"
+            "  3) 已结归档：python3 scripts/gk_finding.py archive-closed <state> --target-total <N>\n"
+            "  4) 确认是预期收缩：GK_DISCOVER_ALLOW_SHRINK=1 "
+            "GK_DISCOVER_SHRINK_REASON='<原因>' bash gatekeeper-cli.sh discover\n"
+            "     （成功后 python3 scripts/gk_finding.py reconcile <state> 复核 legacy_loss）"
+            % (n, ids))
+
+
+def _finding_ids(state: dict) -> set:
+    gd = state.get("gate_data") if isinstance(state, dict) else None
+    vals = (gd or {}).get("ecc_findings") if isinstance(gd, dict) else None
+    return {str(f.get("id")) for f in (vals or [])
+            if isinstance(f, dict) and f.get("id")}
+
+
+def carry_over(old: dict, new: dict, *, allow_shrink: bool = False,
+               shrink_reason: str = "") -> dict:
     """把 `old` 里的跨会话/跨轮基础设施键并进 `new`（**就地**改 `new` 并返回；纯函数，无 I/O）。
 
-    - `old`/`new` 非 dict → 原样返回 `new`（fail-soft：保全失败绝不阻断 discover 主流程）
+    - `old`/`new` 非 dict → 原样返回 `new`（fail-soft：依赖不可用不阻断 discover）
     - 值须为**非空**容器（或非零 int）才回填（空/缺失 ⟹ 跳过，不造空壳）
+    - **例外（2026-11-13 起）**：承接后 finding **少 1 条**即抛 `CarryLossError` 阻断
+      （`allow_shrink=True` 才放行并写 `gate_data._carry_shrink` 留痕）—— 依赖不可用仍 fail-soft，
+      但"台账静默变少"不再属于可容忍失败。
 
     ⚠ **闸外边界（§9-7 方案 B，2026-10-07）**：本函数对 `ecc_findings`（∈ `CARRY_GATE_LIST_KEYS`）
     是**整份承接**（`new_gd[key] = val`），**不经** `gk_finding._guard_precheck`（处置前强制回环闸）。
@@ -102,4 +147,14 @@ def carry_over(old: dict, new: dict) -> dict:
         val = old.get(key)
         if isinstance(val, list) and val:
             new[key] = list(val)
+    # 2026-11-13（owner 令「阻断」）：承接后**逐条对表** —— 少 1 条即阻断。
+    #   触发面是回归（`ecc_findings` 掉出保全清单 = 2026-10-02 事故形态），正常路径不触发。
+    missing = _finding_ids(old) - _finding_ids(new)
+    if missing and not allow_shrink:
+        raise CarryLossError(sorted(missing))
+    if missing:  # 显式逃生舱：放行 + state 内**留痕**（可被 reconcile/审计消费）
+        _ensure_gd(new)["_carry_shrink"] = {
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "removed_fids": sorted(missing),
+            "reason": shrink_reason or "unspecified"}
     return new

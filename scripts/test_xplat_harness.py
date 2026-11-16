@@ -115,13 +115,11 @@ _RESIDUAL_SPLICES = {
     "82cf8fa33e0c": "rejected_edits 为 state_query 产出的**已转义 JSON 片段**；guidance 经 escape",
     "d65b7f27d395": "suggestion 文案：$feature_branch/$branch 为 git 分支名（ref-format 禁反斜杠）",
     "84328efeb3d7": "error 经 gk_json_utils escape；exit_code 数字（路径变量在 escape 命令内，误报）",
-    "31092653b3ed": "message 经 escape；commit/verified 为 sha/布尔（同上，误报）",
     "3d758844cc10": "precheck 为 helper 产出的 JSON 片段；stderr_tail 经 json-escape",
     "de99d9f6ee6c": "detail 为 helper 产出的 JSON 片段；stderr_tail 经 json-escape",
     "e8ead5a6f783": "audit --state 兜底字面量：JSON 内无路径变量（变量在 env 前缀）",
     "a29b4ca8440c": "audit --memory 兜底字面量：同上",
     "aca959613119": "audit crossr 兜底字面量：同上",
-    "e582349c21d6": "files 为 --len 数字；signed 布尔（路径变量在 field 命令内，误报）",
 }
 
 

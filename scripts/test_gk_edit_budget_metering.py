@@ -339,26 +339,28 @@ def test_bill_edit_reads_remaining_inside_lock():
 
 
 def test_cli_write_class_subcommand_is_billed(tmp_path):
-    """判据⑨（正臂 · 守消费点）：写类子命令**确实**经 `_bill_edit` 扣 1。"""
+    """判据⑨（正臂 · 守消费点）：写类子命令**确实**经 `_bill_edit` 扣 1（2026-11-12 起落**命令轴**）。"""
     sb = _mk_sandbox(tmp_path, {"max": 8, "used": 0, "remaining": 8})
     r = _bill_cli(sb)
     assert r.returncode == 0, f"apply-worktree --bind 失败：{r.stdout}{r.stderr}"
     b = _budget(sb)
-    assert b.get("remaining") == 7 and b.get("used") == 1, f"写类子命令未计费：{b}"
+    assert b.get("cli_remaining") == 7 and b.get("cli_used") == 1, f"写类子命令未计费：{b}"
+    assert b.get("remaining") == 8 and b.get("used") == 0, f"② 挤占了批次轴：{b}"
 
 
 def test_bill_edit_payload_guards_exhaustion(tmp_path):
-    """判据⑩（负臂 · 守「判据没被删掉」）：`remaining=0` 时写类子命令**不扣**。"""
-    sb = _mk_sandbox(tmp_path, {"max": 4, "used": 4, "remaining": 0})
+    """判据⑩（负臂 · 守「判据没被删掉」）：命令轴 `cli_remaining=0` 时写类子命令**不扣**。"""
+    sb = _mk_sandbox(tmp_path, {"max": 4, "used": 4, "remaining": 0,
+                                "cli_max": 4, "cli_used": 4, "cli_remaining": 0})
     _bill_cli(sb)
     b = _budget(sb)
-    assert b.get("remaining") == 0 and b.get("used") == 4, f"额度耗尽仍被扣（判据被删）：{b}"
+    assert b.get("cli_remaining") == 0 and b.get("cli_used") == 4, f"命令轴耗尽仍被扣：{b}"
 
 
 def test_concurrent_billing_has_no_lost_update(tmp_path):
-    """判据⑪（红先 · 真两进程并发）：两个并发写类子命令 ⟹ `remaining` 必须 **−2**。
+    """判据⑪（红先 · 真两进程并发）：两个并发写类子命令 ⟹ 命令轴 `cli_remaining` 必须 **−2**。
 
-    修前实测：两进程各读 8、各写 7 ⟹ `remaining == 7`（丢一次扣减）；修后 = 6。
+    修前实测：两进程各读 8、各写 7 ⟹ 只 −1（丢一次扣减）；修后 = 6。
 
     ⚠ **2026-10-05 归化（`REV-15` 修订 X）**：`_bill_edit` 补**身份去重** ⟹ 两次**完全相同**
     的调用只计一次。故本臂改用**两次不同目标**（`--path wt` / `wt2` ⟹ 不同身份）—— 否则
@@ -370,8 +372,9 @@ def test_concurrent_billing_has_no_lost_update(tmp_path):
     for p in ps:
         p.wait(timeout=300)
     b = _budget(sb)
-    assert b.get("remaining") == 6, f"并发扣减**丢更新**（额度 fail-open）：{b}"
-    assert b.get("used") == 2, f"并发下 `used` 未 +2：{b}"
+    assert b.get("cli_remaining") == 6, f"并发扣减**丢更新**（额度 fail-open）：{b}"
+    assert b.get("cli_used") == 2, f"并发下命令轴 `cli_used` 未 +2：{b}"
+    assert b.get("remaining") == 8 and b.get("used") == 0, f"② 污染批次轴：{b}"
 
 
 # ── §4.13.5「高并发②」使能切片（2026-09-25）：**会话身份出口** ────────────────────────────
@@ -627,7 +630,9 @@ def _unit_of(payload: str) -> str:
     """从 payload **反推**计价单位：含 `batch_open` ⟹ `batches`；带去重台账 ⟹ `files_dedup`；否则 `calls`。"""
     if "batch_open" in payload:
         return "batches"
-    return "files_dedup" if "billed_files" in payload else "calls"
+    # 2026-11-12（ECC-AF5CC971935C）：② 的去重台账已迁到独立命名空间 `cli_billed_cmds`
+    #   （不再与 ① 的真实路径共用 `billed_files`）⟹ 两种键都算「身份去重」单位。
+    return "files_dedup" if ("billed_files" in payload or "cli_billed_cmds" in payload) else "calls"
 
 
 def test_arm27_bill_units_decl_matches_both_implementations():
@@ -652,13 +657,20 @@ def test_arm27_bill_units_decl_matches_both_implementations():
     assert _unit_of(p2) == decl.get("path2"), (
         "②（区外 `_bill_edit`）实际口径 %r ≠ 声明 %r ⟹ 漂移"
         % (_unit_of(p2), decl.get("path2")))
-    assert decl.get("counter") == "edit_budget.remaining", (
-        "共享计数键声明须为 `edit_budget.remaining`（两套实现消费的是**同一**额度）：%r" % decl)
-    for name, pay in (("path1", p1), ("path2", p2)):
-        for k in ("remaining", "used", "edit_count"):
-            assert k in pay, (
-                "%s 的 payload 未触及共享计数键 %r ⟹ 两套实现不再共享同一额度 / 留痕（账目分叉）：%s"
-                % (name, k, pay[:200]))
+    assert decl.get("counter1") == "edit_budget.remaining", (
+        "① 轴计数键声明须为 `edit_budget.remaining`（批次轴）：%r" % decl)
+    # 2026-11-12（`ECC-AF5CC971935C` · owner 令「拆开批次单位与会话 cap」）：② 必须走**独立**
+    #   计数轴 `cli_remaining` —— 原「两套单位共享同一 remaining」正是实测 96/24 失真的成因。
+    assert decl.get("counter2") == "edit_budget.cli_remaining", (
+        "② 轴计数键声明须为 `edit_budget.cli_remaining`（命令向量轴，独立于会话 cap）：%r" % decl)
+    assert "counter" not in decl, (
+        "仍保留旧的单一 `counter=` 声明 ⟹ 两轴未拆开（会退化成共享 cap）：%r" % decl)
+    for k in ("remaining", "used", "edit_count"):
+        assert k in p1, "① 的 payload 未触及批次轴计数键 %r：%s" % (k, p1[:200])
+    for k in ("cli_remaining", "cli_used", "cli_billed_cmds"):
+        assert k in p2, "② 的 payload 未触及命令轴计数键 %r：%s" % (k, p2[:200])
+    assert "eb['remaining']" not in p2 and "eb.get('remaining'" not in p2, (
+        "② 仍写/读共享 `remaining` ⟹ 两轴未拆开（命令向量会挤占会话 cap）：%s" % p2[:300])
     # 声明必须落在**区外**：区内 `PROTECTED_REGION::gate` 不可维护 ⟹ 声明放那里只是又一个死锚。
     assert src.index("BILL_UNITS_DECL") > src.rindex("PROTECTED_REGION_END::gate"), (
         "`BILL_UNITS_DECL` 落在受保护区之内 ⟹ 该声明无法随实现同步维护（本臂要求它在区外）")
@@ -705,27 +717,32 @@ def test_arm28_bill_unit_drift_checker_detects_change():
         "单位改了口径检查器却不报 ⟹ 漂移仍无人可检")
 
 
-def test_arm29_both_paths_consume_one_shared_counter(tmp_path):
-    """判据㉑（守「共享额度」不变式）：同一会话下 ①（Gate 4，两个**不同**文件）与 ②（CLI 写类
-    子命令）必须消费**同一个** `sessions.<sid>.remaining` ⟹ 两次不同单位的消费累加在同一额度上。
+def test_arm29_two_axes_are_split_and_do_not_cannibalize(tmp_path):
+    """判据㉑（**2026-11-12 重述** · `ECC-AF5CC971935C` · owner 令「拆开批次单位与会话 cap」）：
 
-    这条是「单位混合」之所以危险的**行为面**：若将来有人把 ①/② 各自拆成独立额度（分叉），
-    两套单位便不再互相挤兑 —— 那是**另一种**静默失效（额度翻倍），本臂守着它。
+    原判据 = 「①/② 必须消费**同一个** `remaining`」——现被 owner **反转**：两种单位写同一 cap
+    正是实测 `used=96 / max=24` 无法解释的成因（① 按批次、② 按命令向量，相加后不属于任何一轴）。
+
+    现不变式（**不放松**）：
+      · ① 只动批次轴 `remaining`/`used`；② 只动命令轴 `cli_remaining`/`cli_used`；
+      · ② **不得**挤占 ① 的 `remaining`（本臂核心）；
+      · 两轴各自以 `max` 起算 ⟹ 各自都被封顶，不存在「额度翻倍」（等价于原臂要守的静默失效）。
     """
     sid = "0123456789abcdef01234567"
     sb = _mk_sandbox(tmp_path, {"max": 8, "used": 0, "remaining": 8})
     (sb / "note2.md").write_text("y", encoding="utf-8", newline="\n")
-    _consume_as(sb, sid, "note.md")             # ①：本批**首刀** ⟹ −1
-    # REV-24（批次边界 = verify）：要让第二次 Gate4 消费也各记 1，须先开新批 ⟹ 本臂强度不变。
+    _consume_as(sb, sid, "note.md")             # ①：本批**首刀** ⟹ −1（批次轴）
     B.append_verify(str(sb / ".gatekeeper.state"), session=sid, node="STAGE_0", cmd="pytest -q")
-    _consume_as(sb, sid, "note2.md")            # ①：**新批**首刀 ⟹ 再 −1
-    _bill_cli(sb, sid=sid)                      # ②：一次写类子命令 ⟹ 按次 −1
+    _consume_as(sb, sid, "note2.md")            # ①：**新批**首刀 ⟹ 再 −1（批次轴）
+    _bill_cli(sb, sid=sid)                      # ②：一次写类子命令 ⟹ 命令轴 −1
     box = (_budget(sb).get("sessions") or {}).get(sid) or {}
-    assert box.get("remaining") == 5, (
-        "① 与 ② 未消费同一额度（单位混合却各记各账 = 额度分叉）："
+    assert box.get("remaining") == 6, (
+        "② 挤占了批次轴 `remaining`（两轴未拆开 = 本轮要修的失真）："
         + json.dumps(box, ensure_ascii=False))
-    assert box.get("used") == 3, (
-        "共享 `used` 未累加两面消费：" + json.dumps(box, ensure_ascii=False))
+    assert box.get("used") == 2, (
+        "批次轴 `used` 被命令次数污染：" + json.dumps(box, ensure_ascii=False))
+    assert box.get("cli_remaining") == 7 and box.get("cli_used") == 1, (
+        "② 未落独立命令轴 `cli_remaining`/`cli_used`：" + json.dumps(box, ensure_ascii=False))
 
 
 # ── T2 计费三条之② / `ECC-0530B31DF9F1`（2026-09-26）：**零副作用形态不得计费**（假计费）────
@@ -783,7 +800,10 @@ def test_arm30_read_only_invocations_are_not_billed(tmp_path):
     _reset_budget(sb)
     _bill_cli(sb)
     b = _budget(sb)
-    assert b.get("remaining") == 7 and b.get("used") == 1, (
+    # 2026-11-12（ECC-AF5CC971935C）：真工程写计费在**命令轴**（cli_*），不再挤占批次轴 remaining。
+    assert b.get("remaining") == 8 and b.get("used") == 0, (
+        "② 又挤占了批次轴 `remaining`（两轴未拆开）：" + json.dumps(b, ensure_ascii=False))
+    assert b.get("cli_remaining") == 7 and b.get("cli_used") == 1, (
         "**真工程写** state 的写类子命令未计费 ⟹ 豁免放宽过头（额度失效）："
         + json.dumps(b, ensure_ascii=False))
 
@@ -881,7 +901,10 @@ def test_arm34_advance_check_is_not_billed(tmp_path):
     _reset_budget(sb)
     _cli(sb, "advance ECO-DOC --force")
     b = _budget(sb)
-    assert b.get("remaining") == 7 and b.get("used") == 1, (
+    # 2026-11-12（ECC-AF5CC971935C）：② 的计费落命令轴（cli_*），批次轴 remaining 不再被挤占。
+    assert b.get("remaining") == 8 and b.get("used") == 0, (
+        "② 挤占批次轴 `remaining`（两轴未拆开）：" + json.dumps(b, ensure_ascii=False))
+    assert b.get("cli_remaining") == 7 and b.get("cli_used") == 1, (
         "**非** `--check` 的 advance 未计费 ⟹ 豁免放宽过头（整类命令免费 = 额度失效）："
         + json.dumps(b, ensure_ascii=False))
 
@@ -948,20 +971,26 @@ def test_arm37_bill_edit_identity_dedup(tmp_path):
     sb = _mk_sandbox(tmp_path, {"max": 8, "used": 0, "remaining": 8})
     _bill_cli(sb, path_name="wt")
     b = _budget(sb)
-    assert b.get("remaining") == 7 and b.get("used") == 1, (
-        "首次写类子命令未计费：" + json.dumps(b, ensure_ascii=False))
+    assert b.get("cli_remaining") == 7 and b.get("cli_used") == 1, (
+        "首次写类子命令未计入命令轴：" + json.dumps(b, ensure_ascii=False))
     _bill_cli(sb, path_name="wt")                       # 同一身份 ⟹ 去重（不再扣）
     b = _budget(sb)
-    assert b.get("remaining") == 7 and b.get("used") == 1, (
+    assert b.get("cli_remaining") == 7 and b.get("cli_used") == 1, (
         "**同一**调用（同身份）被重复计费 ⟹ 身份去重未生效（② 仍是 `calls` 单位）："
         + json.dumps(b, ensure_ascii=False))
     _bill_cli(sb, path_name="wt2")                      # 不同身份 ⟹ 再计一次
     b = _budget(sb)
-    assert b.get("remaining") == 6 and b.get("used") == 2, (
+    assert b.get("cli_remaining") == 6 and b.get("cli_used") == 2, (
         "**不同**调用（异身份）未计费 ⟹ 去重放宽过头（额度失效）："
         + json.dumps(b, ensure_ascii=False))
-    assert len(b.get("billed_files") or []) == 2, (
-        "去重台账未按身份入账（应 2 条）：" + json.dumps(b, ensure_ascii=False))
+    assert len(b.get("cli_billed_cmds") or []) == 2, (
+        "命令轴去重台账未按身份入账（应 2 条 cli_billed_cmds）：" + json.dumps(b, ensure_ascii=False))
+    # 2026-11-12：批次轴不被命令向量污染（原实现两轴共用一张 billed_files ⟹ 互相挤 64 槽）
+    assert b.get("remaining") == 8 and b.get("used") == 0, (
+        "② 污染了批次轴：" + json.dumps(b, ensure_ascii=False))
+    assert not (b.get("billed_files") or []), (
+        "② 仍往 ① 的 `billed_files` 里写命令哈希（两轴共用台账）："
+        + json.dumps(b, ensure_ascii=False))
 
 
 # ── ③ Phase A（`REV-16` §22.3，2026-10-05）：**只读双通道观测** —— 观测面 + 单位混用率 ──────────

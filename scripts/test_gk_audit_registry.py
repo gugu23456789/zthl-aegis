@@ -124,3 +124,20 @@ def test_cli_register_and_dual_read(tmp_path, capsys):
     assert R.main(["dual-read", "--state", st]) == 0
     dr = json.loads(capsys.readouterr().out)
     assert dr["ok"] is True and dr["required"] is True
+
+
+def test_report_evidence_ok_dual_read(tmp_path):
+    """B3 消费者切换（2026-11-16）：`report_evidence_ok` 传 state_file 时必须走登记双读。
+
+    红先性：修复前 CLI 调用 `report_evidence_ok(s)` 漏传 state_file ⟹ 该执行面只有
+    「用户态证据存在」判定，登记摘要/封印双校验不生效（B3b 3/3 实为 2/3）。
+    """
+    st = _state(tmp_path)
+    assert R.register(st)["ok"]
+    good = {"gate_data": EVIDENCE, "audit_phases_completed": ["AUDIT-STATE"]}
+    tampered = json.loads(json.dumps(EVIDENCE))
+    tampered["audit_state_result"]["state_checks"][0]["match"] = False
+    bad = {"gate_data": tampered, "audit_phases_completed": ["AUDIT-STATE"]}
+    assert G.report_evidence_ok(good, st) is True          # 登记一致 → 放行
+    assert G.report_evidence_ok(bad, st) is False          # 摘要不符 → 拒
+    assert G.report_evidence_ok(bad) is True               # 不传 state_file = 旧语义

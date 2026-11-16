@@ -76,7 +76,10 @@ jobs:
         # 变成**打包前**的 fail-loud 判据。事故：v0.9.6.8–v0.9.6.10 连续三版
         # 在 pack 步 argparse 退出 2（workflow 传 --source-*，脚本不认），
         # 而 publish 要求的 dist/PROVENANCE.json 从未产出。
-        run: python scripts/gk_release_preflight.py
+        # 2026-11-14：传 --version ⟹ 发布说明必须存在且过 C1/C2（不静默退回 --generate-notes）。
+        env:
+          VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+        run: python scripts/gk_release_preflight.py --version "$VERSION"
 
   release:
     name: package + publish (privileged, no third-party installs)

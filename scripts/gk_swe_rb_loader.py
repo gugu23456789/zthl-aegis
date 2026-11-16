@@ -22,6 +22,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import gk_dbg  # noqa: E402 — 诊断日志路径单一事实源（ECC-67C0B937A54B）
 from gk_host_paths import user_home as _user_home, win_abs_to_wsl  # noqa: E402
 
 PKG = "zthl_swe_rb"
@@ -37,7 +38,8 @@ _DEV_SOURCE_DIRS = (
     os.path.join(_user_home(), "zthl-swe-rb"),
     win_abs_to_wsl(os.path.join(_user_home(), "zthl-swe-rb")),
 )
-GK_DBG_LOG = Path(__file__).resolve().parent / "gk_dbg.log"
+# 2026-11-12（ECC-67C0B937A54B）：路径**单一事实源** = `gk_dbg.log_path()`（按会话切片）。
+GK_DBG_LOG = gk_dbg.log_path()
 
 
 def _sha256_file(path: Path) -> str:

@@ -100,11 +100,27 @@ JOBS="${ACCEPT_JOBS:-$_DEF_JOBS}"
 #   408 事故复盘：24 worker + WSL+openssl 曾把宿主压到换页/蓝屏；启动前补这一道。
 #   `ACCEPT_MIN_FREE_MB=0` 显式关闭（逃生舱）；读数失败/0 不拦（fail-safe，宁可放行）。
 _ACCEPT_MIN_FREE_MB="${ACCEPT_MIN_FREE_MB:-800}"
+# 2026-11-16（408 ⑦）：比较对象改**有效空闲** = free_avail_mb − 审计模型 warming 期预留
+#   （`gk_audit_lifecycle.reserved_claim` 只读；扣减单源 `gk_hub_scheduler.effective_free_mb`）。
 if [ "${ACCEPT_MIN_FREE_MB:-800}" -gt 0 ] 2>/dev/null; then
-  _FREE_MB="$(PYTHONPATH="$SKILL_DIR/scripts" python3 -c 'import gk_hub_scheduler as H; print(H.free_avail_mb() or 0)' 2>/dev/null || echo 0)"
-  case "$_FREE_MB" in ''|*[!0-9]*) _FREE_MB=0 ;; esac
-  if [ "$_FREE_MB" -gt 0 ] && [ "$_FREE_MB" -lt "${_ACCEPT_MIN_FREE_MB:-800}" ]; then
-    echo "[accept] FATAL: 空闲内存 ${_FREE_MB}MB < 防爆硬闸 ${_ACCEPT_MIN_FREE_MB}MB —— 拒绝启动；释放内存或 ACCEPT_MIN_FREE_MB=0 显式关闭" >&2
+  _MEM_PAIR="$(PYTHONPATH="$SKILL_DIR/scripts" python3 -c '
+import gk_hub_scheduler as H
+try:
+    import gk_audit_lifecycle as L
+    r = int((L.reserved_claim() or {}).get("mb") or 0)
+except Exception:
+    r = 0
+fm = H.free_avail_mb()
+eff = H.effective_free_mb(r, free_mb=fm)
+print("%d %d %d" % (-1 if fm is None else int(fm), r, -1 if eff is None else int(eff)))
+' 2>/dev/null || echo '-1 0 -1')"
+  _FREE_RAW="${_MEM_PAIR%% *}"; _MEM_REST="${_MEM_PAIR#* }"
+  _RESERVED_MB="${_MEM_REST%% *}"; _EFF_MB="${_MEM_REST##* }"
+  case "$_FREE_RAW" in ''|*[!0-9-]*) _FREE_RAW=-1 ;; esac
+  case "$_RESERVED_MB" in ''|*[!0-9]*) _RESERVED_MB=0 ;; esac
+  case "$_EFF_MB" in ''|*[!0-9-]*) _EFF_MB=-1 ;; esac
+  if [ "$_EFF_MB" -ge 0 ] 2>/dev/null && [ "$_EFF_MB" -lt "${_ACCEPT_MIN_FREE_MB:-800}" ]; then
+    echo "[accept] FATAL: 有效空闲内存 ${_EFF_MB}MB < 防爆硬闸 ${_ACCEPT_MIN_FREE_MB}MB（free=${_FREE_RAW}MB − 审计预留=${_RESERVED_MB}MB）—— 拒绝启动；释放内存或 ACCEPT_MIN_FREE_MB=0 显式关闭" >&2
     exit 2
   fi
 fi

@@ -10,11 +10,19 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 SCRIPTS = Path(__file__).resolve().parent
 if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
 import gk_opcap_export as X  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _no_ambient_hook_log(tmp_path, monkeypatch):
+    """隔离：默认指到不存在的 hook 日志（否则测试会读仓库真实日志 ⟹ 结果随环境漂移）。"""
+    monkeypatch.setenv("GK_HOOK_LOG", str(tmp_path / "no-hook.log"))
 
 
 def _mk(tmp_path, findings, events):
@@ -100,3 +108,73 @@ def test_opcap_cli_ok(tmp_path, capsys):
     rc = X.main(["--state", st])
     out = json.loads(capsys.readouterr().out)
     assert rc == 0 and out["ok"] is True and out["schema_version"] == "opcap-1", out
+
+
+def test_opcap_view_includes_finding_archive(tmp_path):
+    """ECC-CD6B34C8EB95：溢出到 `<state>.finding-archive.jsonl` 的条目须进视图（读侧 union）。
+
+    旧实现只读 `gate_data.ecc_findings` ⟹ 溢出条在 opcap 视图里消失（同 state 两套账）。
+    """
+    st = _mk(tmp_path, [F1], [_fix("ECC-DDDDDDDDDDDD")])
+    arch = Path(st + ".finding-archive.jsonl")
+    arch.write_text(json.dumps({"id": "ECC-DDDDDDDDDDDD", "status": "closed",
+                                "created_at": "2026-10-01T00:00:00Z",
+                                "closed_at": "2026-10-01T01:00:00Z"}) + "\n",
+                    encoding="utf-8", newline="\n")
+    out = X.export(st)
+    assert out["n_findings_in_view"] == 2, out
+    assert out["loans"]["realized"] == 1, out["loans"]
+    assert out["loans"]["outstanding"] == 0, out["loans"]
+
+
+# ── 判据5（2026-11-16）：x3 / x4 本地化载体（只读，复用既有日志）──────────────
+# 裁定 B：x3 = credit-ledger `exempt` 计数 / hook `INVOKE event=PreToolUse` 计数；
+#        x4 = budget-log 提额事件 / state `_advance_log` 推进条数。**不新增埋点**。
+def test_x3_x4_carriers_from_existing_logs(tmp_path, monkeypatch):
+    st = _mk(tmp_path, [F1], [
+        {"ts": "2026-10-03T00:00:00Z", "kind": "raise", "source": "advance_env", "to_max": 24},
+        {"ts": "2026-10-03T00:01:00Z", "kind": "raise", "source": "state_patch_set_nested", "to_max": 24},
+        {"ts": "2026-10-03T00:02:00Z", "kind": "raise", "source": "code-fix",
+         "reason": "grant for ECC-AAAAAAAAAAAA", "to_max": 24},
+        {"ts": "2026-10-03T00:03:00Z", "kind": "grant", "source": "advance", "to_max": 24},
+    ])
+    # 真实形态（2026-11-16 实测）：`_advance_log` 在 **gate_data** 下，不在顶层。
+    d = json.loads(Path(st).read_text(encoding="utf-8"))
+    d["gate_data"]["_advance_log"] = [{"to_stage": "STAGE_1"}] * 4
+    Path(st).write_text(json.dumps(d, ensure_ascii=False), encoding="utf-8", newline="\n")
+    Path(st + ".credit-ledger.jsonl").write_text(
+        "".join(json.dumps({"ts": "x", "kind": "exempt", "delta": -1}) + "\n" for _ in range(3)),
+        encoding="utf-8", newline="\n")
+    # 真实形态：hook 日志行以时间戳开头（`<ts> INVOKE event=PreToolUse …`）。
+    hl = tmp_path / "hook.log"
+    hl.write_text("2026-10-06 00:06:11 INVOKE event=PreToolUse tool=Edit cwd=/x\n"
+                  "2026-10-06 00:06:54 INVOKE event=PreToolUse tool=Bash cwd=/x\n"
+                  "2026-10-06 00:07:01 INVOKE event=PostToolUse tool=Edit cwd=/x\n",
+                  encoding="utf-8")
+    monkeypatch.setenv("GK_HOOK_LOG", str(hl))
+    out = X.export(st)
+    assert out["x3_ack_injected"] == {"exempt": 3, "gate_invokes": 2}, out.get("x3_ack_injected")
+    assert out["x4_overrides"] == {"events": 3, "gate_invokes": 2, "advances": 4}, \
+        out.get("x4_overrides")
+
+
+def test_x4_advance_log_top_level_legacy_fallback(tmp_path):
+    """兼容旧形态：`_advance_log` 在顶层时仍可计数（仅作上下文，不当分母）。"""
+    st = _mk(tmp_path, [F1], [
+        {"ts": "2026-10-03T00:00:00Z", "kind": "raise", "source": "advance_env", "to_max": 24},
+    ])
+    d = json.loads(Path(st).read_text(encoding="utf-8"))
+    d["_advance_log"] = [{"to_stage": "STAGE_1"}] * 7
+    Path(st).write_text(json.dumps(d, ensure_ascii=False), encoding="utf-8", newline="\n")
+    out = X.export(st)
+    assert out["x4_overrides"] == {"events": 1, "gate_invokes": None, "advances": 7}, \
+        out.get("x4_overrides")
+
+
+def test_x3_x4_carriers_absent_report_none(tmp_path, monkeypatch):
+    st = _mk(tmp_path, [F1], [])
+    monkeypatch.setenv("GK_HOOK_LOG", str(tmp_path / "missing.log"))
+    out = X.export(st)
+    assert out["x3_ack_injected"] == {"exempt": None, "gate_invokes": None}, out.get("x3_ack_injected")
+    assert out["x4_overrides"] == {"events": 0, "gate_invokes": None, "advances": 0}, \
+        out.get("x4_overrides")

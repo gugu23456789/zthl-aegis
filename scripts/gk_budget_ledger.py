@@ -1202,8 +1202,16 @@ def _append_unlocked(state_file: str, source: str, reason: str = "", eb: dict = 
            "reason": str(reason or "")[:200]}
     if _box:
         # 会话域快照：提额/降级行的 `used/remaining` 仍是**全局**（向后兼容），审计读这三个。
-        rec.update({"session_max": _box.get("max"), "session_used": _box.get("used"),
-                    "session_remaining": _box.get("remaining")})
+        # 2026-11-12（`ECC-AF5CC971935C`）：自本版起写类子命令落**命令轴** `cli_used`/`cli_remaining`
+        #   ⟹ 凭证的「消耗」= 两轴合计（否则扣款成功却记 used 不变 = 假凭证）；`remaining` 仍报
+        #   **批次轴**（会话 cap 的唯一度量，不与命令轴混算），并另记 `cli_remaining` 供对账。
+        _tot_used = int(_box.get("used", 0) or 0) + int(_box.get("cli_used", 0) or 0)
+        if kind == KIND_CHARGE:
+            rec["used"] = _tot_used          # 凭证「消耗」= 两轴合计（see 上方 2026-11-12 注）
+        rec.update({"session_max": _box.get("max"), "session_used": _tot_used,
+                    "session_remaining": _box.get("remaining"),
+                    "cli_used": _box.get("cli_used", 0),
+                    "cli_remaining": _box.get("cli_remaining")})
     if cost is None:
         # 2026-10-23：区外差额记账通道（CLI `_budget_log_append charge` 以 env 传 cost）。
         try:

@@ -210,3 +210,22 @@ def test_arm9_cli_keeps_auto_on_autothink(monkeypatch):
     rc = O.main(["produce", "--state", "s", "--raise-id", "R-1",
                  "--endpoint", "http://127.0.0.1:9"])
     assert rc == 0 and seen.get("think_mode") == "auto", seen
+
+
+def test_arm10_audit_report_triggers_sweep():
+    """G12 ⑥（2026-11-15）：`audit --report` 出口必须触发 outcome producer（生产端接线）。
+
+    旧接线只在 `gk_audit_state.run_all`（`gk_audit_state.py --all`）里，而 CLI 的
+    `audit --all` 是逐域串行组合、从不经 run_all ⟹ sweep 在生产路径**零调用者**
+    （§22.2 入口4「生产端缺失」）。红先性：修复前 CLI 内不存在该调用。
+    """
+    cli = (SCRIPTS.parent / "gatekeeper-cli.sh").read_text(encoding="utf-8")
+    anchor = cli.rfind(r'\"audit_mode\":\"report')
+    assert anchor > 0, "未找到 audit --report 的输出锚"
+    call = cli.rfind("gk_audit_outcome.py", 0, anchor)
+    assert call > 0, "audit --report 出口未接 outcome producer（sweep）"
+    seg = cli[call:anchor]
+    assert "sweep" in seg, "调用点不是 sweep（生产端应复用 sweep 的幂等/租约/endpoint 语义）"
+    assert "GK_AUDIT_OUTCOME_ENDPOINT" in seg, "未透传 endpoint ⟹ 永远 advisory（生产端仍空转）"
+    assert "timeout" in seg, "sweep 无 deadline ⟹ 报告出口可被模型调用挂死"
+    assert "audit_type" in cli[anchor - 1200:anchor], "未排除 redteam 报告域"

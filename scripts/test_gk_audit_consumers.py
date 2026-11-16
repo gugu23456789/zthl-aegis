@@ -159,3 +159,16 @@ def test_registry_is_stable_across_import_roundtrip():
     """JSON 往返不丢字段（防登记表被写成不可序列化对象）。"""
     dumped = json.dumps(_REGISTRY, ensure_ascii=False)
     assert json.loads(dumped) == list(_REGISTRY)
+
+
+def test_cli_report_gate_passes_state_file():
+    """B3 消费者切换（2026-11-16）：CLI 调 `report_evidence_ok` 必须传 state_file。
+
+    否则 `audit --report` 前置只有「证据存在」语义，登记摘要/封印双读不生效
+    （§27.1 声称的执行面 3/3 会退化为 2/3）。
+    """
+    src = (ROOT / "gatekeeper-cli.sh").read_text(encoding="utf-8", errors="ignore")
+    i = src.find("report_evidence_ok(")
+    assert i > 0, "未找到 report_evidence_ok 调用点"
+    seg = src[i:i + 160]
+    assert "STATE_FILE" in seg, "report_evidence_ok 未传 state_file ⟹ 双读不生效：%r" % seg

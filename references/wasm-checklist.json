@@ -1,0 +1,70 @@
+{
+  "_comment": "WASM 工程 checklist（机器可判子集）。只登记**可机检**的必选项；模板正文仍是 references/wasm-engineering-template.md。消费方 = scripts/gk_template_audit.py apply。",
+  "_source": "2026-11-11 从 references/wasm-engineering-template.md §0.5/§1/§3 抽取；判据均为正则，零依赖。",
+  "version": 1,
+  "target_globs": [
+    "CMakeLists.txt",
+    "**/CMakeLists.txt",
+    "**/*.cmake",
+    "**/*.sh",
+    ".github/workflows/*.yml"
+  ],
+  "items": [
+    {
+      "id": "emscripten-pinned",
+      "desc": "Emscripten 版本必须显式钉住（禁用 latest）",
+      "pattern": "EMSCRIPTEN_VERSION|emscripten/[0-9]",
+      "level": "ERROR",
+      "mode": "present"
+    },
+    {
+      "id": "opt-size",
+      "desc": "发布档必须 -Oz 体积优化",
+      "pattern": "-Oz",
+      "level": "WARN",
+      "mode": "present"
+    },
+    {
+      "id": "no-closure",
+      "desc": "禁用 --closure 1（曾致运行时初始化失败）",
+      "pattern": "--closure\\s+1",
+      "level": "ERROR",
+      "mode": "absent"
+    },
+    {
+      "id": "max-parallel-serial",
+      "desc": "串行队列常量单一来源（MAX_PARALLEL / kQueueMax）",
+      "pattern": "MAX_PARALLEL|kQueueMax",
+      "level": "WARN",
+      "mode": "present"
+    },
+    {
+      "id": "maximum-memory",
+      "desc": "显式声明 WASM 内存上限（MAXIMUM_MEMORY）",
+      "pattern": "MAXIMUM_MEMORY",
+      "level": "ERROR",
+      "mode": "present"
+    },
+    {
+      "id": "reserve-input",
+      "desc": "预留输入缓冲契约（reserve_input / gk_* buffer）",
+      "pattern": "reserve_input|gk_set_buffer_used|gk_get_buffer_used",
+      "level": "WARN",
+      "mode": "present"
+    },
+    {
+      "id": "abi-selfcheck",
+      "desc": "启动期 ABI 自检（size_t 宽度 / stats 结构尺寸）",
+      "pattern": "sizeof\\(size_t\\)|abi",
+      "level": "WARN",
+      "mode": "present"
+    },
+    {
+      "id": "precheck-autofix",
+      "desc": "WASM 预检在 CI 必须传 --auto-fix",
+      "pattern": "wasm-pre-check[^\\n]*--auto-fix",
+      "level": "WARN",
+      "mode": "present"
+    }
+  ]
+}

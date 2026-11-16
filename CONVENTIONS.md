@@ -69,6 +69,7 @@ d13fe45 feat: initial SPZ Gatekeeper R-Phase Pipeline v3.x
 | 分析报告 | `docs/analysis/YYYY-MM-DD-<topic>.md` | 是 | 自包含：结论 + 证据 + 可证伪实验 |
 | 408 分析报告 | `docs/analysis/YYYY-MM-DD-<topic>-408.md` | 是 | 头部注明 `GK_RESEARCH_FRAME=408` |
 | 臂报告 | `docs/analysis/subagent/sub-<id>.md` | 是 | `.gitignore` 只再包含 `*.md` |
+| 归档臂报告 | `docs/analysis/subagent/archive/sub-<id>.md` | 是 | **2026-11-11 起**：跨月（早于当月 1 日 UTC）的报告按原文件名移入 `archive/`；对账只扫顶层 ⟹ 自动退出 `subagent_unlogged` 判定，证据链与 git 历史不变 |
 | 臂原始 JSON | `docs/analysis/subagent/sub-<id>.json` | 否 | 已忽略；**不得**作为唯一证据锚 |
 | MoA 聚合快照 | `docs/analysis/YYYY-MM-DD-<topic>-rN.md` | 是 | 内嵌各臂结论，自包含 |
 | 同日聚合页快照 | 同名 `-rN.html` | 是 | 与 `2026-11-06-sdk-moa-v12.html` 先例一致 |

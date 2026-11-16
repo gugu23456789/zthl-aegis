@@ -502,7 +502,7 @@ def _cfg() -> argparse.Namespace:
 #    名字不变 ⟹ 本文件内既有引用（`SUBA_TIERS[...]` / `DEFAULT_TIER`）**零回归**。
 import sys as _sys, os as _os
 _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
-from gk_suba_tiers import (SUBA_TIERS, DEFAULT_TIER,  # noqa: E402
+from gk_suba_tiers import (SUBA_TIERS, DEFAULT_TIER, IMAGE_CAPABLE_MODELS,  # noqa: E402
                            provider_of, clamp_max_output_tokens)
 # 2026-11-08（消减暗依赖）：角色白名单表迁出为 `gk_role_regions.py`（零第三方依赖）——
 #   原表在本文件（顶层 import openai/agents），导致 gatekeeper-cli.sh 只打印角色白名单
@@ -1245,6 +1245,9 @@ def _prior_art_fetch(url: str, timeout: int = 20) -> dict:
     if host not in _PRIOR_ART_HOSTS:
         _record_egress(host, url, ok=False, err="host_not_allowlisted")
         raise ValueError("域名不在白名单（仅 %s）: %s" % (", ".join(_PRIOR_ART_HOSTS), host))
+    # 2026-11-09 红队本地护栏（单出网口第二道）：deny ⟹ RedGuardDenied，不进入 socket。
+    from gk_red_guard import enforce as _rg_enforce
+    _rg_enforce(url, "read")
     if len(url) > _PRIOR_ART_MAX_URL:
         # Q3a（`ECC-BB4E8FF782F0`）：出网 URL/query **内容门** —— 超长 URL 可编码大块外泄 ⟹ fail-loud。
         _record_egress(host, url, ok=False, err="url_too_long")
@@ -1695,8 +1698,12 @@ ROLE_INSTRUCTIONS: dict[str, str] = {
   ① 计划草案 META 必含 `source_docs`；
   ② `plan-lint` 的 high/medium 必须为 0（行锚漂移先改符号锚）；
   ③ 同级 `.narrow.json` sidecar：3×K 条（G1 相同对 / G2 正交互补 / G3 污染），每条含 `verdict` + `SOURCES`；
-  ④ 若报 `STATE_DOMAIN_MISSING`，加 `GK_STATE_DOMAIN_ROUTE=0`；
+  ④ 计划声明了 `META.state_domain` ⟹ **先建域**：`discover --plan <plan> --build-state`（幂等；
+     不建就 fail-closed）。域建好后 `plan-refinement` 自动绑定，**不要**直接加降级开关；
+     只有建域失败才用 `GK_STATE_DOMAIN_ROUTE=0` 降级，且必须在计划里记录「本次跑在 base 域」；
   ⑤ `plan-refinement <plan> --task ...` 点检 → `--adjudicate last --decision approve` → `--run`；
+     若 `--run` 被门拦下（baseline/narrow/wall），pending **不会自动丢** ⟹ 重试前先
+     `--list-pending` 定位、按 id `--adjudicate <id> --decision drop` 只清**本次批次**，再重试；
   ⑥ 计划草案并入 `docs/GK_HANDOFF_*.md`（与未完成计划并列）。
 """,
     "coder": """
@@ -2645,7 +2652,7 @@ def _compose_user_text(task: str, ctx_tail: str, evidence_tail: str) -> str:
 # **未接**（DSH 有、本仓无）：Files API（上传/按 endpoint+key 缓存/过期刷新/stale 重建/配额清理/单飞）、
 # 像素归一 + 格式阶梯（DSH: 640,000px 预算 / alpha→WebP·opaque→JPEG 85/75/60）、
 # tool-result 图承载（本仓无 tool 产图）—— 前两项需图片处理依赖（Pillow 等），未授权安装故不实装。
-_IMAGE_CAPABLE_MODELS = ("deepseek-flash", "deepseek-v4-flash-vision-exp")
+_IMAGE_CAPABLE_MODELS = IMAGE_CAPABLE_MODELS  # 单一事实源：gk_suba_tiers（2026-11-14）
 _IMG_MIME = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
              ".webp": "image/webp", ".gif": "image/gif"}
 

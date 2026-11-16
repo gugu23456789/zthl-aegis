@@ -160,7 +160,9 @@ def test_arm_b3_dry_run_reports_without_deleting(repo_loose_branches):
     r = wr.sweep_loose_branches(repo, repo, apply=False)
     assert {"feat_merged", "feat_applied"} <= set(r["would_remove"]), r
     assert r["guarded"] == ["feat_unique"], r
-    assert "main" in r["checked_out"], r
+    # 2026-11-10：`is_protected_branch` 已覆盖 main ⟹ 归 `protected` 桶（先于 checked_out 判定）；
+    #   旧实现只靠 checked_out 兜底。判据不变：main 必须被点名，且绝不许进删除面。
+    assert "main" in (set(r["protected"]) | set(r["checked_out"])), r
     for b in ("feat_merged", "feat_applied", "feat_unique"):
         assert _git(repo, "branch", "--list", b).stdout.strip(), "dry-run 竟然删了分支 " + b
 

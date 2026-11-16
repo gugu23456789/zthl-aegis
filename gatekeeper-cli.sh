@@ -210,7 +210,16 @@ _canon_schema_path() {
 }
 # 2026-08-13: 调试日志——python heredoc 异常不再被 2>/dev/null 静默吞掉（此前 549 处吞错导致静默失败难排查），
 # 关键路径 stderr 追加到此处，供 self-check 安全网与人工排查（无条件定义，外部 STATE_FILE 时也必须可用）
-GK_DBG_LOG="${SKILL_DIR}/scripts/gk_dbg.log"
+# 2026-11-12（ECC-67C0B937A54B）：诊断日志按**会话切片** `gk_dbg.<sid>.log`——本文件 225 处写点共用
+#   一个变量，单文件跨会话/子 agent 混写 ⟹ 异常行无法归属。sid 取自 `GK_SESSION_ID`（下方身份
+#   解析块 export；字符门同 `[A-Za-z0-9_-]`），无 sid（owner 手工 / 身份未解析）⟹ 仍落 `gk_dbg.log`
+#   （单会话行为逐字不变）。python 侧同一口径 = `scripts/gk_dbg.log_path()`（单一事实源）。
+_gk_dbg_log_path() {
+  local _s="${GK_SESSION_ID:-}"
+  case "$_s" in *[!0-9A-Za-z_-]*) _s="" ;; esac
+  printf '%s/scripts/gk_dbg%s.log' "${SKILL_DIR}" "${_s:+.$_s}"
+}
+GK_DBG_LOG="$(_gk_dbg_log_path)"
 
 # ─── A7 bash 直连快路（transport2，2026-10-29）────────────────────────────────
 # 目的：绕开 python 客户端冷启（实测 ~0.15s/次，启动期两次 = 0.3s）。bash 内建 `/dev/tcp`
@@ -397,6 +406,20 @@ if [ -z "${STATE_FILE:-}" ]; then
   # fail-safe：env 已显式给出 ⟹ 不覆盖；文件缺失 / 形态非法（非 24 位 hex）/ 超窗 ⟹ 保持空
   # （= 既有全局口径，**零回归**）。逃生/调参 = `GK_SESSION_TTL`（秒，默认 1800，对齐 hslsn 量级）。
   # ⚠ 位置：必须在 **plan 指针选择之前** —— 指针按会话分片（§4.13.5②「会话级句柄」）依赖本 sid。
+  # ── 分配身份优先（2026-11-12，会话身份隔离）──────────────────────────────────
+  #   病象：PWD 在 worktree 内时，身份由路径 token（`slot-N` / `agent/session/<leaf>`）决定
+  #   ⟹ 两个 chat 指向同一棵树时 CLI 侧身份相同（hook 侧已改为宿主 sid）；归属闸/预算两套账。
+  #   修法：优先读该 worktree **新鲜认领**的 `allocated_sid`（`gk-owner.json` 单源，与 hook 同源）；
+  #   无认领 / 过期才回落既有「PWD token → 单槽 marker」链（legacy 零回归）。
+  if [ -z "${GK_SESSION_ID:-}" ] && [ -n "${PWD:-}" ]; then
+    _gs_alloc=$(python3 "$SKILL_DIR/scripts/gk_worktree_owner.py" allocated --path "$PWD" 2>>"$GK_DBG_LOG" || true)
+    case "${_gs_alloc:-}" in
+      ""|*[!0-9A-Za-z_-]*) ;;
+      *) export GK_SESSION_ID="$_gs_alloc" ;;
+    esac
+    unset _gs_alloc
+  fi
+
   # ── 身份链 Q3a（2026-10-02，平台无关兜底）：env > worktree token > marker(legacy) ──
   # 平台无关兜底（finding ECC-AB2FA16E9133）：由本进程 `$PWD` 所在 git worktree 派生身份
   #   token（`agent/session/<leaf>` / `agent/<family>/<leaf>` → leaf；其余哈希兜底）。**不依赖
@@ -419,47 +442,33 @@ if [ -z "${STATE_FILE:-}" ]; then
     esac
     unset _gs_tok
   fi
-  if [ -z "${GK_SESSION_ID:-}" ] && [ -f "${SKILL_DIR}/.gatekeeper.session" ]; then
-    _gs_id="" _gs_ts="" _gs_tool="" _gs_mcwd="" _gs_take=0
-    IFS=$'\t' read -r _gs_id _gs_ts _gs_tool _gs_mcwd < "${SKILL_DIR}/.gatekeeper.session" 2>/dev/null || true
-    case "${_gs_id:-}" in ""|*[!0-9a-f]*) ;; *) [ "${#_gs_id}" = "24" ] && _gs_take=1 ;; esac
-    case "${_gs_ts:-}" in ""|*[!0-9]*) _gs_take=0 ;; esac
-    if [ "$_gs_take" = "1" ]; then
-      _gs_age=$(( $(date +%s) - _gs_ts ))
-      if [ "$_gs_age" -ge 0 ] && [ "$_gs_age" -le "${GK_SESSION_TTL:-1800}" ]; then
-        # 2026-10-07 竞态修复（卫星遗留衍生问题：会话身份路由的并发缺陷）───────────────
-        #   病象：`.gatekeeper.session` 是**单槽**，任意并发会话/subagent 的 PreToolUse 都会覆写它；
-        #     若本会话**不在 worktree 树内**（`gk_session_identity.derive` → token=""，见其 §2
-        #     “不在 worktree 树 → 回落全局”），则单槽分支被走到 ⟹ **采纳外来 sid**；外来 sid 的
-        #     `.gatekeeper.plan.<sid>` 不存在 ⟹ 静默落**默认 state**，与 `list` 读到的域不一致
-        #     （实测：submit 落默认 / list 读他域；2026-09-28 已删“采纳全局”劫持分支，但单槽
-        #     覆写这条通道仍在）。
-        #   判据 = **同源校验**：marker 第 4 列记了**写入时 cwd**（`pre_tool_hook._write_session_marker`
-        #     单行 `sid<TAB>epoch<TAB>tool<TAB>cwd`）——同一工具调用内 hook 与 CLI 的 cwd 相同 ⟹
-        #     仅当 `_gs_mcwd` 与本调用 `${PWD}` **一致**（分隔符归一）才采纳；否则**不采纳**，回落
-        #     全局/默认（= 注释所述“文件缺失/形态非法 ⟹ 保持空 = 既有全局口径，零回归”，无竞态）。
-        #   ⚠ 只加同源门，不动单槽面本身（兼容面不变；分片 `.gatekeeper.session.<sid>` 仍在，供诊断）。
-        _gs_mcwd_n="${_gs_mcwd//\\//}"
-        _gs_pwd_n="${PWD//\\//}"
-        # ECC-8CEA5388F1DC（2026-10-07）：**形态归一** —— marker 第 4 列记**宿主**形态
-        #   （`c:/Users/HP`），本调用 `${PWD}` 为 **WSL** 形态（`<home>`）⟹ 原**逐字**
-        #   比较对**非 worktree 调用者恒假** ⟹ `GK_SESSION_ID` 恒空 ⟹ `discover --plan` 退写
-        #   **全局** `.gatekeeper.plan` = 跨会话路由污染（实测：全局指针 mtime/内容 = 本会话
-        #   discover；分片指针 `.gatekeeper.plan.<sid>` 未被写）。两端归一到
-        #   `/mnt/<小写盘符>/…` 后比较，恢复同源门的判别力（对齐 `gk_state_route._norm` 双形态口径）。
-        case "$_gs_mcwd_n" in
-          [A-Za-z]:/*) _gs_mcwd_n="/mnt/$(printf '%s' "${_gs_mcwd_n%:*}" | tr 'A-Z' 'a-z')${_gs_mcwd_n#*:}" ;;
-        esac
-        case "$_gs_pwd_n" in
-          [A-Za-z]:/*) _gs_pwd_n="/mnt/$(printf '%s' "${_gs_pwd_n%:*}" | tr 'A-Z' 'a-z')${_gs_pwd_n#*:}" ;;
-        esac
-        if [ -n "${_gs_mcwd_n}" ] && [ "${_gs_mcwd_n}" = "${_gs_pwd_n}" ]; then
-          export GK_SESSION_ID="$_gs_id"
-        fi
-        unset _gs_mcwd_n _gs_pwd_n
+  # ── marker 分片读面（2026-11-12：修单槽并发覆盖）────────────────────────────
+  #   病象：`.gatekeeper.session` 单文件被任一并发会话覆写 ⟹ CLI 读到别人的 sid
+  #   （实测：同 cwd 两个 chat，A 的 CLI 拿到 B 的 sid，账/路由写到 B 头上）。
+  #   修法：hook 已按 sid 写分片 `.gatekeeper.session.<sid>`（只增不改）；本处按
+  #   (cwd 同源, TTL) 选**唯一**候选。多候选 = 同 cwd 并发不可区分 ⟹ **不猜**：
+  #   不设 GK_SESSION_ID，显式 WARN（strict 模式 fail-closed），宁可回落默认也不写错账。
+  #   单源 = `gk_worktree_owner.marker_candidates`（禁第二套扫描实现）。
+  if [ -z "${GK_SESSION_ID:-}" ] && [ -n "${PWD:-}" ]; then
+    # TTL 取 300s（非 1800s）：marker 只服务「同一工具调用内」的 hook→CLI 对齐；窗口过长会
+    # 让**闲置**会话的分片继续参与竞争 ⟹ 假歧义。可用 `GK_SESSION_MARKER_TTL` 覆盖。
+    _gs_msid=$(python3 "$SKILL_DIR/scripts/gk_worktree_owner.py" marker \
+      --dir "$SKILL_DIR" --cwd "$PWD" --ttl "${GK_SESSION_MARKER_TTL:-300}" 2>>"$GK_DBG_LOG")
+    _gs_mrc=$?
+    if [ "$_gs_mrc" = "3" ]; then
+      echo "WARN[session-identity]: marker ambiguous（同 cwd 多会话）— 不采纳任何 sid；显式设 GK_SESSION_ID 或在本会话 worktree 内运行" >&2
+      echo "WARN[session-identity]: marker ambiguous for cwd=$PWD" >> "$GK_DBG_LOG"
+      if [ "${GK_STATE_ROUTE_SESSION_STRICT:-0}" = "1" ]; then
+        echo '{"ok":false,"error":"SESSION_MARKER_AMBIGUOUS","channel":"session-identity","fix":"显式 GK_SESSION_ID=<sid> 或在本会话 worktree 内运行；或 GK_STATE_ROUTE_SESSION_STRICT=0"}'
+        exit 1
       fi
+    elif [ -n "${_gs_msid:-}" ]; then
+      case "$_gs_msid" in
+        ""|*[!0-9A-Za-z_-]*) ;;
+        *) export GK_SESSION_ID="$_gs_msid" ;;
+      esac
     fi
-    unset _gs_id _gs_ts _gs_tool _gs_mcwd _gs_take _gs_age
+    unset _gs_msid _gs_mrc
   fi
 
   # ── 会话身份**丢绑**诊断（2026-10-01，会话隔离 finding；实测复现）─────────────
@@ -549,6 +558,9 @@ else
   # 此前只有 route center 认、启动块不认）；显式 STATE_FILE 下 `own` 由 python 回空
   # ⟹ 本进程**不写不删**指针（既有设计：没有指针通道，也无权动他会话的绑定）。
 fi; _main_repo_resolve  # 2026-10-31：STATE_FILE 已定，解析主仓（env→state→META→git）
+# 2026-11-12（ECC-67C0B937A54B）：身份解析完成 ⟹ 诊断日志改落**本会话切片**（见文件头 `_gk_dbg_log_path`）。
+#   解析前写出的少数启动期行留在 `gk_dbg.log`（不丢），此后全部落 `gk_dbg.<sid>.log`。
+GK_DBG_LOG="$(_gk_dbg_log_path)"
 # ── state 路由弹性安全网（batch8 R-T6，2026-08-20）──
 # 校验解析到的 state 归属（state.worktree 应标识技能仓库）；冲突时自动
 # 纠正到匹配的隔离 state（恰好 1 个候选），否则仅 WARN（防误纠）。
@@ -1545,16 +1557,33 @@ print('detected='+shlex.quote(str(bool(d.get('detected')))))
     cat > "$STATE_FILE" << 'EOFSTATE'
 {"r_phase":null,"stage":"IDLE","branch":null,"worktree":null,"gate_data":{},"monitor_scores":{},"history":[]}
 EOFSTATE
-    GK_PY_CARRY="$(_gk_py_path "$_idle_cf")" _state_write "
-import os
+    # 2026-11-13（owner 令「阻断 + 流程引导」）：承接丢 finding ⟹ 驳回 + 回滚快照。
+    #   `_state_write` 的 stderr 被 2>/dev/null 吞 ⟹ 失败原因经 `GK_CARRY_ERR` 旁挂文件带出。
+    local _carry_err="${STATE_FILE}.discover-carry.err.$$"
+    GK_PY_CARRY="$(_gk_py_path "$_idle_cf")" GK_CARRY_ERR="$(_gk_py_path "$_carry_err")" _state_write "
+import os, sys
 from gk_discover_carry import carry_over
 try:
     _old=json.load(open(os.environ['GK_PY_CARRY'],encoding='utf-8'))
 except Exception:
     _old={}
-carry_over(_old,d)
+try:
+    carry_over(_old,d,allow_shrink=os.environ.get('GK_DISCOVER_ALLOW_SHRINK')=='1',
+               shrink_reason=os.environ.get('GK_DISCOVER_SHRINK_REASON',''))
+except Exception as _e:
+    open(os.environ['GK_CARRY_ERR'],'w',encoding='utf-8').write(str(_e))
+    sys.exit(3)
 "
-    rm -f "$_idle_cf" 2>/dev/null || true
+    if [ -s "$_carry_err" ]; then
+      cp -f "$_idle_cf" "$STATE_FILE" 2>/dev/null || true
+      cat "$_carry_err" >&2
+      rm -f "$_carry_err" "$_idle_cf" 2>/dev/null || true
+      return 3
+    fi
+    if [ "${GK_DISCOVER_ALLOW_SHRINK:-0}" = "1" ]; then
+      echo "WARN[discover-carry]: allow-shrink reason=${GK_DISCOVER_SHRINK_REASON:-unspecified}" >> "$GK_DBG_LOG"
+    fi
+    rm -f "$_carry_err" "$_idle_cf" 2>/dev/null || true
     echo "{\"ok\":true,\"status\":\"idle\",\"r_phase\":null,\"stage\":\"IDLE\",\"message\":\"No active R-phase. Ready for next R.\",\"target_repo\":\"${project_type}\",\"repo_hash\":\"${SKILL_REPO_HASH}\",\"repo_paths\":{\"gatekeeper\":\"${MAIN_REPO_WIN}\",\"skill\":\"${SKILL_DIR}\"}}"; return 0
   fi
 
@@ -1655,17 +1684,36 @@ PY
   fi
   unset _hist_json
   # 保全回填：纯函数（`gk_discover_carry.carry_over`）+ **单一出纳** `_state_write`
-  #   （flock + 原子写 + checksum）⟹ 不新增第二写者；保全失败绝不阻断 discover 主流程。
-  GK_PY_CARRY="$(_gk_py_path "$_carry_f")" _state_write "
-import os
+  #   （flock + 原子写 + checksum）⟹ 不新增第二写者。
+  #   ⚠ 2026-11-13 起「保全失败绝不阻断」**只对依赖不可用**成立（快照不可读 ⟹ 跳过 + WARN）；
+  #     **finding 条数对不上**（承接少 1 条）不再是 fail-soft，而是 fail-loud 阻断。
+  # 2026-11-13（owner 令「阻断 + 流程引导」）：承接丢 finding ⟹ 驳回 + 用重建前快照**回滚**
+  #   （重建已 mv 覆盖 state ⟹ 不回滚等于照丢）。失败原因经 `GK_CARRY_ERR` 旁挂带出。
+  local _carry_err="${STATE_FILE}.discover-carry.err.$$"
+  GK_PY_CARRY="$(_gk_py_path "$_carry_f")" GK_CARRY_ERR="$(_gk_py_path "$_carry_err")" _state_write "
+import os, sys
 from gk_discover_carry import carry_over as _carry
 try:
     _old=json.load(open(os.environ['GK_PY_CARRY'],encoding='utf-8'))
 except Exception:
     _old={}
-_carry(_old,d)
+try:
+    _carry(_old,d,allow_shrink=os.environ.get('GK_DISCOVER_ALLOW_SHRINK')=='1',
+           shrink_reason=os.environ.get('GK_DISCOVER_SHRINK_REASON',''))
+except Exception as _e:
+    open(os.environ['GK_CARRY_ERR'],'w',encoding='utf-8').write(str(_e))
+    sys.exit(3)
 "
-  rm -f "$_carry_f" 2>/dev/null || true
+  if [ -s "$_carry_err" ]; then
+    cp -f "$_carry_f" "$STATE_FILE" 2>/dev/null || true
+    cat "$_carry_err" >&2
+    rm -f "$_carry_err" "$_carry_f" 2>/dev/null || true
+    return 3
+  fi
+  if [ "${GK_DISCOVER_ALLOW_SHRINK:-0}" = "1" ]; then
+    echo "WARN[discover-carry]: allow-shrink reason=${GK_DISCOVER_SHRINK_REASON:-unspecified}" >> "$GK_DBG_LOG"
+  fi
+  rm -f "$_carry_err" "$_carry_f" 2>/dev/null || true
   # Inject scheduler defaults into gate_data.scheduler
   # F-REV-83（2026-09-16）：**补 producer** —— `target_repo` 原**只进 stdout 不进 state**
   # （实测现存 state **全部无该键**：技能仓库 7 + dryrun worktree 2）⟹ 消费端
@@ -2057,15 +2105,26 @@ _write_context_file() {
 #   已持锁直接复用，内层不重复抢、不提前释放。
 _ctx_lock_acquire() {
   local _f="$1" _t="${2:-20}"
-  if [ -n "${_CTX_LOCK_FD:-}" ]; then return 0; fi
+  if [ -n "${_CTX_LOCK_FD:-}" ]; then _CTX_LOCK_OK=1; return 0; fi
+  # 2026-11-10（AV-9 根因②）：**取锁失败必须可判定**。原实现 `flock -w "$_t" || true` 后仍然
+  #   把 fd 记成「已持锁」⟹ 调用方以为在临界区里，实际是**无锁发布**。6 臂并发时两条时间线
+  #   交错（A 构建→B 构建→B 发布→A 发布）⟹ 落盘对（新 JSON + 旧 .sig）且最后写者未必是最后构建者。
+  #   现以 `_CTX_LOCK_OK` 显式回报；写者据此 fail-closed（不发布），读者据此 fail-open（重读）。
+  _CTX_LOCK_OK=0
   command -v flock >/dev/null 2>&1 || return 0
   local _fd=""
-  exec {_fd}>"${_f}.lock" 2>/dev/null || return 0
-  flock -w "$_t" "$_fd" 2>/dev/null || true
-  _CTX_LOCK_FD="$_fd"
+  # 2026-11-10：exec 重定向失败会让**非交互 shell 直接退出**（`|| return 0` 接不住），
+  #   故失败原因必须落日志（原 `2>/dev/null` 把「开锁文件失败」变成静默 rc=1 / 无输出）。
+  { exec {_fd}>"${_f}.lock"; } 2>>"${GK_DBG_LOG:-/dev/null}" || return 0
+  if flock -w "$_t" "$_fd" 2>/dev/null; then
+    _CTX_LOCK_FD="$_fd"; _CTX_LOCK_OK=1; return 0
+  fi
+  eval "exec ${_fd}>&-" 2>/dev/null
+  return 0
 }
 
 _ctx_lock_release() {
+  _CTX_LOCK_OK=0
   [ -n "${_CTX_LOCK_FD:-}" ] || return 0
   flock -u "$_CTX_LOCK_FD" 2>/dev/null || true
   eval "exec ${_CTX_LOCK_FD}>&-"
@@ -2078,30 +2137,39 @@ _ctx_inject_probe() {
   #   持 `${ctx_file}.lock` 独占锁做「重建 + 重签 + 发布」⟹ 读者不会撞进「JSON 已换、.sig 仍旧」
   #   的窗口（历史病症：6 臂并发时全部判 sig_invalid 并各自重复自愈）。
   #   锁机制不可用（无 flock / fd 打不开）⟹ fail-open 按原样读：锁是防抖，不得成为新阻断点。
-  local _pf_lk="${ctx_file}.lock" _pf_fd="" _r=""
+  local _pf_lk="${ctx_file}.lock" _pf_fd="" _r="" _pf_locked=0
   if command -v flock >/dev/null 2>&1; then
     exec {_pf_fd}>"$_pf_lk" 2>/dev/null || _pf_fd=""
     if [ -n "$_pf_fd" ]; then
       # **有界阻塞**（2026-11-09 AV-9 实测）：非阻塞 + 10ms 重试在 6 写者串行时几乎总是
       #   错过共享锁 ⟹ fail-open 读到「新 JSON + 旧 .sig」⟹ 偶发 sig_invalid。改为最多等 1s：
       #   写者「重建+重签+发布」的临界区一旦结束即放行；1s 仍拿不到才 fail-open（不挂死）。
-      flock -s -w 1 "$_pf_fd" 2>/dev/null || true
+      flock -s -w 1 "$_pf_fd" 2>/dev/null && _pf_locked=1
     fi
   fi
-  if [ -f "$ctx_file" ] && [ -f "$ctx_sig" ]; then
-    local _t _v; _t=$(mktemp)
-    cp "$ctx_file" "$_t"
-    _v=$(openssl pkeyutl -verify -pubin -inkey "${_CONTEXT_PUB_KEY}" -rawin -in "$_t" -sigfile "$ctx_sig" 2>&1)
-    rm -f "$_t"
-    # 2026-09-20（ECC-PLAN ②·归口）：rg 单源 "$RG"（原 /usr/bin/rg）
-    if echo "$_v" | "$RG" -q "Verified"; then _r="ok"; else _r="sig_invalid"; fi
-  elif [ -f "$ctx_sig" ]; then
-    _r="ctx_missing_orphan_sig"
-  elif [ -f "$ctx_file" ]; then
-    _r="sig_missing"
-  else
-    _r="ctx_missing"
-  fi
+  # 2026-11-10（AV-9 根因③）：fail-open 路径加**有界退避重读**。写者现在把「构建+签名」全部
+  #   放在临时对上、末尾才连续 rename 发布两件（窗口从「数秒」压到微秒级），但微秒窗口仍可能
+  #   被撞上 ⟹ 判到非 ok 时重读最多 4 次（20ms 间隔，总计 ≤100ms）。持锁读者无需重读。
+  local _pf_try=0
+  while :; do
+    if [ -f "$ctx_file" ] && [ -f "$ctx_sig" ]; then
+      local _t _v; _t=$(mktemp)
+      cp "$ctx_file" "$_t"
+      _v=$(openssl pkeyutl -verify -pubin -inkey "${_CONTEXT_PUB_KEY}" -rawin -in "$_t" -sigfile "$ctx_sig" 2>&1)
+      rm -f "$_t"
+      # 2026-09-20（ECC-PLAN ②·归口）：rg 单源 "$RG"（原 /usr/bin/rg）
+      if echo "$_v" | "$RG" -q "Verified"; then _r="ok"; else _r="sig_invalid"; fi
+    elif [ -f "$ctx_sig" ]; then
+      _r="ctx_missing_orphan_sig"
+    elif [ -f "$ctx_file" ]; then
+      _r="sig_missing"
+    else
+      _r="ctx_missing"
+    fi
+    if [ "$_r" = "ok" ] || [ "$_pf_locked" = "1" ] || [ "$_pf_try" -ge 4 ]; then break; fi
+    _pf_try=$((_pf_try + 1))
+    sleep 0.02
+  done
   if [ -n "$_pf_fd" ]; then flock -u "$_pf_fd" 2>/dev/null || true; eval "exec ${_pf_fd}>&-"; fi
   echo "$_r"
 }
@@ -2804,7 +2872,12 @@ print(d.get('worktree','') or '')
 #   身份头恒含 `Current analyzer runner identity/Current commit` 字样 → **不能**用裸 `current` 判新鲜
 #   （误判会把 stale 当 fresh → 永不重建 = 复用机制失效）；须锚定行首 `Status:` 行的 up-to-date。
 _gitnexus_baseline_status() {   # <dir> → echo current|reusable|stale|unavailable
-  local dir="$1" st
+  # 2026-11-12（基线门 worktree 归一漏路，实测 worktree → unavailable 而主仓 → stale）：
+  #   `_gx_repo_dir_for_current` 的 `target_repo=skill` 分支直接返回 SKILL_DIR（调用方 worktree），
+  #   早退绕过归属链；归一原先只在 `_run_gitnexus_raw`，fast-status 分支没有 ⟹ 按 worktree 查无索引。
+  #   修：入口统一归一（与 ECC-774A4BD638FB 同一单源）。
+  local dir; dir=$(_gx_worktree_main_root "${1:-}")
+  local st
   # 2026-11-01（实测）：`gitnexus status` 在 Windows 上**恒定重算分析器身份摘要**
   #   （meta 记 dependencyRuntime.artifactCount=12280 个依赖产物；POSIX 所有权 API 缺失 ⟹
   #   身份缓存 fail-closed 永不命中）⟹ 原生 Windows 亦 >120s 不返回（query 同索引 985ms 正常）。
@@ -2920,9 +2993,19 @@ _gx_analyze_embeddings() {  # <dir> → 0 = analyze 后 status 可复用（curre
   [ -n "$dir" ] || dir="$(_gx_repo_dir_for_current)"
   if command -v flock >/dev/null 2>&1; then
     local _gx_lk="${TMPDIR:-/tmp}/gk-gx-refresh.$(printf '%s' "$dir" | tr -c 'A-Za-z0-9' '_').lock"
-    exec {_gx_lkfd}>"$_gx_lk" 2>/dev/null || _gx_lkfd=""
+    exec {_gx_lkfd}>"$_gx_lk" 2>>"$GK_DBG_LOG" || _gx_lkfd=""
     if [ -n "$_gx_lkfd" ]; then
-      flock "$_gx_lkfd"
+      # 2026-11-14（research-408 派发挂死根因）：原实现 `flock` **无超时** —— 只要另有进程
+      #   正在刷新（实测：残留 `gitnexus analyze --embeddings` 持锁 7min+），本进程就无限期
+      #   挂在这里；`monitor --subagent` 的 `context --update` 自愈走同一路径 ⟹ 派发 600s
+      #   零输出、`/tmp/gk_subagent_dbg.log` 0 字节（runner 根本没被拉起）。
+      #   改为**有界等待**：拿不到锁 = 另一进程正在刷新 ⟹ 按「暂不可复用」fail-soft 返回，
+      #   本进程不再自跑 analyze，也不得把调用方挂死。旋钮 `GK_GX_LOCK_WAIT_S`（默认 10s）。
+      if ! flock -w "${GK_GX_LOCK_WAIT_S:-10}" "$_gx_lkfd" 2>/dev/null; then
+        echo "[gx-selfheal] lock busy >${GK_GX_LOCK_WAIT_S:-10}s（另一进程正在刷新）→ 跳过 analyze $(date -u +%FT%TZ)" >> "$GK_DBG_LOG"
+        eval "exec ${_gx_lkfd}>&-"
+        return 1
+      fi
       _gx_st=$(_gitnexus_baseline_status "$dir")
       case "$_gx_st" in
         current|reusable) flock -u "$_gx_lkfd" 2>/dev/null || true; eval "exec ${_gx_lkfd}>&-"; return 0 ;;
@@ -3844,9 +3927,22 @@ except Exception: print("")' 2>/dev/null)
       if [ "${_degrade_theta:-0}" -gt 0 ] 2>/dev/null \
          && [ "$_budget_remaining" -ge 1 ] 2>/dev/null \
          && [ "$_budget_remaining" -le "${_degrade_theta:-0}" ] 2>/dev/null; then
-        echo "GATEKEEPER-WARN: edit_budget degraded (remaining=$_budget_remaining ≤ θ=$_degrade_theta, used=${_b_ctx_used:-0}/max=${_b_ctx_max:--1}) — 建议收束改动面（R2-a 早警：本轮仍照常计费，未耗尽仍放行，底线 BLOCK 不变）"
-        _budget_log_append "degrade" \
-          "edit_budget low: remaining=$_budget_remaining theta=$_degrade_theta used=${_b_ctx_used:-0} max=${_b_ctx_max:--1}" || true
+        # 2026-11-13 ECC-DEGRADE-ONCE：**同一早警窗口只提示一次**。
+        #   病象（实测）：`remaining` 在节点内单调递减 ⟹ 每次编辑都满足判据，单会话刷出 81 条
+        #   degrade 行，读起来像额度暴跌（实际不计费）。判据 = 进入早警区的那一次；
+        #   配额回升/换窗口（key 变化）才再提示。旁挂文件不写 state（避免引入载体写入）。
+        local _dw_f="${STATE_FILE:-/dev/null}.degrade-warned" _dw_key _dw_prev=""
+        _dw_key="${_b_ctx_used:-0}:${_b_ctx_max:--1}:${_degrade_theta}"
+        [ -r "$_dw_f" ] && _dw_prev=$(cat "$_dw_f" 2>/dev/null)
+        if [ "$_dw_prev" != "$_dw_key" ]; then
+          echo "GATEKEEPER-WARN: edit_budget degraded (remaining=$_budget_remaining ≤ θ=$_degrade_theta, used=${_b_ctx_used:-0}/max=${_b_ctx_max:--1}) — 建议收束改动面（R2-a 早警：本轮仍照常计费，未耗尽仍放行，底线 BLOCK 不变）"
+          _budget_log_append "degrade" \
+            "edit_budget low: remaining=$_budget_remaining theta=$_degrade_theta used=${_b_ctx_used:-0} max=${_b_ctx_max:--1}" || true
+          printf '%s' "$_dw_key" > "$_dw_f" 2>/dev/null || true
+        fi
+      else
+        # 离开早警区（配额回升 / 换窗口）⟹ 复位，下次进入再提示一次
+        [ -n "${STATE_FILE:-}" ] && : > "${STATE_FILE}.degrade-warned" 2>/dev/null
       fi
       # 2026-09-19 ECC-F5FE1042A7BA（S1-c）：原只写 remaining ⟹ `used` 恒 0、消耗不可见 ⟹ 补 `used`。
       # 2026-09-19 ECC-E05F3517A965（S1-c 后半，用户裁定本轮就改）：**standard 并轨** —— 原判据
@@ -4411,14 +4507,66 @@ _subagent_model_chain() {
   fi
 }
 
+# ── 非法质询派发：强制击杀 + 立刻报警（2026-11-14 owner 令）──────────────────────────
+#   病象：三条质询守卫（BARE_PLAN_REFINEMENT / REVIEW_ROLE_UNSPECIFIED /
+#   BATCH_IDENTITY_REQUIRES_PLAN_REFINEMENT）此前只 `return 2` 打印一串 JSON 错误；调用方/agent
+#   可忽略错误串、换个措辞重试（2026-11-14 实测：改写任务措辞即落 default 角色并派发成功）。
+#   owner 令：命中非法质询路径 ⟹ **强制击杀当前进程**（SIGKILL：不可 trap、不可被重试吞掉）
+#   + **立刻报警**（stderr 横幅 + append-only 告警账本，供外部 watcher / 事后取证）。
+#   账本默认 `<SKILL_DIR>/.gatekeeper.illegal-dispatch.alarm.jsonl`（`GK_ILLEGAL_ALARM_LOG` 可改）。
+#   测试开关：`GK_ILLEGAL_DISPATCH_KILL=0` = 只报警不自杀（断言账本与错误码用；默认 1）。
+_gk_illegal_dispatch_kill() {
+  local code="$1" detail="$2" role="${3:-}" identity="${4:-}"
+  local alarm_log="${GK_ILLEGAL_ALARM_LOG:-${SKILL_DIR}/.gatekeeper.illegal-dispatch.alarm.jsonl}"
+  local _ts _rec _killed
+  # detail 进 JSON 前净化：去引号/反斜杠/换行并截断（禁造坏 JSON）。
+  detail=$(printf '%s' "$detail" | tr -d '"\\' | tr '\n\r' '  ' | cut -c1-200)
+  identity=$(printf '%s' "$identity" | tr -d '"\\' | tr '\n\r' '  ' | cut -c1-200)
+  role=$(printf '%s' "$role" | tr -d '"\\' | tr '\n\r' '  ' | cut -c1-80)
+  _ts=$(date -u +%FT%TZ)
+  if [ "${GK_ILLEGAL_DISPATCH_KILL:-1}" = "0" ]; then _killed=false; else _killed=true; fi
+  _rec=$(GK_TS="$_ts" GK_CODE="$code" GK_DETAIL="$detail" GK_ROLE="$role" GK_IDENT="$identity" GK_PID="$$" \
+    python3 -c 'import json, os
+print(json.dumps({"ts": os.environ["GK_TS"], "event": "ILLEGAL_PLAN_REFINEMENT_DISPATCH",
+                  "code": os.environ["GK_CODE"], "detail": os.environ.get("GK_DETAIL", ""),
+                  "role": os.environ.get("GK_ROLE", ""), "identity": os.environ.get("GK_IDENT", ""),
+                  "pid": os.environ.get("GK_PID", ""), "cwd": os.getcwd()}, ensure_ascii=False))' 2>/dev/null \
+    || printf '{"ts":"%s","event":"ILLEGAL_PLAN_REFINEMENT_DISPATCH","code":"%s"}' "$_ts" "$code")
+  printf '%s\n' "$_rec" >>"$alarm_log" 2>/dev/null || true
+  # 横幅/回执**必须用外部写者**（`env printf` = 独立进程，exit 即 flush）：bash 内建 printf
+  #   在 SIGKILL 前可能仍留在 stdio 缓冲 ⟹ xdist 并发实测偶发「账本有、stderr 无横幅」。
+  env printf '[ALARM] %s ILLEGAL_PLAN_REFINEMENT_DISPATCH code=%s role=%s identity=%s pid=%s — 强制击杀并写入 %s\n' \
+    "$_ts" "$code" "${role:-<unset>}" "${identity:-<none>}" "$$" "$alarm_log" >&2
+  # stdout 契约：击杀前必须已写出（同上，外部写者保证已落 fd）。
+  env printf '{"ok":false,"error":"%s","alarm":"ILLEGAL_PLAN_REFINEMENT_DISPATCH","killed":%s,"alarm_log":"%s","detail":"%s","exit_code":137}\n' \
+    "$code" "$_killed" "$alarm_log" "$detail"
+  sync 2>/dev/null || true
+  if [ "$_killed" = "true" ]; then
+    if command -v pkill >/dev/null 2>&1; then pkill -KILL -P "$$" 2>/dev/null || true; fi
+    kill -KILL "$$" 2>/dev/null || true
+    exit 137   # 兜底（SIGKILL 未生效时仍以 137 退出，语义一致）
+  fi
+  return 137
+}
+
 # ---------- PRM MONITOR: structural (--local) + semantic (--api → v4-flash) + alignment (--align → doc-code review) ----------
 # Refs: --align = 委托 doc-align 插件（gk_doc_align.py 单一实现；F-REV-42 完成 2026-09-01 收敛）。0 API calls.
 # Refs: --subagent --crossrev = L2 交叉审查显式通道（2026-09-04 L2/L3 换位）：preflight A 上下文签名新鲜/B L3 基线 status-fresh(stale 才 analyze)/C 审查节点绑定/D pin → gk_l3_prefetch 预取 detect-changes 摘要 → GK_L3_EVIDENCE env 注入 subagent（不可用 WARN 降级不阻断）。
 # ----------
-
 cmd_monitor() {
   local mode="--local" stage="" api_key="${API_KEY}" user_tools="" crossrev_flag=false role_override="" web_flag="0"
   local task_file=""
+  # 2026-11-14（owner 令「default 模式必须加前置闸」）：落 default 角色的显式理由。
+  local default_reason=""
+  # 2026-11-14（owner 令「计划质询只允许标准派发」）：**进入函数前**继承到的批身份 env。
+  #   必须在下方 `export GK_BATCH_*` 之前采样 —— 否则本函数自己刚注入的 flag 也会被算成
+  #   env 继承（审计账本里出现「flags + env」双份，误导取证）。
+  local _inherited_batch=""
+  [ -n "${GK_BATCH_PLAN:-}" ] && _inherited_batch="${_inherited_batch} GK_BATCH_PLAN"
+  [ -n "${GK_BATCH_NARROW:-}" ] && _inherited_batch="${_inherited_batch} GK_BATCH_NARROW"
+  [ -n "${GK_BATCH_EPOCH:-}" ] && _inherited_batch="${_inherited_batch} GK_BATCH_EPOCH"
+  [ -n "${GK_ARM_GROUP:-}" ] && _inherited_batch="${_inherited_batch} GK_ARM_GROUP"
+  [ -n "${GK_ARM_DELTA:-}" ] && _inherited_batch="${_inherited_batch} GK_ARM_DELTA"
   # G1（2026-10-03）：批身份派发侧接线（§18.1 判据三要素由**派发侧**显式给，非时间桶近似）。
   local batch_plan="" batch_narrow="" batch_epoch="" arm_group="" arm_delta=""
   # F4（2026-10-15）：通用进度探测（coder/质询 共用）—— `--watch <target>` 走共享模块
@@ -4441,6 +4589,8 @@ cmd_monitor() {
       --kind) watch_kind="${2:-}"; shift 2 2>/dev/null || shift ;;
       --crossrev) crossrev_flag=true; shift ;;  # C (2026-09-04): 交叉审查 L2 显式通道 → 节点绑定 + A/B/D 前置
       --role) role_override="${2:-}"; shift 2 2>/dev/null || shift ;;  # F-REV-11 C2 (2026-09-10): 显式角色覆盖（review 车道具名角色）
+      # 2026-11-14（owner 令）：落 default 角色的理由（消费方 = 下方的 default 前置闸）。
+      --default-reason) default_reason="${2:-}"; shift 2 2>/dev/null || shift ;;
       --tools) user_tools="${2:-}"; shift 2 2>/dev/null || shift ;;  # explicit tool selection for --subagent
       # 2026-11-08（research-408）：受治联网显式开关（0=关/缺省，1=开）；只对本次派发生效。
       --web) web_flag="${2:-0}"; shift 2 2>/dev/null || shift ;;
@@ -4542,10 +4692,26 @@ cmd_monitor() {
   #   表不可读 ⟹ fail-closed。
   if [ -n "$role_override" ]; then
     local _valid_roles _role_py
-    _role_py=$(_subagent_py_real)
-    _valid_roles=$(PYTHONPATH="$SKILL_DIR/scripts" env -u STATE_FILE "$_role_py" -c \
-      "import gk_role_regions as s; print('|'.join(sorted(s.ROLE_ALLOWED_REGIONS)))" \
-      2>/dev/null || true)
+    # 解释器：角色表**零依赖**（`gk_role_regions.py` 纯数据、无 openai/pydantic 导入）⟹ 优先
+    #   PATH 上的 `python3`，只读一张表、不拖依赖树。读不到时**回落子代理解释器**
+    #   （与派发同一解释器 ⟹ 「表能读」与「子代理能跑」同源，不会出现表可选而派发不可用）。
+    #   2026-11-13：**禁**用 `PYTHONPATH=$SKILL_DIR/scripts` —— WSL 下解释器可能是 Windows
+    #   布局的 `Scripts/python.exe`，POSIX 形态的 PYTHONPATH 对它是死路径 ⟹ 误报
+    #   ROLE_TABLE_UNREADABLE（实测本臂红）。改为 `cd` 到 scripts 后裸 import：cwd 由
+    #   WSL/msys 自动翻译为宿主形态，两平台通吃。
+    _role_py=$(command -v python3 2>/dev/null || true)
+    _valid_roles=""
+    if [ -n "$_role_py" ]; then
+      _valid_roles=$(cd "$SKILL_DIR/scripts" && env -u STATE_FILE "$_role_py" -c \
+        "import gk_role_regions as s; print('|'.join(sorted(s.ROLE_ALLOWED_REGIONS)))" \
+        2>/dev/null || true)
+    fi
+    if [ -z "$_valid_roles" ]; then
+      _role_py=$(_subagent_py_real)
+      _valid_roles=$(cd "$SKILL_DIR/scripts" && env -u STATE_FILE "$_role_py" -c \
+        "import gk_role_regions as s; print('|'.join(sorted(s.ROLE_ALLOWED_REGIONS)))" \
+        2>/dev/null || true)
+    fi
     if [ -z "$_valid_roles" ]; then
       echo '{"ok":false,"error":"ROLE_TABLE_UNREADABLE","hint":"无法从 scripts/gk_role_regions.py 读取 ROLE_ALLOWED_REGIONS；修解释器后重试（该模块无第三方依赖，不需要 openai）"}'
       return 2
@@ -4690,6 +4856,22 @@ d.setdefault('gate_data', {})['gitnexus'] = _json.loads(_os.environ.get('GN_JSON
   if [ "$mode" = "--subagent" ]; then
     local task="${stage:-}"
     [ -z "$task" ] && { echo '{"error":"--subagent requires a task argument"}' ; return 1; }
+    # ── 质询派发锁（2026-11-14 owner 令「计划质询只允许派发标准计划质询」）──────────
+    #   批身份五要素（--batch-plan/--batch-narrow/--batch-epoch/--arm-group/--arm-delta，
+    #   含同名 env 继承形态）在结构上**只属于 MoA 计划质询臂**（§18.1/§18.3 派发侧身份）。
+    #   原实现只把 flag 注入 env、**无一处分派门槛** ⟹ 手工拼
+    #   `monitor --subagent "<质询文本>" --arm-group G1` 可落 default 角色径直派发，绕过统一入口
+    #   `plan-refinement <plan> --run` 与 L2 入站门（2026-11-14 实测：6s 内 STUB_CALLED，
+    #   sub-1794632361-72-30684）。现 fail-closed + 强制击杀 + 报警（见 _gk_illegal_dispatch_kill）：
+    #   带批身份 ⟹ 必须显式 `--role plan-refinement`；其 full_task 还须 ∈ task_pipeline（BARE 守卫）
+    #   ⟹ 唯一合法来源 = 统一入口的 3×K fan-out。
+    local _identity_flags="${_batch_flags# }"
+    [ -n "$_inherited_batch" ] && _identity_flags="${_identity_flags}${_identity_flags:+ }env:${_inherited_batch# }"
+    if [ -n "$_identity_flags" ] && [ "$role_override" != "plan-refinement" ]; then
+      _gk_illegal_dispatch_kill "BATCH_IDENTITY_REQUIRES_PLAN_REFINEMENT" \
+        "identity=${_identity_flags}" "${role_override:-<unset>}" "$_identity_flags"
+      return 137
+    fi
     [ -z "$api_key" ] && { _resolve_api_key; api_key="$API_KEY"; }
     # W10 (2026-08-09): api-key 有效性预检 — 显式 --api-key 传错值 → 401（本次会话教训）
     if ! _validate_api_key "$api_key"; then
@@ -4852,7 +5034,18 @@ d.setdefault('gate_data', {})['gitnexus'] = _json.loads(_os.environ.get('GN_JSON
       fi
       if [ "$_healer" = "1" ]; then
         echo "[ctx-inject] self-heal ($_probe) → context --update $(date -u +%FT%TZ)" >> "$GK_DBG_LOG"
-        bash "$SKILL_DIR/gatekeeper-cli.sh" context --update >>"$GK_DBG_LOG" 2>&1 || true
+        # 2026-11-14（派发挂死根因之二）：自愈**必须有界**。`context --update` 内含 gitnexus
+        #   刷新（同批已在 `_gx_analyze_embeddings` 收口锁等待），但其它环节（status/build/
+        #   openssl）没有顶层 deadline ⟹ 一处卡住 = 整条派发路径无限期挂死（实测 600s 零输出）。
+        #   超时后**不改 fail-closed 语义**：不发布 ctx、下面复探仍不过 ⟹ preflight A 阻断，
+        #   但派发调用本身立即返回，不再把 subagent 派发拖死。旋钮 `GK_CTX_SELFHEAL_TIMEOUT`
+        #   默认 900s（> analyze 自身 600s 上限，避免误杀正在写的索引）。
+        local _heal_to="${GK_CTX_SELFHEAL_TIMEOUT:-900}" _heal_rc=0
+        timeout -k 10 "$_heal_to" bash "$SKILL_DIR/gatekeeper-cli.sh" context --update >>"$GK_DBG_LOG" 2>&1 || _heal_rc=$?
+        if [ "$_heal_rc" = "124" ] || [ "$_heal_rc" = "137" ]; then
+          echo "[ctx-inject] self-heal TIMEOUT (>${_heal_to}s, rc=$_heal_rc) — continue fail-closed $(date -u +%FT%TZ)" >> "$GK_DBG_LOG"
+          echo '{"warning":"context self-heal timed out — skipping context injection","severity":"review_block_candidate","timeout_s":'"$_heal_to"',"fix":"bash gatekeeper-cli.sh context --update"}' >&2
+        fi
       else
         echo "[ctx-inject] self-heal wait ($_probe) — 另一臂正在 update $(date -u +%FT%TZ)" >> "$GK_DBG_LOG"
         local _w=0
@@ -4941,18 +5134,40 @@ from gk_task_gate import task_in_pipeline
 print('true' if task_in_pipeline(os.environ.get('STATE_FILE',''), os.environ.get('GK_PR_TASK','')) else 'false')
 " 2>>"$GK_DBG_LOG") || _san_ok="false"
       if [ "$_san_ok" != "true" ]; then
-        echo "{\"ok\":false,\"error\":\"BARE_PLAN_REFINEMENT\",\"channel\":\"plan-refinement\",\"hint\":\"质询须走统一入口 plan-refinement <plan> --task … → --adjudicate last --decision approve（禁裸 --role plan-refinement）\"}"
-        return 2
+        # 2026-11-14 owner 令：非法质询路径 = 强制击杀 + 立刻报警（不再只回错误串）。
+        _gk_illegal_dispatch_kill "BARE_PLAN_REFINEMENT" "task=${task}" "plan-refinement" ""
+        return 137
       fi
     elif [ -z "$role_override" ] && echo "$task" | "$RG" -q "plan-refinement"; then
-      echo "{\"ok\":false,\"error\":\"REVIEW_ROLE_UNSPECIFIED\",\"channel\":\"plan-refinement\",\"hint\":\"疑似质询任务但未显式指定角色 —— 走统一入口 plan-refinement <plan> --task … → --adjudicate last --decision approve，或显式 --role plan-refinement\"}"
-      return 2
+      _gk_illegal_dispatch_kill "REVIEW_ROLE_UNSPECIFIED" "task=${task}" "<unset>" ""
+      return 137
     fi
     # F-REV-11 C2 (2026-09-10)：显式 --role 覆盖自动推导。L2 --crossrev / 后R 双独立此前
     # 既无 RED-* 前缀亦无 plan-refinement 标记 → 落 default（[evidence]）→ read_repo 读
     # gatekeeper-cli.sh 被 scope denied（C1 给 scanner/exploiter/auditor 加 gate 对这两条车道
     # 不生效）→ 具名角色 = 结构性闭合。
     [ -n "$role_override" ] && subagent_role="$role_override"
+    # ── default 落点前置闸（2026-11-14 owner 令「default 模式必须说为什么」）────────────
+    #   `default` = 「无专用模式可匹配」的兜底角色：无角色预算/工具面/审查协议。静默落入
+    #   default 是本轮事故的另一半（改写措辞 ⟹ 落 default ⟹ verdicts/seven_dim 全空却套质询
+    #   模板）。现要求**显式理由** `--default-reason`（去空白后 ≥8 字符），并随 payload 落
+    #   `subagent_history.default_reason`（可审计，禁口说无凭）。
+    #   显式具名通道 `--crossrev` 有自己的 preflight（A/B/C/D）⟹ 不属兜底，豁免。
+    if [ "$subagent_role" = "default" ] && ! $crossrev_flag; then
+      local _dr_compact="${default_reason//[[:space:]]/}"
+      if [ "${#_dr_compact}" -lt 8 ]; then
+        echo "{\"ok\":false,\"error\":\"DEFAULT_ROLE_REASON_REQUIRED\",\"channel\":\"default\",\"role\":\"default\",\"exit_code\":2,\"hint\":\"落 default 角色须显式说明为何不用具名模式：monitor --subagent \\\"<任务>\\\" --default-reason \\\"<为什么 default 而非 coder/plan-refinement/scanner/...>\\\"（去空白 ≥8 字符，写入 subagent_history.default_reason）\"}"
+        return 2
+      fi
+      export GK_DEFAULT_REASON="$default_reason"
+      # 播报面净化（禁理由里的换行伪造第二条 [ALARM]/[gate] 行）；payload 侧保留原文。
+      local _dr_log
+      _dr_log=$(printf '%s' "$default_reason" | tr '\n\r' '  ')
+      _gk_gate_note "DEFAULT-ROLE" "PASS" "reason=$_dr_log"
+    elif [ -n "$default_reason" ]; then
+      echo "{\"ok\":false,\"error\":\"DEFAULT_REASON_NOT_APPLICABLE\",\"role\":\"$subagent_role\",\"exit_code\":2,\"hint\":\"--default-reason 仅用于最终落 default 角色的派发（--crossrev 属具名通道，不需理由）\"}"
+      return 2
+    fi
     # 2026-08-28 窄任务下发前投毒拦截（fail-closed）：清单是路由事实源，强注入信号
     # （忽略指令/角色伪装/跨租户）→ 阻断下发并报明细。深层投毒另需聚合器清洗（见 §4.9）。
     # 2026-08-28 追加 schema/复杂度校验（域 2）：格式违规/超限清单同样拒绝下发（防巨型清单污染）。
@@ -6114,9 +6329,9 @@ print('ok' if d.get('ok') is True else ('skip' if str(d.get('error','')).startsw
     return 0
   fi
 
-  # ── non-standard 成功路径：I9 / auto-audit / audit_result / red_* / achievements ──
+  # ── non-standard 成功路径：I9 / auto-audit / audit 副作用 / red_* / achievements ──
   # dry_run（--check）零副作用契约：state 写入类（I9/achievements/context）跳过；
-  # 只读证据收集（audit_result/auto-audit）保留（与 standard dry-run 输出对齐）。
+  # audit 子命令的**落盘副作用**保留（结果**不回填**输出键，见下方 §27.1 注）。
   local i9_output="" auto_audit_output="" audit_extra=""
   # 2026-09-20（ECC-PLAN ②·归口）：rg 单源 "$RG"（原 bare rg）
   if [ "$dry_run" = "false" ] && { [ "$to_stage" = "ECO-DOC" ] || echo "$to_stage" | "$RG" -qi "RED-REPORT"; }; then
@@ -6162,10 +6377,15 @@ print(json.dumps(upsert_red_findings(os.environ.get('GK_RED_STATE',''), new), en
   fi
   if [ "$dry_run" = "false" ]; then
     case "$to_stage" in
-    AUDIT-STATE) audit_extra=",\"audit_result\":$(bash "$0" audit --state 2>/dev/null || echo '{}')" ;;
-    AUDIT-MEMORY) audit_extra=",\"audit_result\":$(bash "$0" audit --memory 2>/dev/null || echo '{}')" ;;
-    AUDIT-CROSSR) audit_extra=",\"audit_result\":$(bash "$0" audit --crossr 2>/dev/null || echo '{}')" ;;
-    AUDIT-REPORT) audit_extra=",\"audit_result\":$(bash "$0" audit --report 2>/dev/null || echo '{}')" ;;
+    # 2026-11-16（审计署 §27.1 独立门）：E13 后 `audit_result` 零采信方
+    #   （`gk_advance._hint_for` 已改走 `audit_all_recorded`；三写面被
+    #   `gk_state_patch._AUDIT_EVIDENCE_KEYS` 封禁）⟹ 不再把结果回填成输出键。
+    #   **仅保留 audit 子命令的副作用生产**（cmd_audit 写 `gate_data.audit_*_result`，
+    #   那是 D7-B/B3 的判据面）。红先臂：`test_transition不再输出死路audit_result键`。
+    AUDIT-STATE) bash "$0" audit --state >/dev/null 2>&1 || true ;;
+    AUDIT-MEMORY) bash "$0" audit --memory >/dev/null 2>&1 || true ;;
+    AUDIT-CROSSR) bash "$0" audit --crossr >/dev/null 2>&1 || true ;;
+    AUDIT-REPORT) bash "$0" audit --report >/dev/null 2>&1 || true ;;
     RED-SCOPE) audit_extra=",\"red_scope\":$(bash "$0" self-check --tests skip 2>/dev/null || echo '{}')" ;;
     # 2026-09-22（R22/C1 红队发现修复）：原 4 阶段注入的是**假证据** ——
     #   RED-SURFACE 直接内联字面量 `{"cached":true,"from":"ECO-SCAN baseline"}`（不是扫描结果，
@@ -7876,6 +8096,17 @@ _verify_remote() {
   # 2026-11-01：匹配改**内建 glob**（原 `"$RG" -qi` 在 rg 缺位时恒假 ⟹ 安全门 fail-open）。
   local _url_lc _p_lc pattern
   _url_lc=$(printf '%s' "$url" | tr '[:upper:]' '[:lower:]')
+  # 2026-11-10：SSH scp 形态归一（`[user@]host:path` → `host/path`）。
+  #   病象（本会话实测）：白名单模式带**斜杠**（`atomgit.com/`），而 scp 形态是**冒号**
+  #   （`git@atomgit.com:owner/repo.git`）⟹ 子串恒不命中 ⟹ 本仓自己的 origin 被判
+  #   `remote_not_allowed`，只能靠放宽 env 绕过（安全门形同虚设地"总是拦自己"）。
+  #   只归一一份用于匹配的副本；回显的 `url` 仍是原始值（判据/排错口径不变）。
+  case "$_url_lc" in
+    *"://"*) : ;;                                        # 已含 scheme（https/ssh/git），原样
+    *@*:*) _url_lc="${_url_lc#*@}"                       # 去 user@
+           _url_lc="${_url_lc%%:*}/${_url_lc#*:}" ;;     # host:path → host/path
+    *:*)   _url_lc="${_url_lc%%:*}/${_url_lc#*:}" ;;
+  esac
   for pattern in "${_ALLOWED_REMOTE_PATTERNS[@]}"; do
     _p_lc=$(printf '%s' "$pattern" | tr '[:upper:]' '[:lower:]')
     case "$_url_lc" in
@@ -8121,11 +8352,11 @@ ENDJSON
     echo "" >&2
   fi
 
-  # F-14: L4 cross-review check before push
+  # F-14: 推送前交叉审查留证检查（旧称 "L4"；七层模型已退役，见 gk_doc_align.stale_layering_refs）
   # 2026-09-20（ECC-PLAN ②·归口）：rg 单源 "$RG"（原 bare rg）
   local l4_marker; l4_marker=$(git log -5 --format="%B" 2>/dev/null | "$RG" -c "L4\|cross.review\|niantic" || echo "0")
   if [ "$l4_marker" -eq 0 ] && [ "$_cur_stage" != "DONE" ]; then
-    echo "⚠️  WARNING: No L4 cross-review evidence in recent commits. Consider running L1-L7 review before push." >&2
+    echo "⚠️  WARNING: 最近提交无交叉审查证据。推送前建议先跑审计署 / 红队序列（gk-audit / gk-red）留证。" >&2
   fi
 
   # Execute push with retry
@@ -8704,12 +8935,40 @@ cmd_commit() {
 
   [ -z "$msg" ] && { echo '{"ok":false,"error":"commit message required. Usage: commit -m \"message\" [--add <path>...] [--repo skill|<path>]"}'; return 1; }
 
+  # ① 归属闸（2026-11-10，事故 `99aed8c2`）：**不得在别人的 worktree 里提交**。
+  #   病象：并发会话把产物写进本会话 worktree ⟹ 本会话 commit 里混入他人文件，`git log` 无从分辨。
+  #   判据单源 = `scripts/gk_worktree_owner.py`（路径 token / 池槽租约 / 首写认领）；
+  #   调用方身份 = cwd token ∪ env `GK_SESSION_ID` ∪ 同源 marker 载荷 sid 与别名。
+  #   位点：**仅在真提交路径**（`--verify-only` / `--refresh` 是只读面，可审别人的树）。
+  local _own_json _own_rc=0
+  _own_json=$(python3 "$SKILL_DIR/scripts/gk_worktree_owner.py" check --path "$repo" --cwd "$PWD" 2>>"$GK_DBG_LOG") || _own_rc=$?
+  if [ "$_own_rc" -ne 0 ]; then
+    echo "{\"ok\":false,\"error\":\"WORKTREE_OWNERSHIP_VIOLATION\",\"detail\":${_own_json:-null}}"
+    return 1
+  fi
   # ① 锁预检（孤儿 ⟹ 归档；活锁 ⟹ 不抢）
   _gk_commit_lock_preflight "$repo" || return 1
   # ①a 设计 §2（merge **降级为检出**，2026-09-30）：**检出**未完成 merge 态 ⟹ 留痕 + 提示串行合并；
   #     **不拒**（冲突收尾本身就是 `git commit -F`；做成拒绝会阻断收尾）。一期**不做** `cmd_merge`。
-  if [ -e "$repo/.git/MERGE_HEAD" ]; then
-    echo "WARN[commit]: 检出未完成 merge 态（MERGE_HEAD 存在）⟹ 本次提交可能在收尾冲突；合并请**串行**（设计 §11.3-3：单队列 git merge --no-ff）" >&2
+  #     2026-11-13：改为**前置闸**——`gk_merge_guard --staged-merge` 校验暂存面（防 merge 提交
+  #     把产物清理/误删一起写进历史：实测本仓有 792 条 docs/analysis 暂存删除）。
+  #     ⚠ 用 `git rev-parse --verify MERGE_HEAD` 而非 `$repo/.git/MERGE_HEAD`：链接 worktree 的
+  #     `.git` 是**文件**，原判据在 worktree 里恒为假（本仓主用法正是 worktree）。
+  if git -C "$repo" rev-parse --verify -q MERGE_HEAD >/dev/null 2>&1; then
+    echo "WARN[commit]: 检出未完成 merge 态（MERGE_HEAD 存在）⟹ 合并请**串行**（设计 §11.3-3：单队列 git merge --no-ff）" >&2
+    if [ "${GK_MERGE_GUARD:-1}" != "0" ]; then
+      local _mg_out _mg_rc=0 _mg_extra=""
+      [ -n "${GK_MERGE_ALLOW_DELETIONS:-}" ] && _mg_extra="--allow-index-deletions"
+      _mg_out=$(python3 "$SKILL_DIR/scripts/gk_merge_guard.py" --repo "$repo" --staged-merge \
+                  $_mg_extra 2>>"$GK_DBG_LOG") || _mg_rc=$?
+      if [ "$_mg_rc" != "0" ]; then
+        printf '%s\n' "$_mg_out"
+        echo "BLOCK[commit]: merge 收尾被合并前置闸拒绝（逐条 reasons[].next）；确认删除确属预期用 GK_MERGE_ALLOW_DELETIONS=1，应急关闸 GK_MERGE_GUARD=0" >&2
+        _log_block "commit" "merge_guard_blocked"
+        return 3
+      fi
+      printf '%s\n' "$_mg_out" >> "$GK_DBG_LOG" 2>/dev/null || true
+    fi
   fi
   # ①b 设计 L（2026-09-30，R-CONC-GIT §2）：repo 级写 **lease** —— 临界段前**自己创建**、各出口释放。
   #     kill switch `GK_GIT_LEASE=0` ⟹ 完全跳过（应急；行为与本批前**逐字一致**）。
@@ -8749,13 +9008,48 @@ cmd_commit() {
   _staged=$(git -C "$repo" diff --cached --name-only 2>/dev/null | tr '\n' ',')
   _gk_claim_reconcile "${GK_SESSION_ID:-}" "${_staged%,}" "$repo"
 
+  # ④c 提交面提示（2026-11-10）：主题混合度 + 可配阈值。默认 **warn 不阻断**
+  #   （GK_COMMIT_GUARD=block 才拒绝，off 静默）；判据与建议来源全在
+  #   scripts/gk_commit_size_guard.py —— 不绑定 git-workflow（PATH 有才提 stage-pick）。
+  local _cg_json=""
+  if [ "${GK_COMMIT_GUARD:-warn}" != "off" ]; then
+    _cg_json=$(python3 "$SKILL_DIR/scripts/gk_commit_size_guard.py" --repo "$repo" \
+      --mode "${GK_COMMIT_GUARD:-warn}" 2>/dev/null || true)
+    if printf '%s' "$_cg_json" | grep -q '"error": *"COMMIT_TOO_LARGE"'; then
+      _gk_lease_release "$_lease_lk"
+      echo "$_cg_json"
+      return 1
+    fi
+  fi
+
   # Write message to temp file via Python (bypass sandbox encoding truncation)
   local msg_file
   msg_file=$(python3 -c "import tempfile;print(tempfile.mkstemp(suffix='.txt',prefix='gk_commit_')[1])" 2>/dev/null || echo "/tmp/gk_commit_$$.txt")
   printf '%s' "$msg" | python3 "$SKILL_DIR/scripts/gk_io.py" write-text "$msg_file" 2>/dev/null || { _gk_lease_release "$_lease_lk"; echo '{"ok":false,"error":"failed to write commit message"}'; return 1; }
 
+  # ①e 提交身份（2026-11-10，事故 `99aed8c2`）：author = `agent/<sid> <sid>@gatekeeper.local`
+  #    + message 尾部 `Session:` / `Worktree:` trailer（幂等）。动机：原 author 是本机全局身份，
+  #    所有会话/所有 worktree 全一样 ⟹ 提交串味后 `git log` **无从分辨**。判据单源 =
+  #    `scripts/gk_commit_identity.py`（sid 派生复用 gk_session_identity，禁第二实现）。
+  local _id_json _id_name _id_email
+  _id_json=$(python3 "$SKILL_DIR/scripts/gk_commit_identity.py" identity --repo "$repo" 2>>"$GK_DBG_LOG") || _id_json="{}"
+  _id_name=$(printf '%s' "$_id_json" | python3 "$SKILL_DIR/scripts/gk_apply_worktree_cli.py" json-field author_name 2>/dev/null)
+  _id_email=$(printf '%s' "$_id_json" | python3 "$SKILL_DIR/scripts/gk_apply_worktree_cli.py" json-field author_email 2>/dev/null)
+  python3 "$SKILL_DIR/scripts/gk_commit_identity.py" decorate --repo "$repo" --msg-file "$msg_file" >>"$GK_DBG_LOG" 2>&1 || true
+
   # git commit -F reads from file, no CLI encoding issues
-  local out; out=$(git -C "$repo" commit -F "$msg_file" 2>&1); local rc=$?
+  # ①f 身份环境**必须清**（2026-11-11，场景 `commit-identity-forge-01` 实测）：
+  #   `GIT_AUTHOR_*` / `GIT_COMMITTER_*` 的优先级高于 `-c user.name/user.email` ⟹ 不清掉时
+  #   一个 `export GIT_AUTHOR_NAME=agent/<别人>` 就能伪造提交身份（⑤b 的 verify 只能事后抓）。
+  #   Python 侧同源 = `gk_commit_identity.sanitized_env`（改一侧须同批改另一侧）。
+  local out rc=0
+  if [ -n "$_id_name" ] && [ -n "$_id_email" ]; then
+    out=$(env -u GIT_AUTHOR_NAME -u GIT_AUTHOR_EMAIL -u GIT_COMMITTER_NAME -u GIT_COMMITTER_EMAIL \
+      git -C "$repo" -c user.name="$_id_name" -c user.email="$_id_email" commit -F "$msg_file" 2>&1) || rc=$?
+  else
+    out=$(env -u GIT_AUTHOR_NAME -u GIT_AUTHOR_EMAIL -u GIT_COMMITTER_NAME -u GIT_COMMITTER_EMAIL \
+      git -C "$repo" commit -F "$msg_file" 2>&1) || rc=$?
+  fi
   rm -f "$msg_file" 2>/dev/null
 
   if [ $rc -ne 0 ]; then
@@ -8777,10 +9071,32 @@ cmd_commit() {
     echo "{\"ok\":false,\"commit\":\"$sha\",\"error\":\"COMMIT_VERIFY_FAILED(rev HEAD): 坏项已进历史 ⟹ 人工处置 = git -C $repo reset --soft HEAD^ 后重提（**禁 amend**）\",\"verify\":$_v2}"
     return 1
   fi
+  # ⑤b 提交身份复核（2026-11-10）：HEAD 的 author / `Session:` / `Worktree:` 必须与本树一致。
+  #    不一致 ⟹ 历史已写 ⟹ fail-loud + 给处置（`reset --soft HEAD^` 重提；**禁 amend**）。
+  local _idv _idvrc=0
+  _idv=$(python3 "$SKILL_DIR/scripts/gk_commit_identity.py" verify --repo "$repo" --rev HEAD 2>>"$GK_DBG_LOG") || _idvrc=$?
+  if [ "$_idvrc" -ne 0 ]; then
+    _gk_lease_release "$_lease_lk"
+    echo "{\"ok\":false,\"commit\":\"$sha\",\"error\":\"COMMIT_IDENTITY_MISMATCH: author/trailer 与本 worktree 身份不一致（并发串味）⟹ 处置 = git -C $repo reset --soft HEAD^ 后按 correct 身份重提（**禁 amend**）\",\"identity\":${_idv:-null}}"
+    return 1
+  fi
   local _vn
   _vn=$(printf '%s' "$_v2" | python3 "$SKILL_DIR/scripts/gk_json_utils.py" field checked --len --default-invalid 0 2>/dev/null || echo 0)
   _gk_lease_release "$_lease_lk"
-  echo "{\"ok\":true,\"commit\":\"$sha\",\"verified\":$_vn,\"message\":$(echo "$out" | python3 "$SKILL_DIR/scripts/gk_json_utils.py" escape --strip 2>/dev/null || echo '\"\"')}"
+  local _base_json
+  _base_json="{\"ok\":true,\"commit\":\"$sha\",\"verified\":$_vn,\"message\":$(echo "$out" | python3 "$SKILL_DIR/scripts/gk_json_utils.py" escape --strip 2>/dev/null || echo '\"\"')}"
+  if [ -n "$_cg_json" ]; then
+    _base_json=$(printf '%s\n%s\n' "$_base_json" "$_cg_json" | python3 -c '
+import json, sys
+base = json.loads(sys.stdin.readline())
+guard = json.loads(sys.stdin.readline())
+w = guard.get("warnings") or []
+if w:
+    base["warnings"] = w
+print(json.dumps(base, ensure_ascii=False))
+' 2>/dev/null || printf '%s' "$_base_json")
+  fi
+  echo "$_base_json"
   return 0
 }
 
@@ -8969,6 +9285,23 @@ cmd_release_check() {
 }
 
 # ─── apply-worktree: worktree 申请—分发入口（F7/R9 子集，2026-09-22）───
+# 热池 TTL 自动回收（2026-11-10，方案 A）：**任何** reclaim 子模式（默认 / --tmp / --trash）
+# 都先扫一遍池 —— 病象：槽位 TTL 原先只在默认 reclaim 分支内被扫，而线上唯一的 cron
+# （`gk_trash_cron.sh` 调 `--reclaim --trash --apply`）走 trash 子模式 ⟹ **永不触发**
+# （「机制存在但不生效」族）。判据与清理单源 = `gk_worktree_pool.sweep`，本函数只做编排。
+_gk_pool_sweep_if_any() {  # <pool_root> <main_repo>
+  local _root="${1:-}" _repo="${2:-$SKILL_DIR}" _base
+  [ -n "$_root" ] || return 0
+  _base=$(git -C "$_repo" rev-parse HEAD 2>/dev/null || echo HEAD)
+  python3 "$SKILL_DIR/scripts/gk_worktree_pool.py" --repo "$_repo" --root "$_root" \
+    sweep --baseline "$_base" >>"$GK_DBG_LOG" 2>&1 || true
+  return 0
+}
+
+_gk_pool_root() {  # 白名单根**单源** = gk_route_center.DEV_WORKTREE_ROOTS[0]（禁第二份字面量）
+  python3 "$SKILL_DIR/scripts/gk_apply_worktree_cli.py" route-root 2>/dev/null
+}
+
 # 用户公理 A2：coding agent 须「向元数据路由申请 worktree」，禁止自行挑选目录。
 # 单一事实源 = gk_route_center.apply_worktree（白名单 + 归一化复用，禁第二实现）。
 # Usage: apply-worktree <finding-id> --family <F>
@@ -8980,7 +9313,7 @@ cmd_release_check() {
 # 故 code-fix 编排作为本命令的 `--code-fix` 模式挂在**区外**的既有函数体上（零保护区改动）。
 # 族判定/窄任务编译的单一事实源 = `gk_agent_family.py resolve`（本函数只做参数编排，不复制判定）。
 cmd_apply_worktree() {
-  local fid="" family="" codefix="0" tier="" dry="0" state_override="" state_flag_given="0" batch="0" session="" reclaim="0" reclaim_apply="0" reclaim_tmp="0" tmp_days="7" reclaim_trash="0" trash_days="3" bind_mode="" path_arg="" main_repo_arg="" receive_check_wt="" release_claim="" reclaim_all="0" sat_reclaim="" sat_backfill="" finding_spill="" reclaim_branches="0" reclaim_all_branches="0" plan_arg=""
+  local fid="" family="" codefix="0" tier="" dry="0" state_override="" state_flag_given="0" batch="0" session="" reclaim="0" reclaim_apply="0" reclaim_tmp="0" tmp_days="7" reclaim_trash="0" trash_days="3" bind_mode="" path_arg="" main_repo_arg="" receive_check_wt="" release_claim="" reclaim_all="0" sat_reclaim="" sat_backfill="" finding_spill="" reclaim_branches="0" reclaim_all_branches="0" plan_arg="" pool_mode="" pool_size="3" pool_sid="" pool_branch=""
   # 2026-11-08：`--path` 改为**可重复**（模块侧本就支持重复白名单；CLI 原为单值 ⟹ 第二条覆盖第一条，
   #   多棵 worktree 只能分多次跑）。数组只用于 reclaim 透传；bind/unbind 仍用 path_arg（单值语义不变）。
   local -a reclaim_paths=()
@@ -9005,6 +9338,11 @@ cmd_apply_worktree() {
     --all) reclaim_all="1"; shift ;;
     --branches) reclaim_branches="1"; shift ;;
     --all-branches) reclaim_all_branches="1"; shift ;;
+    --pool-ensure) pool_mode="ensure"; shift ;;
+    --pool-status) pool_mode="status"; shift ;;
+    --pool-sweep) pool_mode="sweep"; shift ;;
+    --pool-acquire) pool_mode="acquire"; shift ;;
+    --pool-size) pool_size="${2:-3}"; shift 2 2>/dev/null || shift ;;
     *) fid="${1:-}"; shift 2>/dev/null || true ;;
   esac
   while [ $# -gt 0 ]; do
@@ -9035,6 +9373,13 @@ cmd_apply_worktree() {
       --all) reclaim_all="1"; shift ;;
       --branches) reclaim_branches="1"; shift ;;
       --all-branches) reclaim_all_branches="1"; shift ;;
+      --pool-ensure) pool_mode="ensure"; shift ;;
+      --pool-status) pool_mode="status"; shift ;;
+      --pool-sweep) pool_mode="sweep"; shift ;;
+      --pool-acquire) pool_mode="acquire"; shift ;;
+      --pool-size) pool_size="${2:-3}"; shift 2 2>/dev/null || shift ;;
+      --sid) pool_sid="${2:-}"; shift 2 2>/dev/null || shift ;;
+      --pool-branch) pool_branch="${2:-}"; shift 2 2>/dev/null || shift ;;
       --tmp-days) tmp_days="${2:-7}"; shift 2 2>/dev/null || shift ;;
       --trash-days) trash_days="${2:-3}"; shift 2 2>/dev/null || shift ;;
       --apply) reclaim_apply="1"; shift ;;
@@ -9042,7 +9387,7 @@ cmd_apply_worktree() {
       --tier) tier="${2:-}"; shift 2 2>/dev/null || shift ;;
       --state) state_override="${2:-}"; state_flag_given="1"; shift 2 2>/dev/null || shift ;;
       --dry-run) dry="1"; shift ;;
-      *) echo "{\"ok\":false,\"error\":\"unknown arg: $1\",\"usage\":\"apply-worktree <finding-id> --family <F> | apply-worktree [--code-fix] --finding <fid[,…]> [--batch] [--family F] [--tier N] [--dry-run] [--state P] | apply-worktree --session <name> [--state P] | apply-worktree --bind|--unbind --path <dir> [--state P] [--dry-run] | apply-worktree --reclaim [--tmp|--trash] [--tmp-days N] [--trash-days N] [--path <dir>]... [--branches] [--all-branches] [--apply] [--all] | apply-worktree --release-claim <sid>\",\"next\":\"bash gatekeeper-cli.sh help apply-worktree\"}"; return 2 ;;
+      *) echo "{\"ok\":false,\"error\":\"unknown arg: $1\",\"usage\":\"apply-worktree <finding-id> --family <F> | apply-worktree [--code-fix] --finding <fid[,…]> [--batch] [--family F] [--tier N] [--dry-run] [--state P] | apply-worktree --session <name> [--state P] | apply-worktree --bind|--unbind --path <dir> [--state P] [--dry-run] | apply-worktree --reclaim [--tmp|--trash] [--tmp-days N] [--trash-days N] [--path <dir>]... [--branches] [--all-branches] [--apply|--dry-run] [--all] | apply-worktree --release-claim <sid> | apply-worktree --pool-acquire --sid <sid> --pool-branch <branch> | apply-worktree --pool-ensure|--pool-status|--pool-sweep [--pool-size N]\",\"next\":\"bash gatekeeper-cli.sh help apply-worktree\"}"; return 2 ;;
     esac
   done
   # ── sanctioned 手动 release 出口（write-claims 台账；仅**追加** released 终态行）（2026-10-06）──────
@@ -9087,9 +9432,32 @@ cmd_apply_worktree() {
     fi
     local -a _we_args=()
     [ "$dry" = "1" ] && _we_args+=(--dry-run)
-    python3 "$SKILL_DIR/scripts/gk_state_patch.py" worktrees-extra \
-      "${state_override:-$STATE_FILE}" "$bind_mode" "$path_arg" "${_we_args[@]}" 2>>"$GK_DBG_LOG"
-    return $?
+    local _we_out _we_rc
+    _we_out=$(python3 "$SKILL_DIR/scripts/gk_state_patch.py" worktrees-extra \
+      "${state_override:-$STATE_FILE}" "$bind_mode" "$path_arg" "${_we_args[@]}" 2>>"$GK_DBG_LOG")
+    _we_rc=$?
+    # 2026-11-12（ECC-794907FEC0CE）：hook 的写面按**目标路径**解析 state，其缺省域是
+    #   `$SKILL_DIR/.gatekeeper.state`；而本处写的是「当前生效 state」（有 plan 指针时 = 域 state）
+    #   ⟹ 只写一侧会出现「CLI 说已绑、hook 仍 BLOCK」。故**双写**（同一条唯一写通路，幂等）；
+    #   写默认域失败不改变主返回值（主域成功即语义达成）。
+    # 2026-11-13（真污染修复）：双写**只对 hook 可能治理的路径**生效 —— 判据 = `--path` 落在
+    #   worktree 根白名单内（单源 `gk_apply_worktree_cli.py route-root`，与 hook 的治理面同源）。
+    #   病象（实测）：pytest 臂以 `tmp_path/wt` 作 `--path` + 临时 STATE_FILE ⟹ 双写把
+    #   `/tmp/pytest-of-root/.../wt`（8 条）灌进**真** state 的 `worktrees_extra[]`，
+    #   `route-check` 随即报坏 extra。这类路径 hook 永不治理 ⟹ 双写零收益、纯污染。
+    if [ "$_we_rc" -eq 0 ] && [ "${state_override:-$STATE_FILE}" != "$_DEFAULT_STATE_FILE" ] \
+       && [ -f "$_DEFAULT_STATE_FILE" ]; then
+      local _we_root
+      _we_root=$(_gk_pool_root)
+      case "$path_arg" in
+        "${_we_root%/}"/*|"$SKILL_DIR"|"${SKILL_DIR%/}"/*)
+          python3 "$SKILL_DIR/scripts/gk_state_patch.py" worktrees-extra \
+            "$_DEFAULT_STATE_FILE" "$bind_mode" "$path_arg" "${_we_args[@]}" >>"$GK_DBG_LOG" 2>&1 || true
+          ;;
+      esac
+    fi
+    echo "$_we_out"
+    return "$_we_rc"
   fi
   # ── 卫星片回收**生产入口**（T1，`ECC-2A298C57FF7E`）──────────────────────────
   #   动机：`gk_satellite.reclaim` 此前**零生产调用点**（回收器够不到片 = 幻影门，卫星计划 §4.2）。
@@ -9181,8 +9549,18 @@ cmd_apply_worktree() {
   # 落点**区外**（与 code-fix/batch/session 同层）⟹ 零保护区改动；**禁第二实现** —— 扫描 /
   #   归档 / 回收的单一事实源 = `scripts/gk_worktree_reclaim.py`，本函数只做参数编排。
   if [ "$reclaim" = "1" ]; then
+    # 2026-11-16（流程摩擦修复）：`--apply` 与 `--dry-run` 语义相反，同时给**必须报错**。
+    #   原实现只把 `--apply` 拼进 `_rc_args`、`--dry-run` **完全不透传**（core 侧本就「默认
+    #   dry-run」）⟹ `--reclaim --apply --dry-run` 静默落刀，用户以为在预览。
+    #   正确语义：`--dry-run` = 显式预览意图 ⟹ 抑制 `--apply`（core 默认即 dry-run，零改动）；
+    #   两者并存 = 矛盾指令 ⟹ fail-loud，不静默取一个。
+    if [ "$reclaim_apply" = "1" ] && [ "$dry" = "1" ]; then
+      echo '{"ok":false,"error":"CONFLICTING_FLAGS","detail":"--apply 与 --dry-run 互斥","usage":"apply-worktree --reclaim [--path <dir>]... [--apply | --dry-run]"}'
+      return 2
+    fi
     local -a _rc_args=()
-    [ "$reclaim_apply" = "1" ] && _rc_args+=(--apply)
+    # 显式 `--dry-run` 与「不带 --apply」等价（core 默认 dry-run）；此处显式记录意图，便于回包核对。
+    [ "$reclaim_apply" = "1" ] && [ "$dry" != "1" ] && _rc_args+=(--apply)
     # 2026-10-06（finding `ECC-2B04C5B10464`）：`--all` = **显式授权全量回收**。core 侧对
     #   「`apply` 且无 `--path` 且未授权」**拒绝**（`FULL_SWEEP_REFUSED`，零写）—— 治「一次无
     #   `--path` 的 `--apply` 全量扫删掉在用会话 worktree」的事故面（白名单原为 opt-in）。
@@ -9206,6 +9584,11 @@ cmd_apply_worktree() {
     # 2026-11-08（owner 裁定「合并回收所有工作区分支」）：游离分支面 —— worktree 面只看挂载分支，
     #   长期残留的已并入/patch 等价分支无回收通路（且门禁已拦裸 `git branch -d|-D`）。
     [ "$reclaim_all_branches" = "1" ] && _rc_args+=(--all-branches)
+    # TTL 自动回收（2026-11-10）：**三个子模式任一**都先扫热池 —— 线上 cron（gk_trash_cron.sh）
+    #   走 `--trash`，原先只在默认 reclaim 分支扫 ⟹ 崩溃槽位永不回收。`--apply` 才落刀（dry-run 零写）。
+    if [ "$reclaim_apply" = "1" ]; then
+      _gk_pool_sweep_if_any "${GATEKEEPER_WORKTREE_ROOT:-$(_gk_pool_root)}" "${main_repo_arg:-$(_gk_claims_repo)}"
+    fi
     if [ "$reclaim_tmp" = "1" ]; then
       # `/tmp` 子模式（2026-09-24 用户裁定「3 是不是更好」）：`/tmp` 是**全局共享**区，
       # 故**只清本仓可归因且超龄**的残留 —— 双条件判定与在用白名单都在脚本内（单一事实源）。
@@ -9221,6 +9604,31 @@ cmd_apply_worktree() {
       #   在回收之后解绑 `worktrees_extra[]` 中目录已不存在的条目（单一写通路，见 reclaim 尾段）。
       python3 "$SKILL_DIR/scripts/gk_worktree_reclaim.py" --repo "$SKILL_DIR" --state "${state_override:-$STATE_FILE}" "${_rc_args[@]}" 2>>"$GK_DBG_LOG"
     fi
+    return $?
+  fi
+  # ── 热池（2026-11-10，方案 A）：派发 ms 级 ──────────────────────────────────
+  # 病象：新建会话树 = 物化 2052 个 tracked 文件到 drvfs（9p），实测 31s ⟹ 派发 34.4s。
+  # 热池：预建 K 个 slot，派发只做 `checkout -B`（不写文件，实测 **3ms**）；TTL 自动回收
+  #   （崩溃/忘 release ⟹ `--pool-sweep`，判据在 `gk_worktree_pool.py` 单源）。
+  if [ -n "$pool_mode" ]; then
+    local _pool_base _pool_root _pool_repo
+    _pool_root="${GATEKEEPER_WORKTREE_ROOT:-}"
+    # 池目录名 = **主仓名**：在会话 worktree 内 `$SKILL_DIR` 会取成 `<sid>` ⟹ 池算到别处（实测）。
+    _pool_repo="${main_repo_arg:-$(_gk_claims_repo)}"
+    _pool_base=$(git -C "$_pool_repo" rev-parse HEAD 2>/dev/null || echo HEAD)
+    case "$pool_mode" in
+      ensure) python3 "$SKILL_DIR/scripts/gk_worktree_pool.py" --repo "$_pool_repo" --root "$_pool_root" ensure --size "$pool_size" --baseline "$_pool_base" 2>>"$GK_DBG_LOG" ;;
+      sweep)  python3 "$SKILL_DIR/scripts/gk_worktree_pool.py" --repo "$_pool_repo" --root "$_pool_root" sweep --baseline "$_pool_base" 2>>"$GK_DBG_LOG" ;;
+      acquire)
+        # 2026-11-16（流程摩擦修复）：**显式 acquire 入口**。此前抢槽只能靠发起一次派发
+        #   （`--session` / `--finding` / `--code-fix`）间接触发，想手动占槽做实验无通路。
+        #   语义单源 = `gk_worktree_pool.acquire`（sid 归属 / 一 sid 一槽 / 限流 / 保护分支
+        #   拒绝全在模块内）；本处只做参数校验与编排，**禁第二实现**。
+        [ -n "$pool_sid" ] || { echo '{"ok":false,"error":"--pool-acquire 需要 --sid <sid>","usage":"apply-worktree --pool-acquire --sid <sid> --pool-branch <branch>"}'; return 2; }
+        [ -n "$pool_branch" ] || { echo '{"ok":false,"error":"--pool-acquire 需要 --pool-branch <branch>","usage":"apply-worktree --pool-acquire --sid <sid> --pool-branch <branch>"}'; return 2; }
+        python3 "$SKILL_DIR/scripts/gk_worktree_pool.py" --repo "$_pool_repo" --root "$_pool_root" acquire --sid "$pool_sid" --branch "$pool_branch" --baseline "$_pool_base" 2>>"$GK_DBG_LOG" ;;
+      *)      python3 "$SKILL_DIR/scripts/gk_worktree_pool.py" --repo "$_pool_repo" --root "$_pool_root" status 2>>"$GK_DBG_LOG" ;;
+    esac
     return $?
   fi
   # ── P4 批量派发（2026-09-23 用户裁定「实装 P4」）──────────────────────────────
@@ -9328,10 +9736,31 @@ PY
     # 根默认（2026-09-25 上提）：`GATEKEEPER_WORKTREE_ROOT` 自解析已**上提到模式分派之前**
     # （本函数开头：`--session`/`--code-fix`/plain 三路共用同一单点）⟹ 此处**不再重复**
     # （禁第二实现）；显式传入的 env 仍优先（上提块只在空值时派生）。
-    _s_json=$(python3 "$SKILL_DIR/scripts/gk_route_center.py" apply-worktree \
-        --finding "session-${session}" --family session \
-        --main-repo "${main_repo_arg:-$SKILL_DIR}" --skill-dir "$SKILL_DIR" 2>>"$GK_DBG_LOG") \
-      || { echo "{\"ok\":false,\"error\":\"会话 worktree 申请失败\",\"raw\":${_s_json:-null}}"; return 1; }
+    # 2026-11-10（热池 A）：**先抢热槽**（派发 ms 级：只在既有树上 `checkout -B`，不物化文件）。
+    #   池未就绪 / 池满 / 抢槽失败 ⟹ 回落原冷建路径（行为零回归）。TTL 清理在池模块单源。
+    local _s_pool="" _s_base_sha _s_short _s_repo _s_root
+    # 2026-11-11（实测）：池目录名 = **主仓名**、根 = route-root。
+    #   `--repo "$SKILL_DIR"` 在会话树内会算成 `_pool/<sid>`；`$GATEKEEPER_WORKTREE_ROOT` 为空时
+    #   会算成 CWD 下相对 `_pool` ⟹ 两者都恒 `NO_POOL` ⟹ 回落冷建，而本机 git-workflow 入口
+    #   不可得 ⟹ `apply-worktree --session` 直接失败（派发侧形同不可用）。
+    _s_repo="${main_repo_arg:-$(_gk_claims_repo)}"
+    _s_root="${GATEKEEPER_WORKTREE_ROOT:-$(_gk_pool_root)}"
+    _s_base_sha=$(git -C "$_s_repo" rev-parse HEAD 2>/dev/null || true)
+    _s_short=$(printf 'session-%s' "$session" | sha256sum | cut -c1-8)
+    if [ "${GK_WT_POOL:-1}" != "0" ] && [ -n "$_s_base_sha" ] && [ -n "$_s_root" ]; then
+      _s_pool=$(python3 "$SKILL_DIR/scripts/gk_worktree_pool.py" \
+          --repo "$_s_repo" --root "$_s_root" \
+          acquire --sid "$session" --branch "agent/session/$_s_short" \
+          --baseline "$_s_base_sha" 2>>"$GK_DBG_LOG") || _s_pool=""
+    fi
+    if printf '%s' "$_s_pool" | grep -q '"ok": true'; then
+      _s_json="$_s_pool"
+    else
+      _s_json=$(python3 "$SKILL_DIR/scripts/gk_route_center.py" apply-worktree \
+          --finding "session-${session}" --family session \
+          --main-repo "${main_repo_arg:-$SKILL_DIR}" --skill-dir "$SKILL_DIR" 2>>"$GK_DBG_LOG") \
+        || { echo "{\"ok\":false,\"error\":\"会话 worktree 申请失败\",\"raw\":${_s_json:-null}}"; return 1; }
+    fi
     _s_wt=$(printf '%s' "$_s_json" | python3 "$SKILL_DIR/scripts/gk_apply_worktree_cli.py" json-field worktree 2>/dev/null)
     _s_branch=$(printf '%s' "$_s_json" | python3 "$SKILL_DIR/scripts/gk_apply_worktree_cli.py" json-field branch 2>/dev/null)
     [ -z "$_s_wt" ] && { echo "{\"ok\":false,\"error\":\"会话 worktree 未返回 worktree\",\"raw\":$_s_json}"; return 1; }
@@ -9510,6 +9939,17 @@ PY
     cp "$_st" "$_wt_state" 2>/dev/null || printf '{"gate_data":{}}\n' >"$_wt_state"
     python3 "$SKILL_DIR/scripts/gk_state_patch.py" set-top "$_wt_state" worktree "\"$_wt\"" >>"$GK_DBG_LOG" 2>&1 || true
     [ -n "$_wt_branch" ] && python3 "$SKILL_DIR/scripts/gk_state_patch.py" set-top "$_wt_state" branch "\"$_wt_branch\"" >>"$GK_DBG_LOG" 2>&1 || true
+    # 2026-11-12（ECC-794907FEC0CE）：建树后**自动进写面** —— 原流程要求 agent 再手工跑
+    #   `apply-worktree --bind --path <wt>`，否则主 agent 想改 coder 弄坏的地方即被 Gate 3
+    #   `Path not in active worktree` 拦（「新建工作区即被 BLOCK」）。现建树即绑：
+    #   ① 本生效 state（`$_st`）② 默认域（hook 按目标路径解析的缺省面）——同一唯一写通路
+    #   `gk_state_patch.py worktrees-extra`（幂等；失败仅留痕，不阻断派发）。
+    python3 "$SKILL_DIR/scripts/gk_state_patch.py" worktrees-extra "$_st" bind "$_wt" \
+      >>"$GK_DBG_LOG" 2>&1 || true
+    if [ "$_st" != "$_DEFAULT_STATE_FILE" ] && [ -f "$_DEFAULT_STATE_FILE" ]; then
+      python3 "$SKILL_DIR/scripts/gk_state_patch.py" worktrees-extra "$_DEFAULT_STATE_FILE" bind "$_wt" \
+        >>"$GK_DBG_LOG" 2>&1 || true
+    fi
     # 2026-09-23（**ECC-8BE02C8CBB5F 修复**）：建完 worktree 后**重新编译**窄任务并注入其路径。
     # 依据：`gk_agent_edit.apply_edit(worktree, rel_path, ...)` **以 worktree 为根**做路径拼接与
     # 逃逸预检 ⟹ 该路径是隔离的**唯一入口**。原实现在建 worktree **之前**编译窄任务、且调
@@ -9604,6 +10044,10 @@ PY
 # 2026-10-27（owner 令「加 chain 透传」）：`--run --chain` ⟹ 聚合按 `moa-aggregate --chain` 跑
 #   （批锚自解析→聚合→ecc-finding→P/L/M→熔断只读→HTML→prose→integrity 全链）。**默认关**
 #   （宿主裁定 2026-10-16：`--chain` 不挂 plan-refinement，两条血脉共用 moa-aggregate 一个载体）。
+# 2026-11-12（机制修复 #2）：**链尾不完整 fail-loud** —— `--run` 未带 `--chain` 时，聚合返回
+#   `mode=moa_aggregate`（有 references）但 finding/P·L·M/收敛/HTML 全未跑，原封套仍 `ok=true`
+#   ⟹ 调用方误以为「质询链已完整跑完」（本会话实测：前 3 轮无 P/L/M/convergence，事后才发现）。
+#   现封套落 `error=CHAIN_INCOMPLETE` + 可执行补跑 hint（含批锚），rc=1。
 _plan_refine_run_tail() {
   local target="$1" sub_out="$2" n="$3" no_agg="$4" agg_out="$5" chain="$6"
   local _adj_json="null" _adj_rc=0 _adj_out
@@ -9641,11 +10085,34 @@ def _j(x):
         return json.loads(x)
     except Exception:
         return {"_raw": x[:4000]}
+def _batch_of(x):
+    """聚合封套里的批锚（补跑 hint 用；无则空串）。"""
+    try:
+        t = (x or {}).get("trace") or {}
+        b = (t.get("attribution") or {}).get("batch_id")
+        if b:
+            return b
+        bs = (t.get("batch") or {}).get("batches") or []
+        if bs:
+            return (bs[0] or {}).get("batch_id") or ""
+    except Exception:
+        pass
+    return ""
 e, a, g = _j(sys.argv[1]), _j(sys.argv[2]), _j(sys.argv[3])
-print(json.dumps({"ok": bool(e and e.get("ok") and a and a.get("ok")), "run": True,
-                  "enqueue": e, "adjudicate": a, "aggregate": g,
-                  "adjudicate_rc": int(sys.argv[4]), "aggregate_rc": int(sys.argv[5])},
-                 ensure_ascii=False))
+# 机制修复 #2（2026-11-12）：`mode=moa_aggregate` + 有 references = 只做了聚合，
+#   链尾（finding/P·L·M/收敛/HTML）全未跑 ⟹ 封套必须 fail-loud（禁 ok=true 假完整）。
+_ci = bool(isinstance(g, dict) and g.get("mode") == "moa_aggregate"
+           and (g.get("references") or []))
+out = {"ok": bool(e and e.get("ok") and a and a.get("ok")) and not _ci, "run": True,
+       "enqueue": e, "adjudicate": a, "aggregate": g,
+       "adjudicate_rc": int(sys.argv[4]), "aggregate_rc": int(sys.argv[5])}
+if _ci:
+    out["error"] = "CHAIN_INCOMPLETE"
+    out["chain_required"] = True
+    out["hint"] = ("聚合返回 mode=moa_aggregate（非 moa_chain）：链尾 finding / P·L·M / 收敛 / HTML "
+                   "全未跑。补跑：moa-aggregate --state <state> --batch %s --chain"
+                   "（或下次用 plan-refinement <plan> --run --chain）" % (_batch_of(g) or "<batch_id>"))
+print(json.dumps(out, ensure_ascii=False))
 ' "$_pt1" "$_pt2" "$_pt3" "$_adj_rc" "$_agg_rc") || _env_rc=$?
   rm -f "$_pt1" "$_pt2" "$_pt3"
   if [ "$_env_rc" -ne 0 ] || [ -z "$_env_out" ]; then
@@ -9654,6 +10121,11 @@ print(json.dumps({"ok": bool(e and e.get("ok") and a and a.get("ok")), "run": Tr
     return 3
   fi
   printf '%s\n' "$_env_out"
+  # 机制修复 #2：不完整链 ⟹ rc=1（与 moa-aggregate 的 error 口径一致；不新增 rc 码）。
+  case "$_env_out" in
+    *'"error": "CHAIN_INCOMPLETE"'*) return 1 ;;
+  esac
+  return 0
 }
 
 # 2026-11-05（可观测性，用户令「复杂长链必须每一步可观测」「触发了什么门就打印什么门」）：
@@ -10643,13 +11115,22 @@ _context_resign() {
   #   ⟹ 会阻塞到 `-w` 超时；可重入助手让内层直接复用外层锁。
   local _cr_had="${_CTX_LOCK_FD:-}"
   _ctx_lock_acquire "$ctx_file" 20
+  if [ -z "$_cr_had" ] && [ "${_CTX_LOCK_OK:-0}" != "1" ]; then
+    # 2026-11-10：拿不到独占锁就**不发布**（fail-closed 到「保持旧签名」并留痕），
+    #   否则无锁 mv 会与并发写者的「构建+签名」交错，产出不匹配对。
+    echo "[key-rotate] context 重签跳过：独占锁超时 $(date -u +%FT%TZ)" >> "${GK_DBG_LOG:-/dev/null}" 2>/dev/null || true
+    return 0
+  fi
   local sig_result; sig_result=$(_sign_raw "$ctx_file" 2>/dev/null || echo "")
   if [ -n "$sig_result" ]; then
     local _sig_tmp="${ctx_file}.sig.tmp.$$"
     echo "$sig_result" | python3 "$SKILL_DIR/scripts/gk_json_utils.py" field sig --b64 2>/dev/null > "$_sig_tmp"
-    mv -f "$_sig_tmp" "${ctx_file}.sig" 2>/dev/null || rm -f "$_sig_tmp"
-    if [ -s "${ctx_file}.sig" ]; then
+    if [ -s "$_sig_tmp" ] && mv -f "$_sig_tmp" "${ctx_file}.sig" 2>/dev/null && [ -s "${ctx_file}.sig" ]; then
       echo "[key-rotate] context 自动重签完成（防 rotate 后签名 stale）$(date -u +%FT%TZ)" >> "$GK_DBG_LOG"
+    else
+      # 2026-11-10：发布失败不得静默（原 `rm -f` 后无事发生，签名停在旧钥且无人知情）。
+      rm -f "$_sig_tmp"
+      echo "[key-rotate] context 自动重签发布失败 $(date -u +%FT%TZ)" >> "${GK_DBG_LOG:-/dev/null}" 2>/dev/null || true
     fi
   fi
   if [ -z "$_cr_had" ]; then _ctx_lock_release; fi
@@ -11490,7 +11971,7 @@ try:
     s=json.load(open(os.environ['STATE_FILE'],encoding='utf-8'))
 except Exception:
     s={}
-print('yes' if report_evidence_ok(s) else 'no')
+print('yes' if report_evidence_ok(s, os.environ.get('STATE_FILE','')) else 'no')
 " 2>/dev/null || echo "no")
       if [ "$history_count" -le 0 ] && [ "$audit_state_done" != "yes" ] && [ "$audit_type" != "redteam" ]; then
         # 2026-08-15 fix: 原错误信息 "audit --state was never called" 误导——裸跑 audit --state
@@ -11535,8 +12016,22 @@ print('yes' if report_evidence_ok(s) else 'no')
         --audit-id "$audit_id" --type "$audit_type" \
         --content-hash "$content_hash" --report-path "$report_path" \
         >>"${GK_DBG_LOG:-/dev/null}" 2>&1 || echo "[audit-report] WARN sidecar write failed" >>"${GK_DBG_LOG:-/dev/null}"
+      # 2026-11-15（G12 ⑥ / D6·B3 前置）：审计判决出口触发 outcome producer。
+      #   旧接线只在 `gk_audit_state.run_all`（`--all`）里，而 CLI 的 `audit --all` 是逐域
+      #   串行组合、从不经 run_all ⟹ sweep 在生产路径上**零调用者**（§22.2 入口4「生产端缺失」）。
+      #   现挂在本出口（chain 的 AUDIT-REPORT / audit --all 的 report 域 / advance AUDIT-REPORT
+      #   三路共用）：`sweep` 自身幂等（无 pending 即空转），未配 `GK_AUDIT_OUTCOME_ENDPOINT`
+      #   只回 advisory（不联网、不伪造）；超时/失败只留痕，不阻断报告签发。
+      local _osweep="{}"
+      if [ "$audit_type" != "redteam" ] && [ "${GK_AUDIT_OUTCOME_SWEEP:-1}" != "0" ]; then
+        _osweep=$(timeout -k 5 "${GK_AUDIT_OUTCOME_SWEEP_TIMEOUT:-60}" \
+          python3 "$SKILL_DIR/scripts/gk_audit_outcome.py" sweep \
+          --state "$(_gk_py_path "$STATE_FILE")" --endpoint "${GK_AUDIT_OUTCOME_ENDPOINT:-}" \
+          2>>"${GK_DBG_LOG:-/dev/null}" || echo '{"ok":false,"error":"outcome_sweep_failed_or_timeout"}')
+        [ -n "$_osweep" ] || _osweep='{"ok":false,"error":"outcome_sweep_empty"}'
+      fi
       result=$(echo "$result" | python3 -c "import sys,json;d=json.loads(sys.stdin.read());d['audit_id']='$audit_id';d['audit_type']='$audit_type';d['content_hash']='$content_hash';d['report_path']='$report_path';print(json.dumps(d))" 2>/dev/null || echo "$result")
-      echo "{\"ok\":true,\"audit_mode\":\"report\",\"audit_id\":\"$audit_id\",\"audit_type\":\"$audit_type\",\"content_hash\":\"$content_hash\",\"report_path\":\"$report_path\",\"result\":$result}" ;;
+      echo "{\"ok\":true,\"audit_mode\":\"report\",\"audit_id\":\"$audit_id\",\"audit_type\":\"$audit_type\",\"content_hash\":\"$content_hash\",\"report_path\":\"$report_path\",\"result\":$result,\"outcome_sweep\":$_osweep}" ;;
     --verify|verify)
       local target_path="${2}"
       if [ ! -f "$target_path" ]; then
@@ -11748,52 +12243,149 @@ PYEOF
           [ "$key_type" = "audit" ] && { priv="${_AUDIT_PRIV_KEY}"; pub="${_AUDIT_PUB_KEY}"; }
           local ts; ts=$(date +%Y%m%d_%H%M%S)
           [ ! -f "$priv" ] && { echo "{\"ok\":false,\"error\":\"No existing ${key_type}_ed25519 key to rotate. Run: audit --init-keys\"}"; return 1; }
-          # A2: Verify current pubkey fingerprint matches key-meta before rotation
-          if [ -f "$_KEY_INTEGRITY" ]; then
-            local integ; integ=$(_verify_key_integrity)
-            [ "$integ" != "ok" ] && { echo "{\"ok\":false,\"error\":\"KEY INTEGRITY COMPROMISED: $integ\"}"; return 1; }
-          fi
           # G6: Validate state transition — only active/pre-activation keys can rotate
           export _KEY_TYPE="$key_type" _NEW_STATE="deactivated"
           local st_check; st_check=$(_validate_key_state_transition "$key_type" "deactivated")
           [ "$st_check" != "ok" ] && { echo "{\"ok\":false,\"error\":\"Cannot rotate: $st_check\"}"; return 1; }
-          # G1: Generate new key FIRST (to temp), then atomically swap
-          local tmp_priv="${priv}.new"; local tmp_pub="${pub}.new"
+          # G1: Generate new key FIRST (to **本进程独有** temp), then atomically swap
+          # 2026-11-10（AV-9 根因①）：原 temp 名 `${priv}.new` 是**固定路径** —— 6 臂并发轮换时
+          #   后启动者会覆盖前者的 `.new`，随后 `mv .new → priv/pub` 两臂互相偷文件 ⟹ 落盘只剩
+          #   一个密钥（实测 .keys 里 context_ed25519.pem/.pub 双双消失、key-meta fingerprint 为空）。
+          #   改用 `$$` 独占 temp 名字，消除跨进程覆盖面。
+          local tmp_priv="${priv}.new.$$"; local tmp_pub="${pub}.new.$$"
           openssl genpkey -algorithm ED25519 -out "$tmp_priv" 2>/dev/null || { echo '{"ok":false,"error":"keygen failed"}'; return 1; }
           openssl pkey -in "$tmp_priv" -pubout -out "$tmp_pub" 2>/dev/null || { rm -f "$tmp_priv"; echo '{"ok":false,"error":"pubkey extraction failed"}'; return 1; }
           chmod 600 "$tmp_priv" 2>/dev/null
           # Verify new key works (sign+verify smoke test with Ed25519-compatible syntax)
-          echo -n "rotation-test" > /tmp/_rotate_test_in.bin
-          openssl pkeyutl -sign -inkey "$tmp_priv" -rawin -in /tmp/_rotate_test_in.bin -out /tmp/_rotate_test.sig 2>/dev/null
-          openssl pkeyutl -verify -pubin -inkey "$tmp_pub" -rawin -in /tmp/_rotate_test_in.bin -sigfile /tmp/_rotate_test.sig 2>/dev/null || { rm -f "$tmp_priv" "$tmp_pub" /tmp/_rotate_test.sig /tmp/_rotate_test_in.bin; echo '{"ok":false,"error":"new key verification failed"}'; return 1; }
-          rm -f /tmp/_rotate_test.sig /tmp/_rotate_test_in.bin
+          # 2026-11-10（AV-9 根因①同族）：探针文件也必须**进程独有** —— 原固定
+          #   `/tmp/_rotate_test_in.bin` / `/tmp/_rotate_test.sig` 在 6 臂并发时互相覆盖
+          #   （实测 3/6 臂报 "new key verification failed" 并 rc=1）。
+          local _rot_in; _rot_in=$(mktemp)
+          printf 'rotation-test' > "$_rot_in"
+          openssl pkeyutl -sign -inkey "$tmp_priv" -rawin -in "$_rot_in" -out "${_rot_in}.sig" 2>/dev/null
+          openssl pkeyutl -verify -pubin -inkey "$tmp_pub" -rawin -in "$_rot_in" -sigfile "${_rot_in}.sig" 2>/dev/null || { rm -f "$tmp_priv" "$tmp_pub" "$_rot_in" "${_rot_in}.sig"; echo '{"ok":false,"error":"new key verification failed"}'; return 1; }
+          rm -f "$_rot_in" "${_rot_in}.sig"
           # G4: Serialize key ops with flock to prevent TOCTOU
           local lockfile="${_AUDIT_KEY_DIR}/.key.lock"
           touch "$lockfile" 2>/dev/null
           exec 9>"$lockfile"
-          flock -w 5 9 || { rm -f "$tmp_priv" "$tmp_pub"; echo '{"ok":false,"error":"lock timeout"}'; return 1; }
-          # Atomically replace old with new (mv on same FS is atomic)
-          mv "$priv" "${priv}.${ts}.bak" 2>/dev/null
-          mv "$pub" "${pub}.${ts}.bak" 2>/dev/null
-          mv "$tmp_priv" "$priv" 2>/dev/null
-          mv "$tmp_pub" "$pub" 2>/dev/null
-          # Update key-meta
-          local rdays=1; [ "$key_type" = "audit" ] && rdays=30
-          # 2026-11-04（内联载荷下沉）：元数据写回落 scripts/gk_key_meta.py update-meta。
-          python3 "$SKILL_DIR/scripts/gk_key_meta.py" update-meta \
-            --meta "$_KEY_META" --key-type "$key_type" --rotation-days "$rdays" \
-            --rotated-from "$ts" --pub "$pub"
-          # A1: Update integrity hash
-          _update_key_integrity
-          # Release lock after atomic swap + key-meta update
-          exec 9>&-
-          # Re-sign context if context key rotated（净 0 行：改调单点 `_context_resign` —— 原就地 `_sign_raw "$ctx_file" > /dev/null` 是 **no-op**：`_sign_raw` 只把 base64 JSON 打到 stdout、从不落盘，且该 JSON 直写 .sig 亦错形态（.sig 是 64B 裸签名）⟹ 每次轮换后 .sig 恒 stale。2026-09-20 实证：cron `key-rotate-check` 08:49:09 轮换后 .sig 仍停在 09-19、对新 pub 验签失败、对上一代 .bak pub 验签成功，并把 `node-guard ECO-READ` 的「代码库地图」打成 missing。守护：scripts/test_context_resign_on_rotate.py）
-          [ "$key_type" = "context" ] && _context_resign
-          # T7.3 (2026-08-13): record rotation event to gate_data.key_rotation_log[] — batch8 T7.3 计划要求，此前缺失
-          _state_write "d.setdefault('gate_data',{}).setdefault('key_rotation_log',[]).append({'key_type':'$key_type','rotated_at':'$(date -u +%Y-%m-%dT%H:%M:%SZ)','backup':'${priv}.${ts}.bak','trigger':'$trigger'})" 2>/dev/null || true
-          # CapiscIO: destroy .bak older than 7 days (grace period expired) — 手动 rotate 同样清理（此前只在 cmd_advance 过期触发时清理）
-          find "$_AUDIT_KEY_DIR" -name "*.bak" -mtime +7 -exec rm -f {} \; 2>/dev/null
-          echo "{\"ok\":true,\"action\":\"rotate\",\"key_type\":\"${key_type}_ed25519\",\"backup\":\"${priv}.${ts}.bak\"}" ;;
+          # 2026-11-10：等待时间 5→30s。并发 6 臂时每次 swap 虽短，但 `_context_resign` 会顺带
+          #   抢 ctx 锁；5s 在冷机 + 慢盘上会把后续臂打成 lock timeout（整条 update 失败）。
+          flock -w 30 9 || { rm -f "$tmp_priv" "$tmp_pub"; echo '{"ok":false,"error":"lock timeout"}'; return 1; }
+          # A2: Verify current pubkey fingerprint matches key-meta before rotation
+          # 2026-11-10（AV-9 根因⑤）：该校验原先在**锁外**执行 ⟹ 与其他臂的 swap 交错时
+          #   会读到「新 pub + 旧 meta」并判定 tampered（实测 6 臂中 1 臂被误杀）。移入独占锁内，
+          #   保证「校验—换钥—写 meta」是一个不可分割的整体。
+          if [ -f "$_KEY_INTEGRITY" ]; then
+            local integ; integ=$(_verify_key_integrity)
+            [ "$integ" != "ok" ] && { rm -f "$tmp_priv" "$tmp_pub"; exec 9>&-; echo "{\"ok\":false,\"error\":\"KEY INTEGRITY COMPROMISED: $integ\"}"; return 1; }
+          fi
+          # 2026-11-10（AV-9 根因①续）：`auto` 触发必须在**锁内**复核过期 —— 原实现各臂在锁外
+          #   读一次 expires，排队后逐个 rotate ⟹ 同一过期窗口密钥连换 N 次，其间任何已签内容的
+          #   .sig 都会与新 pub 错配。锁内复核 = 同一窗口只允许第一个臂真正轮换，其余显式跳过。
+          local _rot_skip=0
+          if [ "$trigger" = "auto" ]; then
+            local _still; _still=$(GK_PY_META="$(_gk_py_path "$_KEY_META")" GK_PY_KT="$key_type" python3 -c "
+import datetime, json, os
+m = json.load(open(os.environ['GK_PY_META']))
+info = m.get(os.environ['GK_PY_KT'] + '_ed25519') or {}
+try:
+    exp = datetime.datetime.fromisoformat(str(info.get('expires', '')).replace('Z', ''))
+    print('1' if datetime.datetime.utcnow() > exp else '0')
+except Exception:
+    print('1')
+" 2>/dev/null || echo "1")
+            [ "$_still" != "1" ] && _rot_skip=1
+          fi
+          if [ "$_rot_skip" = "1" ]; then
+            rm -f "$tmp_priv" "$tmp_pub"
+            exec 9>&-
+            echo "{\"ok\":true,\"action\":\"rotate\",\"key_type\":\"${key_type}_ed25519\",\"skipped\":\"not_expired\"}"
+          else
+            # 2026-11-10（AV-9 根因④）：**先备好新签名，再换钥**。轮换后到重签完成之间，
+            #   盘上是「旧 .sig + 新 pub」⟹ 读者必然 sig_invalid（原实现该窗口可达百毫秒级）。
+            #   现改为：持 ctx 锁 -> 用**新私钥**给当前 ctx 预签 -> 换钥 -> 立刻发布 .sig。
+            #   ctx 锁拿不到 = 有写者正在重建，轮换会让已签内容失去有效签名 ⟹ 直接放弃本次
+            #   轮换（fail-closed，密钥保持原状），绝不制造「看起来成功、实际验不过」的窗口。
+            local _pre_sig="" _rk_ctx_locked=0 _rk_ctx_had="${_CTX_LOCK_FD:-}"
+            local _rot_ctx="${SKILL_DIR}/references/subagent-context.json"
+            if [ "$key_type" = "context" ]; then
+              _ctx_lock_acquire "$_rot_ctx" 30
+              if [ "${_CTX_LOCK_OK:-0}" != "1" ]; then
+                rm -f "$tmp_priv" "$tmp_pub"
+                exec 9>&-
+                echo '{"ok":false,"error":"rotate aborted: context lock timeout (keys unchanged)"}'
+                return 1
+              fi
+              _rk_ctx_locked=1
+              _pre_sig=$(mktemp)
+              python3 "$SKILL_DIR/scripts/gk_crypto_cli.py" sign-raw "$tmp_priv" "$_rot_ctx" 2>/dev/null \
+                | python3 "$SKILL_DIR/scripts/gk_json_utils.py" field sig --b64 2>/dev/null > "$_pre_sig" || true
+              [ -s "$_pre_sig" ] || { rm -f "$_pre_sig"; _pre_sig=""; }
+            fi
+            # Atomically replace old with new —— **每一步都检查**（原 `mv ... 2>/dev/null` 无判据：
+            #   任何一步失败都继续往下走 ⟹ 半换状态 + 仍打印 ok:true）。
+            local _bak_priv="${priv}.${ts}.bak" _bak_pub="${pub}.${ts}.bak"
+            [ -e "$_bak_priv" ] && { ts="${ts}_$$"; _bak_priv="${priv}.${ts}.bak"; _bak_pub="${pub}.${ts}.bak"; }
+            local _swap_fail=""
+            mv "$priv" "$_bak_priv" 2>/dev/null || _swap_fail="backup priv"
+            [ -z "$_swap_fail" ] && { mv "$pub" "$_bak_pub" 2>/dev/null || _swap_fail="backup pub"; }
+            [ -z "$_swap_fail" ] && { mv "$tmp_priv" "$priv" 2>/dev/null || _swap_fail="install priv"; }
+            [ -z "$_swap_fail" ] && { mv "$tmp_pub" "$pub" 2>/dev/null || _swap_fail="install pub"; }
+            if [ -z "$_swap_fail" ]; then
+              local _rt_in; _rt_in=$(mktemp)
+              printf 'rotation-test' > "$_rt_in"
+              if ! openssl pkeyutl -sign -inkey "$priv" -rawin -in "$_rt_in" -out "${_rt_in}.sig" 2>/dev/null \
+                 || ! openssl pkeyutl -verify -pubin -inkey "$pub" -rawin -in "$_rt_in" -sigfile "${_rt_in}.sig" 2>/dev/null; then
+                _swap_fail="installed pair verify"
+              fi
+              rm -f "$_rt_in" "${_rt_in}.sig"
+            fi
+            if [ -n "$_swap_fail" ]; then
+              # 回滚：把旧钥放回原位（禁把「无钥/错配」状态留在盘上）
+              rm -f "$tmp_priv" "$tmp_pub" "$_pre_sig"
+              [ -f "$_bak_priv" ] && mv -f "$_bak_priv" "$priv" 2>/dev/null
+              [ -f "$_bak_pub" ] && mv -f "$_bak_pub" "$pub" 2>/dev/null
+              [ -z "$_rk_ctx_had" ] && [ "$_rk_ctx_locked" = "1" ] && _ctx_lock_release
+              exec 9>&-
+              echo "{\"ok\":false,\"error\":\"key swap failed: ${_swap_fail} (rolled back)\"}"
+              return 1
+            fi
+            # 换钥成功后**立即**发布预签（两次相邻 rename，窗口微秒级）
+            if [ -n "$_pre_sig" ]; then
+              mv -f "$_pre_sig" "${_rot_ctx}.sig" 2>/dev/null || rm -f "$_pre_sig"
+            fi
+            [ "$_rk_ctx_locked" = "1" ] && [ -z "$_rk_ctx_had" ] && _ctx_lock_release
+            # Update key-meta
+            local rdays=1; [ "$key_type" = "audit" ] && rdays=30
+            # 2026-11-04（内联载荷下沉）：元数据写回落 scripts/gk_key_meta.py update-meta。
+            if ! python3 "$SKILL_DIR/scripts/gk_key_meta.py" update-meta \
+              --meta "$_KEY_META" --key-type "$key_type" --rotation-days "$rdays" \
+              --rotated-from "$ts" --pub "$pub"; then
+              mv -f "$_bak_priv" "$priv" 2>/dev/null
+              mv -f "$_bak_pub" "$pub" 2>/dev/null
+              exec 9>&-
+              echo '{"ok":false,"error":"key-meta update failed (rolled back)"}'
+              return 1
+            fi
+            # A1: Update integrity hash（指纹为空 = update-meta 没读到新 pub ⟹ 禁止宣告成功）
+            _update_key_integrity
+            if ! python3 "$SKILL_DIR/scripts/gk_key_meta.py" verify-fingerprints \
+              --meta "$_KEY_META" --key-dir "$_AUDIT_KEY_DIR" >/dev/null 2>&1; then
+              exec 9>&-
+              echo '{"ok":false,"error":"key-meta fingerprint mismatch after rotate"}'
+              return 1
+            fi
+            # Release lock after atomic swap + key-meta update
+            exec 9>&-
+            # Re-sign context if context key rotated（净 0 行：改调单点 `_context_resign` —— 原就地 `_sign_raw "$ctx_file" > /dev/null` 是 **no-op**：`_sign_raw` 只把 base64 JSON 打到 stdout、从不落盘，且该 JSON 直写 .sig 亦错形态（.sig 是 64B 裸签名）⟹ 每次轮换后 .sig 恒 stale。2026-09-20 实证：cron `key-rotate-check` 08:49:09 轮换后 .sig 仍停在 09-19、对新 pub 验签失败、对上一代 .bak pub 验签成功，并把 `node-guard ECO-READ` 的「代码库地图」打成 missing。守护：scripts/test_context_resign_on_rotate.py）
+            [ "$key_type" = "context" ] && _context_resign
+            # T7.3 (2026-08-13): record rotation event to gate_data.key_rotation_log[] — batch8 T7.3 计划要求，此前缺失
+            _state_write "d.setdefault('gate_data',{}).setdefault('key_rotation_log',[]).append({'key_type':'$key_type','rotated_at':'$(date -u +%Y-%m-%dT%H:%M:%SZ)','backup':'${priv}.${ts}.bak','trigger':'$trigger'})" 2>/dev/null || true
+            # CapiscIO: destroy .bak older than 7 days (grace period expired) — 手动 rotate 同样清理（此前只在 cmd_advance 过期触发时清理）
+            find "$_AUDIT_KEY_DIR" -name "*.bak" -mtime +7 -exec rm -f {} \; 2>/dev/null
+            echo "{\"ok\":true,\"action\":\"rotate\",\"key_type\":\"${key_type}_ed25519\",\"backup\":\"${priv}.${ts}.bak\"}"
+          fi ;;
         revoke)
           local key_type="${2:-context}"
           local priv="${_CONTEXT_PRIV_KEY}"
@@ -12106,28 +12698,69 @@ cmd_context() {
       # 注入点必须在下方覆盖写**之前**（同一文件，此刻仍是上一轮内容）⟹ 同内容重扫时
       # `first_added`/`last_modified` 逐字节不变（`context --update` 幂等），无需回滚。
       export GK_RED_LEDGER="$ctx_file"
-      # 2026-10-30（签名竞态修复 ①）：写者**独占锁**覆盖「重建 + 重签 + 发布」整段；
+      # 2026-10-30（签名竞态修复 ①）：写者**独占锁**覆盖「重签 + 发布」整段；
       #   读者 `_ctx_inject_probe` 取共享锁 ⟹ 「新 JSON + 旧 .sig」不再对读者可见。
-      #   `-w 20`（`_ctx_lock_acquire` 默认）：拿不到锁**也继续**（锁是防抖，不能把 update
-      #   变成新的挂死点）；可重入 ⟹ 与本进程内层发布段共用同一把锁。
+      #   2026-11-10（AV-9）：取锁失败**不再降级为无锁发布**，直接 fail-closed（见下）。
+      #   可重入 ⟹ 与本进程内层发布段共用同一把锁。
       local _cu_had="${_CTX_LOCK_FD:-}"
-      _ctx_lock_acquire "$ctx_file" 20
-      if ! python3 "$SKILL_DIR/scripts/gk_context_build.py" build "$SKILL_DIR" "$STATE_FILE" "$ctx_file" 2>/dev/null; then
-        [ -z "$_cu_had" ] && _ctx_lock_release
+      # 2026-11-10（AV-9 根因③）：**构建在锁外，签名/发布在锁内**。
+      #   原实现把 build（3-8s）也放进独占锁 ⟹ 6 臂排队时后几臂必然撞 20s 超时（实测 4/6 超时）。
+      #   构建只读仓库、写**进程独有** temp，天然可并行；锁内只做「用**当前**私钥签 temp + 自验 +
+      #   两次 rename」，临界区 ~0.1s，且签的私钥必定与当时落盘 pub 同代 ⟹ 与轮换天然互斥。
+      # ⚠ 不能用 `local a="$$" b="${a}.tmp"` 同行声明：`local` 的赋值先展开、后执行，
+      #   同一行内引用前一个名字在 `set -u` 下是 unbound variable（实测直接中止且无输出）。
+      local _cu_id="$$"
+      local _tmp_ctx="${ctx_file}.tmp.${_cu_id}" _tmp_sig="${ctx_file}.sig.tmp.${_cu_id}"
+      local sig_file="${ctx_file}.sig"
+      if ! python3 "$SKILL_DIR/scripts/gk_context_build.py" build "$SKILL_DIR" "$STATE_FILE" "$_tmp_ctx" 2>/dev/null; then
+        rm -f "$_tmp_ctx" "$_tmp_sig"
         echo '{"ok":false,"error":"context update failed"}'
+        return 1
+      fi
+      _ctx_lock_acquire "$ctx_file" 60
+      if [ -z "$_cu_had" ] && [ "${_CTX_LOCK_OK:-0}" != "1" ]; then
+        # 2026-11-10（AV-9 根因②）：锁超时**不再继续发布**。原实现拿不到锁也照写 ⟹ 6 臂
+        #   真实并发（非串行）⟹ 两份内容各自签名、最后发布者可能不是最后构建者 ⟹ 落盘错配对。
+        #   这里 fail-closed 报错（调用方可见），由上层重试；绝不产生「看起来 ok 的坏对」。
+        rm -f "$_tmp_ctx" "$_tmp_sig"
+        echo '{"ok":false,"error":"context update lock timeout"}'
         return 1
       fi
       # Sign context file with Ed25519 —— **context key**（`_sign_raw` 默认 key_type=context
       # ⟹ `_CONTEXT_PRIV_KEY`；注入侧 `_context_signature_fresh` 用 `_CONTEXT_PUB_KEY` 验证，
       # 两侧**必须同源**）。⚠ 原注释写「uses audit key」是**误导**（若真用 audit key，注入侧
       # 必报 invalid signature）—— 2026-09-16 读码核实并订正。
-      local sig_result; sig_result=$(_sign_raw "$ctx_file" 2>/dev/null || echo '{"error":"sign failed"}')
-      local sig_file="${ctx_file}.sig"
+      local sig_result; sig_result=$(_sign_raw "$_tmp_ctx" 2>/dev/null || echo '{"error":"sign failed"}')
       # .sig 同样 tmp+rename（原直接 `> "$sig_file"` 会把 .sig 先截断成 0 字节）
-      local _sig_tmp="${sig_file}.tmp.$$"
-      echo "$sig_result" | python3 "$SKILL_DIR/scripts/gk_json_utils.py" field sig --b64 2>/dev/null > "$_sig_tmp"
-      mv -f "$_sig_tmp" "$sig_file" 2>/dev/null || rm -f "$_sig_tmp"
-      [ -s "$sig_file" ] && echo "{\"ok\":true,\"signed\":true,\"files\":$(python3 "$SKILL_DIR/scripts/gk_json_utils.py" field files --len --file "$ctx_file" 2>/dev/null || echo 0)}" || echo '{"ok":false,"error":"context sign failed"}'
+      echo "$sig_result" | python3 "$SKILL_DIR/scripts/gk_json_utils.py" field sig --b64 2>/dev/null > "$_tmp_sig"
+      # 发布前**先自验**（新钥签名 + 临时 JSON）：签失败/空签名一律不碰落盘对。
+      if [ ! -s "$_tmp_sig" ] || ! openssl pkeyutl -verify -pubin -inkey "${_CONTEXT_PUB_KEY}" \
+           -rawin -in "$_tmp_ctx" -sigfile "$_tmp_sig" >/dev/null 2>&1; then
+        rm -f "$_tmp_ctx" "$_tmp_sig"
+        [ -z "$_cu_had" ] && _ctx_lock_release
+        echo '{"ok":false,"error":"context sign failed"}'
+        return 1
+      fi
+      # 连续发布：JSON → .sig（两次同目录 rename，窗口微秒级）
+      if ! mv -f "$_tmp_ctx" "$ctx_file" 2>/dev/null || ! mv -f "$_tmp_sig" "$sig_file" 2>/dev/null; then
+        rm -f "$_tmp_ctx" "$_tmp_sig"
+        [ -z "$_cu_had" ] && _ctx_lock_release
+        echo '{"ok":false,"error":"context publish failed"}'
+        return 1
+      fi
+      # 发布后复验落盘对（禁把「写成功但验不过」报成 signed）
+      if openssl pkeyutl -verify -pubin -inkey "${_CONTEXT_PUB_KEY}" -rawin -in "$ctx_file" \
+           -sigfile "$sig_file" >/dev/null 2>&1; then
+        # JSON 构造走 `gk_json.py build`（序列化单一事实源；禁手工拼 `echo "{\"..."`：
+        #   Windows 反斜杠路径会产出非法 JSON）
+        local _ctx_n
+        _ctx_n=$(python3 "$SKILL_DIR/scripts/gk_json_utils.py" field files --len --file "$ctx_file" 2>/dev/null)
+        python3 "$SKILL_DIR/scripts/gk_json.py" build ok=true signed=true files="${_ctx_n:-0}"
+      else
+        echo '{"ok":false,"error":"context publish verify failed"}'
+        [ -z "$_cu_had" ] && _ctx_lock_release
+        return 1
+      fi
       [ -z "$_cu_had" ] && _ctx_lock_release
       ;;
     *)
@@ -12339,10 +12972,19 @@ _dispatch() {
 # PROTECTED_REGION_END::gate
 
 # ─── 计费单点（ECC-1E6BFDD7A207 · Q14 裁定 B，2026-09-23）─────────────────────
-# BILL_UNITS_DECL path1=batches path2=files_dedup counter=edit_budget.remaining
-# ↑ **机器可读的计费口径声明**（`ECC-CB8579F9D826` 的**区外等价加固**）。两套扣减实现**共享同一
-#   额度**（`remaining`/`used`/`edit_count`）。**2026-10-05 归化（`REV-15` §21.3 修订 X）**：原 ② 按
-#   **调用次数**计（`path2=calls`）⟹ 与 ① 单位不同；现将 ② 向 ① **归化**（补**身份去重**）⟹
+# BILL_UNITS_DECL path1=batches path2=files_dedup counter1=edit_budget.remaining counter2=edit_budget.cli_remaining
+# ↑ **机器可读的计费口径声明**（`ECC-CB8579F9D826` 的**区外等价加固**）。
+# 2026-11-12（`ECC-AF5CC971935C` 真修 · owner 令「拆开批次单位与会话 cap」）：**计数器拆开**。
+#   原状：两套扣减实现**共享同一** `remaining`/`used` —— ① 按**批次**（`batch_open`）、② 按
+#   **命令向量去重**（`billed_files` 里的 12 位哈希）。两种单位写进同一个会话 cap ⟹ cap 语义
+#   失真（现场实测：`used=96` 而节点 `max=24`，两侧各自"正确"但相加后无法解释），且
+#   `billed_files` 还同时装「真实路径」与「命令哈希」两种身份（互相挤压 64 槽窗口）。
+#   现口径：
+#     · ① Gate 4（hook 面）：`remaining`/`used`/`edit_count` = **批次轴**（会话 cap 唯一度量）
+#     · ② 写类子命令（本区外单点）：`cli_remaining`/`cli_used`/`cli_billed_cmds` = **命令向量轴**
+#   两轴各自封顶（均以 `max` 起算）、互不挤占 ⟹ 「批次」与「会话上限」不再混算。
+#   ⚠ ② 仍**不减** `edit_count`（该键=standard 轨「本节点已放行写动作数」，只由 ① 写，避免把
+#     命令次数灌进节点预算梯度）。
 #   `path2=files_dedup`（命令向量去重）。
 #   **2026-10-23 `REV-24`（owner 裁定「批次作计价单位」）**：① 由 `files_dedup` 改为 **`batches`** ——
 #   Gate4 自上次 verify 以来的整批改动 = 1 单位（T4′/T6 各 +1 附加）。两通道**维度主动分化**：
@@ -12396,26 +13038,33 @@ gd=d.setdefault('gate_data',{}); eb=gd.setdefault('edit_budget',{})
 _sid=_os.environ.get('GK_SESSION_ID','') or ''
 if _sid:
     _box=eb.setdefault('sessions',{}).setdefault(_sid,{})
-    _box.setdefault('max',eb.get('max',0)); _box.setdefault('used',0)
-    _box.setdefault('remaining',int(_box.get('max',0) or 0))
 else:
     _box=eb
-# 2026-10-05 归化（REV-15 修订 X）：身份去重 —— 同一身份（实参向量哈希）只计一次。
+# 2026-11-12（ECC-AF5CC971935C 真修）：② 走**独立计数轴** cli_*（命令向量），不再与 ① 的
+#   批次轴 remaining/used/edit_count 混算（原状两单位写同一 cap ⟹ used=96/max=24 无法解释）。
+#   两轴各自以 max 起算、互不挤占；身份去重台账也独立（cli_billed_cmds，避免与真实路径抢 64 槽）。
+#   ⚠ 新会话条目在此**只做初始化**（max/used/remaining + cli_*），口径与 ① 的 setdefault 同构
+#     —— 否则 cli_max 会退化成 0（实测：新会话首刀不计费且无票）。
+_box.setdefault('max', eb.get('max', 0))
+_box.setdefault('used', 0)
+_box.setdefault('remaining', int(_box.get('max', 0) or 0))
+_box.setdefault('cli_max', _box.get('max', eb.get('max', 0)))
+_box.setdefault('cli_used', 0)
+_box.setdefault('cli_remaining', int(_box.get('cli_max', 0) or 0))
 _bid=_os.environ.get('GK_BILL_ID','') or ''
-_bf=_box.setdefault('billed_files',[])
+_bf=_box.setdefault('cli_billed_cmds',[])
 if _bid and _bid not in _bf:
     _bf.append(_bid)
     del _bf[:-64]
-    _r=int(_box.get('remaining',0) or 0)
+    _r=int(_box.get('cli_remaining',0) or 0)
     if _r>=1:
-        _box['remaining']=_r-1
-        _box['used']=int(_box.get('used',0) or 0)+1
-        gd['edit_count']=int(gd.get('edit_count',0) or 0)+1
+        _box['cli_remaining']=_r-1
+        _box['cli_used']=int(_box.get('cli_used',0) or 0)+1
         print(_r-1)
     else:
         print(_r)
 else:
-    print(int(_box.get('remaining',0) or 0))
+    print(int(_box.get('cli_remaining',0) or 0))
 " 2>/dev/null | tail -n 1)
   # 留痕（**不**改 state schema）：`used`/`edit_count` 即 state 侧消耗可见性；本行仅调试日志
   [ -n "${GK_DBG_LOG:-}" ] && echo "[bill_edit] $_why -> remaining=${_nr:-?}" >>"$GK_DBG_LOG" 2>/dev/null
@@ -12544,6 +13193,39 @@ fi
 #   故在派发前给一条**一次性告警**：调试别把 stderr 落盘/贴 issue（`scripts/gk_red_keyleak.py`
 #   把这条告警也当契约测）。
 case $- in *x*) printf '%s\n' 'WARN[sec] bash -x 已开启：命令回显含变量展开（可能含 API key）；请勿把 stderr 落盘或贴到 issue。' >&2 ;; esac
+# ── 合并前置闸（2026-11-13，owner 令「标准化」）────────────────────────────────
+# `_CMD_REG` 在 `PROTECTED_REGION::gate` 内（禁改）⟹ 三条命令走**区外**分派（与 `pre-tool-check`
+# 同策略）：不进命令表、不计费（只读，`merge` 的实际写面由 git 钩子验票）。
+#   bash gatekeeper-cli.sh premerge --source <branch> [--target master]   # 只读体检
+#   bash gatekeeper-cli.sh premerge --staged-merge [--allow-index-deletions]
+#   bash gatekeeper-cli.sh merge --source <branch> [--target master]      # **唯一**合并入口
+#         [--cleanup-source-remote [--remote origin]]  # 合并后归档 + 删源远端分支（保护分支拒）
+#   bash gatekeeper-cli.sh merge-hook install|uninstall|status            # 装/卸 git 侧闸
+# 2026-11-13：解释器走**单源**（与 `scripts/_accept_cli.sh` 同式：ACCEPT_PY → gk_accept_py.py
+#   → python3），禁在本段裸写 `python3` 当既定解释器（换机/换 venv 即漂移）。
+_gk_merge_interp() {
+  if [ -n "${ACCEPT_PY:-}" ]; then printf '%s' "$ACCEPT_PY"; return 0; fi
+  local _p=""
+  _p=$(python3 "$SKILL_DIR/scripts/gk_accept_py.py" 2>/dev/null) || _p=""
+  [ -n "$_p" ] || _p=python3
+  printf '%s' "$_p"
+}
+case "$cmd" in
+  premerge)
+    exec "$(_gk_merge_interp)" "$SKILL_DIR/scripts/gk_merge_guard.py" --repo "${GK_GUARD_REPO:-}" "$@"
+    ;;
+  merge)
+    exec "$(_gk_merge_interp)" "$SKILL_DIR/scripts/gk_merge_cli.py" ${GK_GUARD_REPO:+--repo "$GK_GUARD_REPO"} "$@"
+    ;;
+  merge-hook)
+    exec "$(_gk_merge_interp)" "$SKILL_DIR/scripts/gk_merge_hook_install.py" ${GK_GUARD_REPO:+--repo "$GK_GUARD_REPO"} "$@"
+    ;;
+  route-check)
+    # 2026-11-13 P0-b：路由自检（悬空 state / 失效 extra ⟹ rc=3）。区外命令，不进 _CMD_REG。
+    exec "$(_gk_merge_interp)" "$SKILL_DIR/scripts/gk_route_check.py" \
+      --skill-dir "$SKILL_DIR" ${STATE_FILE:+--state-file "$STATE_FILE"} "$@"
+    ;;
+esac
 _dispatch "$cmd" "$@"
 _bill_rc=$?
 if [ -n "$_bill_b0" ]; then

@@ -152,8 +152,10 @@ def test_worker_op_byte_identical_with_domain_plan(live, tmp_path, monkeypatch):
 def test_env_forwarding_does_not_leak_between_calls(live, tmp_path, monkeypatch):
     """第一次带会话计划（域路由），第二次不带 ⟹ 第二次不得沿用第一次的 domain。"""
     plan = tmp_path / "dom.md"
+    # 方案 A（2026-11-14）：域路由要求计划**已定稿**（缺省 draft ⟹ 回主 state）。
     plan.write_text("<!-- META\ntarget_repo: skill\nworktree_needed: false\n"
-                    "project_type: standing\nstate_domain: skill.leak-probe\n-->\n",
+                    "project_type: standing\nstate_domain: skill.leak-probe\n"
+                    "plan_status: frozen\n-->\n",
                     encoding="utf-8", newline="\n")
     monkeypatch.setenv("GK_PLAN_FILE", str(plan))
     with_plan = json.loads(_worker_resolve(live, str(SCRIPT_DIR)))

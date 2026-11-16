@@ -57,6 +57,7 @@ worktree_needed: true|false
 state_domain: <repo>.<plan>    <!-- 可选；worktree_needed=true 时必填 -->
 source_docs: <逗号分隔路径>     <!-- 可选；计划引用的源文档清单 -->
 edit_budget_declared: <整数>    <!-- 可选；计划声明的编辑预算（硬上限内） -->
+plan_status: draft|frozen       <!-- 可选；缺省 frozen（显式 draft 才回主 state） -->
 work_dir: <工作目录路径>
 commit_obj: <主要改动文件>
 commit_format: <commit 前缀格式>
@@ -64,10 +65,10 @@ review: <审查方式>
 -->
 ```
 
-字段单源 = `scripts/gk_route_center.py::_META_FIELDS`（11 项）：
+字段单源 = `scripts/gk_route_center.py::_META_FIELDS`（12 项）：
 
 `phases, target_repo, project_type, worktree_needed, work_dir, commit_obj, commit_format,
-review, state_domain, source_docs, edit_budget_declared`
+review, state_domain, source_docs, edit_budget_declared, plan_status`
 
 - **state_domain**：worktree 流程的计划必须声明；域 token 形如 `<repo>.<plan>`。
   未声明 → 只能走 worktree 匹配/归属/safety_net 启发式；无 worktree 计划可省略。
@@ -75,7 +76,12 @@ review, state_domain, source_docs, edit_budget_declared`
   磁盘可读性，注入 `ctx.source_docs`（缺失清单）。相对路径按**仓根**解析，不是调用方 cwd；
   未声明 → 该前置归 info 跳过。
 - **edit_budget_declared**：计划声明的编辑预算（`int ∈ [0, DECLARED_HARD_CAP]`），
-  实现 = `scripts/gk_route_center.py::edit_budget_declared`。
+  实现 = `scripts/gk_route_center.py::edit_budget_declared`。定稿后由
+  `derive_state_seed` 注入域 state 的**种子盒**（`gate_data.edit_budget`）。
+- **plan_status**：计划定稿判据（**`frozen` 缺省** / `draft`），实现 =
+  `scripts/gk_route_center.py::plan_status` / `plan_is_draft`。方案 A（owner 2026-11-14）：
+  **显式 `draft` ⟹ 不跟随 plan 指针、META 域不落域 state**（编辑额度记在主 state 的节点盒）；
+  `frozen` / 缺省才接域路由。缺省 / 非法值按 `frozen`（存量零回归；未定稿必须显式标注）。
 
 也支持 inline 格式：
 
@@ -291,7 +297,7 @@ bash gatekeeper-cli.sh search --repo gatekeeper "<impact keyword>"
 
 # 3. 记录冲击分析（ECC-IMPACT-*），进入编辑
 bash gatekeeper-cli.sh advance ECO-EDIT
-bash gatekeeper-cli.sh monitor --subagent "plan-refinement: <task>"
+bash gatekeeper-cli.sh plan-refinement <plan> --run --task "<task>"
 bash gatekeeper-cli.sh adjudicate --verdicts '{"F1":"PASS","F2":"WARN","F3":"PASS","F4":"PASS","F5":"WARN","F6":"PASS","F7":"PASS"}' \
   --score 0.90 --decision "WARN: upgrade with verification" --impact references/ecc-impact-<date>.md
 
@@ -308,7 +314,7 @@ bash gatekeeper-cli.sh advance STAGE_0
 # 2. 回到 standing
 bash gatekeeper-cli.sh advance ECO-RESEARCH
 bash gatekeeper-cli.sh advance ECO-EDIT
-bash gatekeeper-cli.sh monitor --subagent "plan-refinement: <task>"
+bash gatekeeper-cli.sh plan-refinement <plan> --run --task "<task>"
 bash gatekeeper-cli.sh adjudicate --verdicts '{"F1":"PASS",...}' --score 0.90 --decision "..." --impact references/ecc-impact-<date>.md
 # 3. 进入标准执行
 bash gatekeeper-cli.sh advance STAGE_0

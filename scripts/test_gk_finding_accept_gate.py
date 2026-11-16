@@ -24,6 +24,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS))
 
@@ -41,12 +43,12 @@ def _head_sha():
         return ""
 
 
-def _state(tmp_path):
+def _state(tmp_path, oracle=""):
     st = tmp_path / ".gatekeeper.state"
     st.write_text(json.dumps({"gate_data": {"ecc_findings": [
         {"id": FID, "title": "accept-gate 夹具", "source": "manual", "status": "open",
          "anchors": [], "facets": [], "family": "", "cover_layers": [], "gap": False,
-         "cover_warnings": [], "root_key": "", "closure_oracle": "", "source_note": "",
+         "cover_warnings": [], "root_key": "", "closure_oracle": oracle, "source_note": "",
          "evidence_hash": "x", "release_state": "none", "provenance": "trusted",
          "declassified": False, "taint": [], "quarantined": False}]}}),
         encoding="utf-8", newline="\n")
@@ -101,8 +103,8 @@ def test_accept_allows_tests_kind(tmp_path):
 
 
 def test_accept_ack_allows_and_journals(tmp_path):
-    """出口：`--ack-accept` 放行无据关单 + journal 记 `accept_ack`（带 fid）。"""
-    st = _state(tmp_path)
+    """出口：`--ack-accept` 仅对 `closure_oracle=judgment` 放行 + journal `accept_ack`。"""
+    st = _state(tmp_path, oracle="judgment")
     r = _run(["close", st, FID, "--ack-accept"])
     assert r.returncode == 0, r.stdout + r.stderr
     assert _status(st) == "closed"
@@ -110,6 +112,30 @@ def test_accept_ack_allows_and_journals(tmp_path):
     assert jr.exists(), "accept_ack 未落 journal"
     ev = [json.loads(x) for x in jr.read_text(encoding="utf-8").splitlines() if x.strip()]
     assert any(e.get("event") == "accept_ack" and e.get("fid") == FID for e in ev), ev
+
+
+def test_accept_blocks_review_only(tmp_path):
+    """2026-11-12 锁：机械类 finding 只给 `review:`（自证）⟹ 必须 fail-loud。"""
+    st = _state(tmp_path)
+    r = _run(["close", st, FID, "--verify-source", "review:owner-cleanup"])
+    assert r.returncode != 0, r.stdout + r.stderr
+    assert "ECC_CLOSE_ACCEPT_FAIL" in (r.stdout + r.stderr), r.stdout + r.stderr
+
+
+def test_accept_ack_cannot_bypass_mechanical(tmp_path):
+    """2026-11-12 锁：机械类 finding 的 `--ack-accept` 不再是无条件逃生舱。"""
+    st = _state(tmp_path)
+    r = _run(["close", st, FID, "--ack-accept"])
+    assert r.returncode != 0, r.stdout + r.stderr
+    assert "closure_oracle=judgment" in (r.stdout + r.stderr), r.stdout + r.stderr
+
+
+def test_close_all_sources_enforces_gate_by_default(tmp_path, monkeypatch):
+    """多源关单默认 `accept_hard=True`：`review:` 自证同样被拦。"""
+    monkeypatch.setenv("GK_FINDING_ISOLATE", "1")
+    st = _state(tmp_path)
+    with pytest.raises(ValueError, match="ECC_CLOSE_ACCEPT_FAIL|弱证据"):
+        GF.close_all_sources(st, FID, "review:owner-cleanup")
 
 
 def test_accept_skipped_when_accept_hard_false(tmp_path):

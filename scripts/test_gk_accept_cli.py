@@ -319,3 +319,16 @@ def test_accept_cli_wires_runtime_watchdog():
     assert '--min-free-mb "${ACCEPT_MIN_FREE_MB:-800}"' in txt, \
         "内存闸未与启动前硬闸共用 ACCEPT_MIN_FREE_MB（两套阈值）"
 
+
+def test_accept_cli_consumes_reserved_lease():
+    """408 ⑦（**机检臂**）：启动防爆闸必须扣掉审计模型 warming 预留。
+
+    病：`gk_audit_lifecycle` 在 warming 期写 `reserved.mb=1024`，但全仓无消费方
+    ⟹ 预留是「死字段」；accept 只看裸 `free_avail_mb` ⟹ 预留期内仍可能压线启动。
+    判据：**读侧** claim（`reserved_claim`）+ **扣减单源**（`effective_free_mb`）都接线。
+    """
+    txt = (SCRIPT_DIR / "_accept_cli.sh").read_text(encoding="utf-8")
+    assert "reserved_claim" in txt and "effective_free_mb" in txt, \
+        "启动闸未消费预留租约（⑦ 仍无消费点）"
+    assert "审计预留" in txt, "拒绝日志须显式区分 free / reserved（可审计）"
+

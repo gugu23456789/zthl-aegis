@@ -168,3 +168,50 @@ def test_init_baseline_writes_schema(tmp_path):
     got = json.loads(out.read_text(encoding="utf-8"))
     assert got["schema"] == "gk-bench-baseline/v1"
     assert got["environment"] and "state" in got["benchmarks"]
+
+
+# ── 2026-11-14：真实报告口径（p99 嵌套 / amp_per_state 双侧可比）──────────────
+def _state_doc(scenario):
+    """当前侧：顶层 section 形态（compare 的 `current`）。"""
+    return {"state": {"scenarios": [scenario], "crash": [], "ok": True}}
+
+
+def _state_base(scenario):
+    """基线侧：`benchmarks.<section>` 形态（compare 的 `baseline`）。"""
+    return {"benchmarks": {"state": {"scenarios": [scenario], "crash": [], "ok": True}}}
+
+
+def _scenario(amp=1.0, p99=10.0, amp_per_state=None):
+    s = {"scenario": "s", "write_amp": amp, "latency": {"p99_ms": p99},
+         "success_ops": 10, "total_ops": 10}
+    if amp_per_state is not None:
+        s["amp_per_state"] = amp_per_state
+    return s
+
+
+def test_p99_nested_latency_is_compared():
+    """真实 bench 的 p99 在 `latency.p99_ms`：必须能判红（旧实现恒空操作）。"""
+    r = C.compare(_state_base(_scenario(p99=10.0)), _state_doc(_scenario(p99=20.0)),
+                  tolerance=1.25, only=["state"])
+    assert not r["ok"]
+    assert any(v["metric"] == "state.p99_ms" for v in r["violations"]), r
+
+
+def test_legacy_top_level_p99_still_works():
+    """旧基线/旧夹具把 p99 放顶层：保持兼容。"""
+    r = C.compare(_base(p99=10.0), _cur(p99=20.0), tolerance=1.25)
+    assert any(v["metric"] == "state.p99_ms" for v in r["violations"]), r
+
+
+def test_amp_per_state_both_sides_is_regression_not_probe_mismatch():
+    """两侧都有 amp_per_state ⟹ 用它比；超阈必须归因为 regression，不得被口径掩盖。"""
+    base = _state_base(_scenario(amp=0.3, amp_per_state=0.03))
+    cur = _state_doc(_scenario(amp=0.3, amp_per_state=0.12))
+    r = C.compare(base, cur, tolerance=1.25, only=["state"])
+    assert not r["ok"]
+    amp_v = [v for v in r["violations"] if v["metric"] == "state.write_amp"]
+    assert amp_v and amp_v[0].get("field") == "amp_per_state", r
+    base["git_head"] = "deadbeef"
+    dg = C.diagnose(r, base, cur, repo="/nonexistent")
+    assert dg["probe_mismatch"] is False, dg
+    assert {it["kind"] for it in dg["items"]} == {"regression"}, dg

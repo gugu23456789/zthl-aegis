@@ -1,0 +1,15 @@
+{
+  "authorization_id": "RED-SELF-YYYYMMDD",
+  "owner": "<owner>",
+  "self_maintained": true,
+  "window": {
+    "from": "2026-11-09T00:00:00+08:00",
+    "to": "2026-11-10T00:00:00+08:00"
+  },
+  "assets": [
+    {"host": "localhost", "path_prefix": "/", "actions": ["read"]},
+    {"host": "127.0.0.1", "path_prefix": "/", "actions": ["read"]}
+  ],
+  "legal_basis": "仅对本机 / 自有测试环境做只读自检；不含任何第三方目标。",
+  "sha256": "<运行 python3 scripts/gk_red_guard.py seal --scope references/red-scope.json 写入>"
+}

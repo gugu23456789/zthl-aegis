@@ -58,6 +58,24 @@ def probe(tmp_path_factory):
     return call
 
 
+def _cli_env(**extra):
+    """构造子进程 env：丢弃**空值** `STATE_FILE`（宿主 hook 会注入空变量）。
+
+    CLI 对「显式设置但为空」的 STATE_FILE 是 fail-loud（防调用方变量被外壳吞掉）；
+    测试若原样继承宿主空值，测的就不是并发竞态而是 ambient 环境，故在此剥掉。
+    """
+    env = {k: v for k, v in os.environ.items()
+           if not (k == "STATE_FILE" and not str(v).strip())}
+    env.update(extra)
+    return env
+
+
+# 宿主 hook 注入的**空** STATE_FILE 会污染进程内的 `_red_attacks` 导入（AV-10）与
+# 子进程 CLI（AV-11）：本模块统一在 import 期剥掉，保证测的是向量本身而非 ambient 环境。
+if not str(os.environ.get("STATE_FILE", "x")).strip():
+    os.environ.pop("STATE_FILE", None)
+
+
 def _sign(path):
     """用真密钥给 path 签名，返回 `.sig` 的**原始字节**（与 CLI 的 field sig --b64 同管线）。
 
@@ -167,7 +185,16 @@ def test_av9_six_parallel_updates_never_expose_invalid(probe):
 
     ctx = os.path.join(SKILL, "references", "subagent-context.json")
     sig = ctx + ".sig"
-    env = dict(os.environ, GK_GX_DIR="/nonexistent/gk-redteam")
+    env = _cli_env(GK_GX_DIR="/nonexistent/gk-redteam")
+    # 种子：fresh worktree 里 references/subagent-context.json 未跟踪 ⟹ 不存在。
+    #   若不先落一份**有效对**，观测线程在首个写者发布前必然读到 ctx_missing —— 那是真实初态，
+    #   不是竞态暴露。种子走 build+sign 单点，不经过 CLI ⟹ 不触发密钥轮换，保持本臂只测发布竞态。
+    subprocess.run([PY, os.path.join(SKILL, "scripts", "gk_context_build.py"), "build", SKILL,
+                    os.path.join(SKILL, ".gatekeeper.state"), ctx], check=True,
+                   capture_output=True, timeout=180)
+    with open(sig, "wb") as f:
+        f.write(_sign(ctx))
+    assert probe(ctx, sig) == "ok", "种子对无效，测试前提不成立"
     stop = {"v": False}
     seen = []
 
@@ -191,6 +218,35 @@ def test_av9_six_parallel_updates_never_expose_invalid(probe):
         assert '"ok":true' in out.replace(" ", "").lower(), out[-200:]
     assert probe(ctx, sig) == "ok"
     assert seen and set(seen) == {"ok"}, sorted(set(seen))
+
+
+def test_av12_six_parallel_rotations_keep_pair_valid(probe):
+    """AV-12（2026-11-10，AV-9 根因回归）：6 臂并发**真轮换** context 密钥。
+
+    钉住三件事（原实现三件全破）：
+      1. temp 独占（原固定 `${priv}.new` 会被并发臂互相覆盖/偷走 ⟹ 实测 `.pem`/`.pub` 双双消失）；
+      2. 换钥每步检查 + 失败回滚（原 `mv ... 2>/dev/null` 无判据仍打印 ok:true ⟹ 半换状态）；
+      3. 换钥前用**新私钥预签**当前 ctx、换钥后立即发布 .sig（原实现存在「旧 .sig + 新 pub」窗口）。
+    """
+    env = _cli_env(GK_GX_DIR="/nonexistent/gk-redteam")
+    ctx = os.path.join(SKILL, "references", "subagent-context.json")
+    sig = ctx + ".sig"
+    procs = [subprocess.Popen(["bash", CLI, "audit", "--key", "rotate", "context"], cwd=SKILL,
+                              env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+             for _ in range(6)]
+    outs = [p.communicate(timeout=300) for p in procs]
+    for (out, err), p in zip(outs, procs):
+        assert p.returncode == 0, err[-400:]
+        # 轮换允许 `skipped: not_expired`（auto 触发时锁内复核），手动触发应当真轮换。
+        assert '"ok":true' in out.replace(" ", "").lower(), out[-300:]
+        assert '"ok":false' not in out.replace(" ", "").lower(), out[-300:]
+    # 结束态：钥对存在、指纹可校验、落盘对可验签（任一半换/错配都会失败）
+    assert os.path.exists(PRIV) and os.path.exists(PUB), "轮换后私钥或公钥缺失"
+    r = subprocess.run([PY, os.path.join(SKILL, "scripts", "gk_key_meta.py"), "verify-fingerprints",
+                        "--meta", os.path.join(KEY_DIR, "key-meta.json"), "--key-dir", KEY_DIR],
+                       capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0, (r.stdout + r.stderr)[-400:]
+    assert probe(ctx, sig) == "ok"
 
 
 def test_av10_static_red_contract_is_clean():

@@ -74,38 +74,65 @@ def vector_state_integrity():
     return out
 
 
-def vector_bak_age():
-    """V3：`.bak` 是否超出轮换宽限期（**策略对齐**，不是数个数）。
+def vector_registry():
+    """V4：登记表驱动的动态向量（`red-vectors.json.dynamic_vectors` → pytest runner）。
 
-    轮换机制（`audit --key rotate`）自带 `find .keys -name '*.bak' -mtime +7 -exec rm`；
-    本向量检查这条策略**是否真的生效**（drvfs 上 mtime/权限都可能异常）。
+    2026-11-10 改造（用户质询"常态化还有用吗"）：原先 `VECTORS` 是手写三元组（3 项），
+    登记表涨到 174 条也不进常态循环（覆盖 3/174）。现在直接读登记表 —— 每条动态向量
+    登记后，下一波自动进攻击循环（新增向量无需改本文件）。
+    判据：runner 失败/缺 runner/登记表不可解析 ⟹ HIGH（不可对拍不得静默 PASS）；
+    pytest 本体不可用 ⟹ INFO（不冒充"已覆盖"）。
     """
-    grace = 7.0
+    import subprocess
+    reg = ROOT / "references" / "red-vectors.json"
+    if not reg.is_file():
+        return [{"id": "V4-NO-REGISTRY", "severity": HIGH,
+                 "title": "向量登记表缺失", "detail": str(reg)}]
     try:
-        grace = float(os.environ.get("GK_KEY_BAK_GRACE_DAYS", "7"))
-    except ValueError:
-        pass
-    kd = ROOT / ".keys"
-    if not kd.is_dir():
-        return []
-    now, stale = time.time(), []
-    for p in kd.glob("*.bak"):
-        try:
-            if (now - p.stat().st_mtime) / 86400.0 > grace:
-                stale.append(p.name)
-        except OSError:
+        data = json.loads(reg.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        return [{"id": "V4-NO-REGISTRY", "severity": HIGH,
+                 "title": "向量登记表不可解析", "detail": "%s: %s" % (type(e).__name__, e)}]
+    out = []
+    for dv in data.get("dynamic_vectors") or []:
+        did = dv.get("id") or "?"
+        nodes = [n for n in ([dv.get("runner")] + list(dv.get("runner_extra") or [])) if n]
+        if not nodes:
+            out.append({"id": "V4-" + did, "severity": HIGH,
+                        "title": "动态向量无 runner",
+                        "detail": "登记项缺 runner/runner_extra"})
             continue
-    if not stale:
-        return []
-    return [{"id": "V3-BAK-STALE", "severity": MEDIUM,
-             "title": ".bak 超出 %g 天宽限期（轮换清理未生效）" % grace,
-             "detail": "%d 份：%s" % (len(stale), ", ".join(sorted(stale)[:5]))}]
+        try:
+            r = subprocess.run(
+                [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider"] + nodes,
+                cwd=str(ROOT), capture_output=True, text=True, timeout=900)
+        except subprocess.TimeoutExpired:
+            out.append({"id": "V4-" + did, "severity": HIGH,
+                        "title": "动态向量超时（>900s）", "detail": " ".join(nodes)})
+            continue
+        except OSError as e:
+            out.append({"id": "V4-UNAVAILABLE", "severity": INFO,
+                        "title": "runner 无法启动（动态向量未执行）", "detail": str(e)})
+            continue
+        if r.returncode != 0:
+            blob = ((r.stdout or "") + (r.stderr or "")).strip()
+            if "No module named pytest" in blob:
+                out.append({"id": "V4-UNAVAILABLE", "severity": INFO,
+                            "title": "pytest 不可用（动态向量未执行）",
+                            "detail": " ".join(nodes)})
+                continue
+            tail = blob.splitlines()[-6:]
+            out.append({"id": "V4-" + did, "severity": HIGH,
+                        "title": "动态向量失败（%d 个 runner）" % len(nodes),
+                        "detail": (" | ".join(tail))[-400:] or ("rc=%d" % r.returncode)})
+    return out
 
 
 VECTORS = (
     ("V1-keyleak", vector_keyleak),
     ("V2-state-integrity", vector_state_integrity),
-    ("V3-bak-age", vector_bak_age),
+    # V3-bak-age 已并入 V1 的 RK-10（同判据逐字重复，2026-11-10 删除防双报）
+    ("V4-registry", vector_registry),
 )
 
 

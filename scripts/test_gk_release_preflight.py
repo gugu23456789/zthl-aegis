@@ -9,6 +9,7 @@
 """
 import json
 import os
+import platform
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -167,16 +168,28 @@ def test_bench_gate_fails_on_true_regression(tmp_path, monkeypatch):
     (tmp_path / "references").mkdir()
     (tmp_path / "references" / "bench-baseline.json").write_text(json.dumps({
         "schema": "gk-bench-baseline/v1", "git_head": "deadbeef",
-        "benchmarks": {"state": {
-            "scenarios": [{"scenario": "s", "write_amp": 1.0, "p99_ms": 10.0,
-                           "success_ops": 10, "total_ops": 10}],
-            "crash": [{"trial": 1, "checksum_ok": True, "tmp_left": 0}], "ok": True}}}),
+        "environment": {"os": platform.platform()},
+        "benchmarks": {
+            "state": {
+                "scenarios": [{"scenario": "s", "write_amp": 1.0, "p99_ms": 10.0,
+                               "success_ops": 10, "total_ops": 10}],
+                "crash": [{"trial": 1, "checksum_ok": True, "tmp_left": 0}], "ok": True},
+            "gate": {"scenarios": [{"scenario": "g", "write_amp": 1.0, "ok": True}],
+                     "ok": True},
+            "satellite": {"scenarios": [{"scenario": "sat", "write_amp": 1.0, "ok": True}],
+                          "ok": True}}}),
         encoding="utf-8")
     (tmp_path / "scripts" / "gk_bench_state.py").write_text(
         "import json;print(json.dumps({'ok': True, 'scenarios': ["
         "{'scenario': 's', 'write_amp': 9.0, 'p99_ms': 90.0, 'success_ops': 10,"
         " 'total_ops': 10}], 'crash': [{'trial': 1, 'checksum_ok': True, 'tmp_left': 0}]}))\n",
         encoding="utf-8")
+    (tmp_path / "scripts" / "gk_bench_gate.py").write_text(
+        "import json;print(json.dumps({'ok': True, 'scenarios': ["
+        "{'scenario': 'g', 'write_amp': 1.0, 'ok': True}]}))\n", encoding="utf-8")
+    (tmp_path / "scripts" / "gk_bench_satellite.py").write_text(
+        "import json;print(json.dumps({'ok': True, 'scenarios': ["
+        "{'scenario': 'sat', 'write_amp': 1.0, 'ok': True}]}))\n", encoding="utf-8")
     monkeypatch.setattr(PF, "ROOT", tmp_path)
     import gk_bench_compare as BC
     orig = BC._changed_since
@@ -186,3 +199,75 @@ def test_bench_gate_fails_on_true_regression(tmp_path, monkeypatch):
     finally:
         BC._changed_since = orig
     assert r["status"] == "FAIL" and "真回归" in r["detail"], r
+
+
+# ── 2026-11-14：新增六项门 ───────────────────────────────────────────────────
+def test_doc_align_fail_level_only(monkeypatch):
+    """doc_align 只把 FAIL（rc≠0）判红；WARN 不影响 rc。"""
+    class P:
+        returncode = 1
+        stdout = "doc-align: issues=2 checks=32\n"
+        stderr = ""
+    monkeypatch.setattr(PF, "_run_text", lambda args, timeout=300: P())
+    assert PF.doc_align_check()["status"] == "FAIL"
+
+    class Q:
+        returncode = 0
+        stdout = "doc-align: issues=0 checks=32 warn=3\n"
+        stderr = ""
+    monkeypatch.setattr(PF, "_run_text", lambda args, timeout=300: Q())
+    assert PF.doc_align_check()["status"] == "PASS"
+
+
+def test_release_notes_skip_without_version():
+    assert PF.release_notes_check("")["status"] == "SKIP"
+
+
+def test_release_notes_requires_file(tmp_path, monkeypatch):
+    monkeypatch.setattr(PF, "ROOT", tmp_path)
+    r = PF.release_notes_check("v9.9.9")
+    assert r["status"] == "FAIL" and "RELEASE-NOTES" in r["detail"], r
+
+
+def test_release_notes_runs_c1_c2(tmp_path, monkeypatch):
+    d = tmp_path / "RELEASE-NOTES"
+    d.mkdir()
+    (d / "RELEASE-NOTES-v9.9.9.md").write_text("# x\n", encoding="utf-8")
+    monkeypatch.setattr(PF, "ROOT", tmp_path)
+    monkeypatch.setattr(PF, "_prev_tag", lambda v="": "v9.9.8")
+
+    class P:
+        returncode = 0
+        stdout = "OK\n"
+        stderr = ""
+    monkeypatch.setattr(PF, "_run_text", lambda args, timeout=300: P())
+    r = PF.release_notes_check("9.9.9")
+    assert r["status"] == "PASS" and "v9.9.8" in r["detail"], r
+
+
+def test_bench_baseline_stale_and_schema(tmp_path, monkeypatch):
+    ref = tmp_path / "references"
+    ref.mkdir()
+    p = ref / "bench-baseline.json"
+    p.write_text(json.dumps({
+        "git_head": "deadbeef", "stale_after_commits": 5,
+        "benchmarks": {"state": {"scenarios": [{"scenario": "s", "amp_per_state": 0.03}]}}}),
+        encoding="utf-8")
+    monkeypatch.setattr(PF, "ROOT", tmp_path)
+    monkeypatch.setattr(PF, "_commits_since", lambda h: 42)
+    r = PF.bench_baseline_check()
+    assert r["status"] == "FAIL" and "落后" in r["detail"], r
+    monkeypatch.setattr(PF, "_commits_since", lambda h: 1)
+    assert PF.bench_baseline_check()["status"] == "PASS"
+    p.write_text(json.dumps({
+        "git_head": "deadbeef", "stale_after_commits": 5,
+        "benchmarks": {"state": {"scenarios": [{"scenario": "s", "write_amp": 1.0}]}}}),
+        encoding="utf-8")
+    r = PF.bench_baseline_check()
+    assert r["status"] == "FAIL" and "amp_per_state" in r["detail"], r
+
+
+def test_real_tree_new_gates_pass():
+    assert PF.list_registry_check()["status"] == "PASS"
+    assert PF.package_integrity_check()["status"] == "PASS"
+    assert PF.ci_security_lint_check()["status"] == "PASS"

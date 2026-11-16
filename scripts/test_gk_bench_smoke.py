@@ -42,3 +42,11 @@ def test_bench_gate_smoke():
     assert r["ok"] is True
     assert r["scenarios"] and all(s["ok"] for s in r["scenarios"])
     assert {s["op"] for s in r["scenarios"]} == {"read", "set_nested", "update_gate_data"}
+
+
+def test_bench_runtime_smoke():
+    """治理热点 smoke：路由 / 计划指针 / 速率闸三条（merge 只在 full 跑）。"""
+    r = _run("gk_bench_runtime.py", ["--smoke", "--json"])
+    assert r["ok"] is True
+    assert [s["scenario"] for s in r["scenarios"]] == [
+        "route-resolve", "plan-pointer", "rate-guard"]

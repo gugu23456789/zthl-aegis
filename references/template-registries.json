@@ -1,0 +1,56 @@
+{
+  "_comment": "模板登记表清单（单一事实源）。每张模板登记表在此声明：谁（consumer）读它、哪份文档（doc）说明它、事后回环（post_gate）由谁验证。消费方 = scripts/gk_template_audit.py（唯一审计实现）；doc-align 的 template_registries 检查项消费同一实现。新增模板域 = 在本清单加一行 + 建表 + 建消费器，禁在代码里另列清单。",
+  "_source": "2026-11-11 对齐 references/standard-maintenance-module.md §0 的四层分类：fill=可填槽生成；checklist=产物符合性；data=运行时数据表；spec=设计规范。当前仅纳管已落地的两张 fill 表，验证机制后再扩。",
+  "version": 1,
+  "kinds": ["fill", "checklist", "data", "spec"],
+  "registries": [
+    {
+      "id": "red-arm",
+      "kind": "fill",
+      "path": "references/red-arm-templates.json",
+      "items_key": "templates",
+      "consumer": "scripts/gk_red_arm_gen.py",
+      "doc": "SKILL.md",
+      "post_gate": "scripts/_redfirst_cli.sh",
+      "required_top": ["templates"],
+      "required_fields": ["id", "keywords", "desc", "when", "placeholders", "body"],
+      "placeholders_from_body": true
+    },
+    {
+      "id": "comment",
+      "kind": "fill",
+      "path": "references/comment-templates.json",
+      "items_key": "templates",
+      "consumer": "scripts/gk_comment_scaffold.py",
+      "doc": "references/comment-template.md",
+      "post_gate": "scripts/gk_comment_scaffold.py",
+      "required_top": ["positions", "templates"],
+      "required_fields": ["id", "position", "keywords", "desc", "when", "placeholders", "body"],
+      "placeholders_from_body": true
+    },
+    {
+      "id": "ci-checklist",
+      "kind": "checklist",
+      "path": "references/ci-checklist.json",
+      "items_key": "items",
+      "consumer": "scripts/gk_template_audit.py",
+      "doc": "references/ci-pipeline-template.md",
+      "post_gate": "scripts/gk_template_audit.py",
+      "required_top": ["target_glob", "items"],
+      "required_fields": ["id", "desc", "pattern", "level"],
+      "placeholders_from_body": false
+    },
+    {
+      "id": "wasm-checklist",
+      "kind": "checklist",
+      "path": "references/wasm-checklist.json",
+      "items_key": "items",
+      "consumer": "scripts/gk_template_audit.py",
+      "doc": "references/wasm-engineering-template.md",
+      "post_gate": "scripts/gk_template_audit.py",
+      "required_top": ["target_globs", "items"],
+      "required_fields": ["id", "desc", "pattern", "level"],
+      "placeholders_from_body": false
+    }
+  ]
+}

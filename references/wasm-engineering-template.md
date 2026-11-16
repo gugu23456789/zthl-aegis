@@ -11,6 +11,7 @@ updated: 2026-11-02
 > **性质**：纯工程样板，适用于需要浏览器端 WASM 交付的 C++ 项目（转换/验证/审计类）。
 > **参考实现**：spz2glb（origin，v2.0.5）、spz_gatekeeper（R7 移植）。
 > **原则**：安全优先（串行语义）> 性能（零拷贝）> 可观测（分段计时）。
+> **机器可判子集**：`references/wasm-checklist.json`（`gk_template_audit.py apply --id wasm-checklist --root <仓根>`）。
 
 ---
 

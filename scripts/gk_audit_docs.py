@@ -4,17 +4,22 @@ gk_audit_docs.py — Document alignment audit (batch8 R-T6 Phase 4b, 2026-08-20)
 ==============================================================================
 Migrates `cmd_audit --docs` bash heredoc (4 deterministic checks) to a
 standalone Python module. 0 API calls, deterministic.
+（2026-11-11：增 C5 模板登记表统一审计 ⟹ 现为 5 项。）
 
 Contract (compatible with bash heredoc, same as docs/analysis/2026-08-10-audit-4to5-contract-changes.md C6):
   {"docs_checks":[{"doc":..., "check":..., "declared":..., "actual":..., "match":bool,
                    "missing":[...], "extra":[...], "error":...}],
-   "summary":{"total":N, "matches":M, "failures":F}}
+   "summary":{"total":N, "matches":M, "skipped":S, "failures":F}}
+
+  ⚠ 2026-11-12：`matches` **不含** `skipped`（有意跳过不得冒充绿）；`failures = total - matches - skipped`。
+  ⚠ C7：`GK-FACTS` / `GK-FINDING-FACTS` 事实块须与活代码一致（直连 `gk_docgen_facts.check`）。
 
 Checks:
   C1: cli-protocol.md — declared command count vs actual table rows
   C2: extension-registry.md — CLI 命令表 ⊇ _CMD_REG（每个已注册命令须有条目；2026-09-13 真比对）
   C3: architecture-overview.md — references/ file map vs actual files
   C4: meta-routing-protocol.md — AUDIT-*/RED-*/15-phase standing coverage
+  C5: references/template-registries.json — 模板登记表统一审计（2026-11-11；实现单源 = gk_template_audit.audit）
 
 Usage:
   python3 scripts/gk_audit_docs.py [--skill-dir <dir>]
@@ -213,10 +218,55 @@ def check_docs(skill_dir: str = str(DEFAULT_SKILL), release: bool = False) -> di
             checks.append({"doc": "2026-06-22-batch8-python-migration-plan.md",
                            "check": "read", "error": str(e), "match": False})
 
+    # C7（2026-11-11，master 侧并发实现）：模板登记表统一审计（审计署 docs 域；
+    #   实现单源 = gk_template_audit.audit，禁在此复制第二套判据）。缺清单/审计器时
+    #   审计器自身返回 FAIL，这里只做投影。
+    #   ⚠ 编号撞车（2026-11-13 合并）：master 与 finding 分支**各自**用了 C7 ⟹ 合并后
+    #   本项保持 C7、事实块顺延为 C8（两者都在审计面里，缺一即假绿）。
+    try:
+        sys.path.insert(0, str(sd / "scripts"))
+        import gk_template_audit as _ta
+        _tr = _ta.audit(str(sd))
+        checks.append({"doc": "references/template-registries.json",
+                       "check": "template registries",
+                       "declared": "PASS", "actual": _tr.get("status"),
+                       "match": _tr.get("status") in ("PASS", "SKIP"),
+                       "detail": _tr.get("detail", "")})
+    except Exception as e:
+        checks.append({"doc": "references/template-registries.json",
+                       "check": "template registries", "error": str(e), "match": False})
+
+    # C8（2026-11-12，owner 质询「audit-docs 是不是有假绿？」）：**事实块必须进审计面**。
+    #   原状：`GK-FACTS` / `GK-FINDING-FACTS` 只由 `docgen --check` / `doc-align` 覆盖，本审计
+    #   从不调用 `gk_docgen_facts` ⟹ 事实块漂移时 `audit --docs` 仍报绿（**假绿**）。
+    #   现直连生成器的 `check()`（单源：不复制「比对逻辑」），失败即计入 failures。
+    try:
+        import gk_docgen_facts as _dg
+        _fc = _dg.check(str(sd))
+        checks.append({"doc": "references/*.md（事实块）",
+                       "check": "GK-FACTS / GK-FINDING-FACTS 与活代码一致",
+                       "status": _fc.get("status"), "match": _fc.get("status") == "PASS",
+                       "detail": _fc.get("detail")})
+    except Exception as e:  # noqa: BLE001 — 边界：生成器不可用 ⟹ **判 FAIL**（不得静默放过）
+        checks.append({"doc": "references/*.md（事实块）",
+                       "check": "GK-FACTS / GK-FINDING-FACTS 与活代码一致",
+                       "error": str(e), "match": False})
+
+    return {"docs_checks": checks, "summary": _summarize(checks)}
+
+
+def _summarize(checks: list) -> dict:
+    """审计摘要（**skipped 不得冒充绿**，2026-11-12 假绿修正）。
+
+    原状 `matches = sum(c["match"])` 把 `skipped=True`（导出面缺席等**有意跳过**）也算进
+    matches ⟹ 文档缺失时摘要仍是 `8/8, failures=0`，看不出「有几项根本没跑」。
+    现三分：`matches`（真跑且通过）/ `skipped`（有意跳过）/ `failures`（真跑且失败）。
+    """
     total = len(checks)
-    matches = sum(1 for c in checks if c.get("match"))
-    return {"docs_checks": checks,
-            "summary": {"total": total, "matches": matches, "failures": total - matches}}
+    skipped = sum(1 for c in checks if c.get("skipped"))
+    matches = sum(1 for c in checks if c.get("match") and not c.get("skipped"))
+    return {"total": total, "matches": matches, "skipped": skipped,
+            "failures": total - matches - skipped}
 
 
 def main(argv=None):

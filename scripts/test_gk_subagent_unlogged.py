@@ -160,3 +160,36 @@ def test_fresh_window_is_configurable(tmp_path):
     _state(tmp_path, history=[{"report_file": str(tmp_path / "docs/analysis/subagent/logged.md")}])
     assert DA.check_subagent_unlogged(str(tmp_path))["status"] == "FAIL"
     assert DA.check_subagent_unlogged(str(tmp_path), fresh_h=1)["status"] == "WARN"
+
+
+# ── 2026-11-11：判据时间面 = 文件名时间戳（mtime 会被工作树重建重置）──────────────
+def test_mtime_reset_does_not_create_fake_fresh(tmp_path):
+    """mtime 被批量刷新成当日、但文件名 epoch 是历史 ⟹ 只能判存量 WARN，不得 FAIL。
+
+    实测病象：890 份报告 mtime 全被工作树重建刷成当日 ⟹ 880 份被判「24h 内未入账」恒 FAIL。
+    """
+    now = time.time()
+    ledger_epoch = int(now - 40 * 86400)
+    report_epoch = int(now - 30 * 86400)
+    _mk(tmp_path, "sub-%d-1-1.md" % ledger_epoch, now - 60)
+    _mk(tmp_path, "sub-%d-1-2.md" % report_epoch, now - 60)   # mtime 刚刷新，产物是 30 天前
+    _state(tmp_path, history=[{
+        "report_file": str(tmp_path / "docs/analysis/subagent"
+                           / ("sub-%d-1-1.md" % ledger_epoch))}])
+    r = DA.check_subagent_unlogged(str(tmp_path))
+    assert r["status"] == "WARN", r
+    assert r["unlogged"] == 1, r
+
+
+def test_recent_filename_epoch_still_fails(tmp_path):
+    """修判据不得放宽检测：文件名 epoch 落在 24h 内且未入账 ⟹ 仍须 FAIL。"""
+    now = time.time()
+    ledger_epoch = int(now - 40 * 86400)
+    _mk(tmp_path, "sub-%d-1-1.md" % ledger_epoch, now - 60)
+    _mk(tmp_path, "sub-%d-9-2.md" % int(now - 600), now - 600)   # 10 分钟前产出
+    _state(tmp_path, history=[{
+        "report_file": str(tmp_path / "docs/analysis/subagent"
+                           / ("sub-%d-1-1.md" % ledger_epoch))}])
+    r = DA.check_subagent_unlogged(str(tmp_path))
+    assert r["status"] == "FAIL", r
+    assert r["fresh"] == ["sub-%d-9-2.md" % int(now - 600)], r

@@ -29,6 +29,7 @@ import re
 import subprocess
 import sys
 import time
+from functools import lru_cache
 from pathlib import Path
 
 _SCRIPT_DIR = Path(__file__).resolve().parent
@@ -116,6 +117,25 @@ def _host_norm(s: str) -> str:
     return s
 
 
+@lru_cache(maxsize=8192)
+def _realpath_cached(s: str) -> str:
+    """`os.path.realpath` 的**进程内记忆**（2026-11-10 性能回归）。
+
+    病象（实测）：台账 11,931 行、同一 worktree 反复出现 ⟹ `unreleased_claims_for_worktree`
+    逐条 `_overlaps → _canon → _resolve_abs → realpath` 共 23,862 次、203,784 次 `lstat`；
+    realpath 对每个路径分量各做一次 `lstat`，在 drvfs/9p 上 1.5ms/次 ⟹ **320s**，
+    使 `apply-worktree --reclaim` 干跑 399s、回收 5–14 分钟（用户口径：>1min 不可接受）。
+
+    仅记忆**已绝对化**的路径串（键不含 `base`）⟹ 与 `_default_repo()` 变化无关；`realpath`
+    非 strict 语义下不存在的路径也返回归一结果，故同一进程内复用安全（进程生命周期内目录结构
+    视为不变；跨进程不共享）。
+    """
+    try:
+        return os.path.realpath(s)
+    except OSError:
+        return os.path.abspath(s)
+
+
 def _resolve_abs(p: str, base: str = "") -> str:
     """**绝对路径解析**（双宿主归一 → 相对补全 → realpath；**不** casefold）。
 
@@ -129,10 +149,7 @@ def _resolve_abs(p: str, base: str = "") -> str:
         return ""
     if not os.path.isabs(s):
         s = _host_norm(os.path.join(base or _default_repo(), s))
-    try:
-        return os.path.realpath(s)
-    except OSError:
-        return os.path.abspath(s)
+    return _realpath_cached(s)
 
 
 def _canon(p: str, base: str = "") -> str:

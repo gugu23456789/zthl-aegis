@@ -15,7 +15,7 @@
 | 3 | `cmd_advance` | ============================================================ | `to_stage="" dry_run=false run_monitor=tr` | - |
 | 4 | `cmd_anchor_rebase` | anchor-rebase（行锚重钉：代码改写后把文档里的行锚按符号重新钉位） | `out rc` | docs/plans/2026-09-20-skill-portability-ecc-plan.md §7（收口路径 1） |
 | 5 | `cmd_appeal` | appeal | `gate="$1" notes="${2:-}"` | - |
-| 6 | `cmd_apply_worktree` | ─── apply-worktree: worktree 申请—分发入口（F7/R9 子集，2026-09-22）─── | `fid="" family="" codefix="0" tier="" dry` | - |
+| 6 | `cmd_apply_worktree` | 用户公理 A2：coding agent 须「向元数据路由申请 worktree」，禁止自行挑选目录。 | `fid="" family="" codefix="0" tier="" dry` | - |
 | 7 | `cmd_attribution` | attribution | `input_file="${1:-}"` | - |
 | 8 | `cmd_audit` | [write_guard 裁决 2026-09-06 EXEMPT] 写入仅于持久化域 --state/--docs（b | `scope="${1:-state}"` | - |
 | 9 | `cmd_balance` | balance (DeepSeek API balance query, MiMo 无此 endpoint) | `_gk_xtrace=0` | - |
@@ -91,7 +91,7 @@
 
 ### cmd_apply_worktree
 **Usage**: `gatekeeper-cli.sh apply-worktree <args>`
-**Purpose**: ─── apply-worktree: worktree 申请—分发入口（F7/R9 子集，2026-09-22）───
+**Purpose**: 用户公理 A2：coding agent 须「向元数据路由申请 worktree」，禁止自行挑选目录。
 
 ### cmd_attribution
 **Usage**: `gatekeeper-cli.sh attribution <args>`

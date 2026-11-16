@@ -518,6 +518,39 @@ def history_union(state_file: str, data: dict) -> tuple[list, dict]:
     return _satellite_history_union(state_file, data, gd.get("subagent_history") or [])
 
 
+_RE_PIPELINE_BATCH = re.compile(r"^pr-\d{6,}-[0-9a-f]{4,}(?:-\d+)?$")
+
+
+def resolve_pipeline_batch(state_data: dict, hist: list[dict],
+                           batch: str) -> tuple[list[dict], dict]:
+    """流水线批号 / 记录号 `pr-<epoch>-<hex>[-n]` → 历史 `batch_id`（确定性反查）。
+
+    病象（2026-11-12，机制修复 #3）：`--batch` 只做 `subagent_history[].batch_id` 精确匹配，
+    而调用方手里的批号常来自 enqueue 回执 / `task_pipeline[].batch`（`pr-...`）⟹ 全部落
+    `batch_unresolved`（本会话实测：用户按流水线批号聚合，报 `no_entry_matches_batch`）。
+
+    单一可复原关联：`task_pipeline[].full_task` 逐字等于 `subagent_history[].task`
+    （CLI 派发时把 full_task 原样落库；F-REV-53 起不截断）。**不新增写路径字段**
+    （`pipeline_record_id` 需改派发侧，且历史条目无该字段 ⟹ 对存量数据无效）。
+
+    返回 `(entries, info)`；`info["resolved_batch_ids"]` 是命中的历史批指纹集合：
+      - 恰 1 个 ⟹ 可安全绑定；
+      - >1 个 ⟹ **歧义**（同一流水线批跨了历史批），调用方必须 fail-loud，禁武断取首个；
+      - 0 个 ⟹ 保持 `batch_unresolved`。
+    """
+    gd = (state_data or {}).get("gate_data") or {}
+    _b = str(batch or "").strip()
+    recs = [r for r in (gd.get("task_pipeline") or [])
+            if isinstance(r, dict)
+            and _b in (str(r.get("batch") or ""), str(r.get("id") or ""))]
+    # 记录号（`pr-...-3`）只取该条 full_task；批号取批内全部。二者都走同一集合，天然区分。
+    tasks = {str(r.get("full_task") or "") for r in recs if r.get("full_task")}
+    kept = [x for x in hist if str(x.get("task") or "") in tasks] if tasks else []
+    bids = sorted({str(x.get("batch_id") or "") for x in kept if x.get("batch_id")})
+    return kept, {"pipeline_records": len(recs), "resolved_batch_ids": bids,
+                  "is_pipeline_batch": bool(_RE_PIPELINE_BATCH.match(_b))}
+
+
 def collect_entries(state_file: str, recent: int | None, role: str | None,
                     task: str = "", allow_cross_task: bool = False,
                     fresh_s: int = 0, plan: str = "", batch: str = "") -> tuple[list[dict], dict]:
@@ -557,19 +590,35 @@ def collect_entries(state_file: str, recent: int | None, role: str | None,
         if kept:
             return kept, {"mode": "batch_bound", "batch_id": _b, "batch_size": len(kept),
                           "excluded_other_batches": len(hist) - len(kept), **_fresh}
+        # 机制修复 #3（2026-11-12）：**流水线批号反查** —— `--batch` 若传的是 enqueue 回执 /
+        #   `task_pipeline[].batch` 的 `pr-<epoch>-<hex>[-n]`，先按 `full_task == history.task`
+        #   反查历史批指纹；唯一命中 ⟹ 绑定（`resolved_from=pipeline`，留痕非静默改写）。
+        _pk, _pi = resolve_pipeline_batch(d, hist, _b)
+        _bids = _pi.get("resolved_batch_ids") or []
+        if len(_bids) == 1:
+            return _pk, {"mode": "batch_bound", "batch_id": _bids[0], "batch_size": len(_pk),
+                         "excluded_other_batches": len(hist) - len(_pk),
+                         "resolved_from": "pipeline", "pipeline_batch": _b,
+                         "pipeline_records": _pi.get("pipeline_records"), **_fresh}
         # ECC-449948814679（2026-10-10）：**批号双轨** —— `--batch` 若传的是**流水线批号**
         #   `pr-<epoch>-<hex>`（见 `gate_data.task_pipeline[].batch` / enqueue 回执）而非
         #   `subagent_history[].batch_id` 指纹，原实现**静默**返回 0 条 ⟹ 下游把「批号写错」
         #   误归因为「批内一致度不足 / 基础设施缺陷」（实测落 `ECC-37985D9A67BE` = 此类）。
-        #   现未知批号**不静默**：返回 `batch_unresolved` + 可用 `batch_id` 清单，交
+        #   现未知/歧义批号**不静默**：返回 `batch_unresolved` + 可用 `batch_id` 清单，交
         #   `aggregate()` 落 `error`/`hint`（rc≠0），并由 `main()` 的 `_emit` 门**禁落 finding**。
         _sizes: dict = {}
         for x in hist:
             _k = str(x.get("batch_id", "") or "")
             _sizes[_k] = _sizes.get(_k, 0) + 1
         _avail = [k for k, _ in sorted(_sizes.items(), key=lambda kv: (-kv[1], kv[0])) if k]
-        return [], {"mode": "batch_unresolved", "batch_id": _b,
-                    "available_batch_ids": _avail, "excluded_other_batches": len(hist), **_fresh}
+        _attr = {"mode": "batch_unresolved", "batch_id": _b,
+                 "available_batch_ids": _avail, "excluded_other_batches": len(hist),
+                 "pipeline_records": _pi.get("pipeline_records"),
+                 "pipeline_batch_ids": _bids, **_fresh}
+        if len(_bids) > 1:
+            # 同一流水线批跨了两个历史批 ⟹ 禁武断取首个（会静默丢一半臂）。
+            _attr["ambiguous_pipeline_batch"] = True
+        return [], _attr
     if allow_cross_task:
         return hist, {"mode": "cross_task_allowed", "excluded_other_tasks": 0, **_fresh}
     # §18（2026-10-02）：按**计划**锚聚合 —— 6 臂 3 组窄任务（组①相同对 / 组②与组①子空间正交且
@@ -881,6 +930,12 @@ _ASSERTION_RE = re.compile(
     r"断言\s*#?\s*([1-9]\d*)[^。；\n]{0,120}?(support|refute|abstain)", re.I)
 _ASSERTION_RE_REV = re.compile(
     r"(support|refute|abstain)[^。；\n]{0,30}?断言\s*#?\s*([1-9]\d*)", re.I)
+
+
+def assertion_n(coverage_target) -> int:
+    """断言矩阵列数：`max(5, max(coverage_target))`；缺声明 ⟹ 5（向后兼容）。"""
+    ids = _int_set(coverage_target)
+    return max(5, max(ids) if ids else 5)
 
 
 def assertion_metrics(refs: list[dict], n_assertions: int = 5) -> dict:
@@ -1915,19 +1970,29 @@ def aggregate(state_file: str, recent: int | None, role: str | None,
     #   防「批号写错」被下游误归因为「批内一致度不足 / 基础设施缺陷」并落误归因 finding。
     if batch and attribution.get("mode") == "batch_unresolved":
         out["error"] = "no_entry_matches_batch"
-        out["hint"] = ("该批号在 subagent_history 中无匹配。`--batch` 吃的是 "
-                       "`subagent_history[].batch_id`（聚合指纹，如 2162344a94db），**不是** "
-                       "enqueue 回执 / `task_pipeline[].batch` 的流水线批号 `pr-<epoch>-<hex>`。"
-                       "可用 batch_id：" + (", ".join(attribution.get("available_batch_ids") or []) or "（无）"))
+        _bid_txt = (", ".join(attribution.get("available_batch_ids") or []) or "（无）")
+        if attribution.get("ambiguous_pipeline_batch"):
+            out["hint"] = ("该流水线批号反查到**多个**历史 batch_id（%s）—— 同一流水线批跨了历史批，"
+                           "禁武断取首个。请改用确定的 batch_id：" % (
+                               ", ".join(attribution.get("pipeline_batch_ids") or [])))
+        else:
+            out["hint"] = ("该批号在 subagent_history 中无匹配（已尝试按 task_pipeline.full_task "
+                           "反查流水线批号）。`--batch` 吃 `subagent_history[].batch_id`（聚合指纹，"
+                           "如 2162344a94db）或 enqueue 回执的流水线批号 `pr-<epoch>-<hex>[-n]`"
+                           "（唯一命中才绑定；歧义/无命中均不静默）。可用 batch_id：")
+        out["hint"] += _bid_txt
     # 三组窄任务的分组指标（2026-10-19）：G1/G2/G3 语义不同，**不得**用单一全局
     #   rho 判所有组。与顶层 consensus 同源（跨批门后取所取批的臂）。
     out["group_metrics"] = group_metrics(_gm_refs)
     # 逐断言裁决矩阵（2026-10-19）：结论散文里的 support/refute/abstain 不再被全局
     #   agreement 平均掉；论文按断言报分歧。
-    out["assertion_metrics"] = assertion_metrics(_gm_refs)
     # 实际正交（2026-10-19）：声明正交之外，再由**每臂实际 assertions[]** 反算；
     #   二者不一致（越界裁决 / 实际重叠 / 漏覆盖）必须在报告里显形，而非只看清单。
+    # 2026-11-14（408 ⑪）：断言矩阵的列数必须跟 coverage_target 走，不能钉死 5——
+    #   6 臂质询声明 coverage_target=6 时，旧式 `assertion_metrics(refs)` 会**静默漏掉第 6 条**。
     _decl_by_id, _decl_groups, _decl_target = _narrow_declarations(state_file)
+    out["assertion_metrics"] = assertion_metrics(
+        _gm_refs, n_assertions=assertion_n(_decl_target))
     out["orthogonality_metrics"] = orthogonality_metrics(
         _gm_refs, _decl_by_id, _decl_groups, _decl_target)
     out.update(degradation_flag(refs, attribution))
@@ -2151,6 +2216,11 @@ def emit_aggregate_finding(state_file: str, agg: dict, *, plan: str = "",
     tr = (agg or {}).get("trace", {}) or {}
     _n = int(tr.get("count", 0) or 0)
     _susp = int(tr.get("suspect_count", 0) or 0)
+    # 2026-11-12（噪声根治）：n=0（含 `batch=-` 空批）没有可裁决的臂 ⟹ **不落 finding**。
+    #   旧行为每跑一次空批就新增一条 `MoA聚合批裁决: batch=- n=0 clusters=0 ...`（实测 03:52 仍产）。
+    if _n <= 0:
+        return {"ok": True, "skipped": "empty_batch",
+                "hint": "trace.count=0：无臂可裁决，不落 finding"}
     _cons = (agg or {}).get("consensus", {}) or {}
     _nc = int(_cons.get("n_clusters", 0) or 0)
     assessment = assess_findings(agg)   # S2：分类 + 优化项 + 详情文本
@@ -2459,7 +2529,8 @@ def chain_head(plan: str, *, state_file: str = "", task: str = "",
 def chain(state_file: str, *, plan: str = "", batch: str = "", role: str = "plan-refinement",
           task: str = "", cross_batch: bool = False, html_path: str = "",
           prose_file: str = "", no_html: bool = False, from_plan: str = "",
-          arms_per_group: int = 0, out_file: str = "", runner=None) -> dict:
+          arms_per_group: int = 0, out_file: str = "", round_label: str = "",
+          runner=None) -> dict:
     """**T1 链骨架**：`批锚自解析 → 聚合 → 落 finding → P/L/M 分组 → 熔断判决(只读评估器) → 单一封套`。
 
     `--from-plan`（T15，2026-10-29）：链**头**从计划文本起跑 —— `plan-lint` 机检门 → 派臂
@@ -2631,17 +2702,27 @@ def chain(state_file: str, *, plan: str = "", batch: str = "", role: str = "plan
     # T4（2026-10-15，C 计划 §3-T4）：链尾**缺省**导出 HTML（`--no-html` opt-out）；路径规则化。
     #   原实现收 `html_path` 却只标 `pending(T4)` = **收参不干活**（假状态）—— 现真写盘；
     #   写盘失败**如实报 `error`**（禁静默标 written）。
+    # 2026-11-12（owner 令）：HTML 必须自带**版本/轮次/批次**标识；命名与页内标识同源。
+    _ver = plan_version(plan)
+    _rl = round_label or _batch_round_label(state_file, plan, b)
+    steps["identity"] = {"plan": plan_identity(plan), "version": _ver, "round": _rl, "batch": b}
     if no_html:
         steps["html"] = {"requested": False, "status": "disabled", "path": ""}
     else:
         try:
-            _hp = _chain_html_path(html_path, state_file, b or plan)
+            _hp = _chain_html_path(html_path, state_file, batch=b, plan=plan,
+                                   version=_ver, round_label=_rl)
             Path(_hp).parent.mkdir(parents=True, exist_ok=True)
             # §3 G2（2026-10-26）：链尾 HTML 原**未传 trend** ⟹ 缺省导出的页面没有跨轮趋势图
             #   （只有 `--html` 走 `_emit_html` 才带）。趋势源与 `_emit_html` 同源（只读 state）。
+            _tr = _trend_from_state(state_file, plan=plan)
             Path(_hp).write_text(
-                render_html(agg, {"plan": plan, "batch": b, "stop": steps.get("early_stop")},
-                            trend=_trend_from_state(state_file, plan=plan)),
+                render_html(agg, {"plan": plan, "batch": b, "version": _ver, "round": _rl,
+                                  "stop": steps.get("early_stop"),
+                                  "journal": steps.get("convergence"),
+                                  "rounds_detail": _rounds_detail(state_file, plan),
+                                  "mu": [t.get("mu") for t in (_tr or [])]},
+                            trend=_tr),
                 encoding="utf-8")
             steps["html"] = {"requested": True, "status": "written", "path": _hp}
         except Exception as e:  # noqa: BLE001 — 写盘失败 ⟹ 如实报（fail-loud 值，不假绿）
@@ -2740,17 +2821,62 @@ def chain(state_file: str, *, plan: str = "", batch: str = "", role: str = "plan
             "breaker": breaker, "steps": steps}
 
 
-def _chain_html_path(html_path: str, state_file: str, anchor: str) -> str:
-    """T4 路径规则（**禁手改**）：显式 `html_path` 优先；否则 `<state 目录>/moa-chain-<锚>.html`。
+def _chain_html_path(html_path: str, state_file: str, anchor: str = "",
+                     *, plan: str = "", batch: str = "", version: str = "",
+                     round_label: str = "") -> str:
+    """T4 路径规则（**禁手改**）：显式 `html_path` 优先；否则 `<state 目录>/moa-chain-<标识>.html`。
 
-    `锚` = 批指纹（12-hex）或计划名，净化到 `[A-Za-z0-9._-]`（防路径注入 / 超长）。
+    2026-11-12（owner 令：HTML 命名须能看出**哪一版/哪一轮**）：
+      计划 + 批次齐备 ⟹ `moa-chain-<plan-key>-<DRAFT-N>-<Rk>-<batch>.html`；
+      否则回落旧 `moa-chain-<锚>.html`（批锚自解析 / 非计划通道零回归）。
+    所有片段净化到 `[A-Za-z0-9._-]`（防路径注入 / 超长）；计划键截 60、批号截 24。
     """
     p = str(html_path or "").strip()
     if p:
         return p
     _dir = str(Path(state_file).resolve().parent) if state_file else "."
-    _a = re.sub(r"[^A-Za-z0-9._-]", "_", str(anchor or "chain"))[:80] or "chain"
+    _pk = re.sub(r"[^A-Za-z0-9._-]", "_", plan_identity(plan))[:60] if plan else ""
+    _b = re.sub(r"[^A-Za-z0-9._-]", "_", str(batch or ""))[:24]
+    if _pk and _b:
+        _v = re.sub(r"[^A-Za-z0-9._-]", "_", str(version or ""))[:16] or "DRAFT-unknown"
+        _r = re.sub(r"[^A-Za-z0-9._-]", "_", str(round_label or ""))[:8] or "R?"
+        return os.path.join(_dir, "moa-chain-%s-%s-%s-%s.html" % (_pk, _v, _r, _b))
+    _a = re.sub(r"[^A-Za-z0-9._-]", "_", str(anchor or batch or plan or "chain"))[:80] or "chain"
     return os.path.join(_dir, "moa-chain-%s.html" % _a)
+
+
+def plan_version(plan: str) -> str:
+    """从计划文本抽取 `DRAFT-N`（供 HTML 标识；纯只读，找不到 ⟹ 空串）。"""
+    p = _resolve_plan_path(plan) if plan else ""
+    if not p:
+        return ""
+    try:
+        head = Path(p).read_text(encoding="utf-8", errors="replace")[:6000]
+    except OSError:
+        return ""
+    m = re.search(r"DRAFT[- _]?(\d+)", head, re.I)
+    return "DRAFT-%s" % m.group(1) if m else ""
+
+
+def _batch_round_label(state_file: str, plan: str, batch: str) -> str:
+    """按**派发时间**给批次排轮序（`R1..`）；不是 finding 创建时间（后者受链尾补跑影响）。"""
+    if not (plan and batch):
+        return ""
+    try:
+        entries, _meta = collect_entries(state_file, None, None, "", plan=plan)
+    except Exception:  # noqa: BLE001 — 标识增强失败不得阻断链尾
+        return ""
+    times = {}
+    for e in entries:
+        b = str(e.get("batch_id") or "")
+        m = re.search(r"sub-(\d+)", str(e.get("subagent_id") or ""))
+        if b and m:
+            times[b] = min(times.get(b, 10 ** 20), int(m.group(1)))
+    order = [b for b, _t in sorted(times.items(), key=lambda kv: (kv[1], kv[0]))]
+    try:
+        return "R%d" % (order.index(str(batch)) + 1)
+    except ValueError:
+        return ""
 
 
 # ── 跨轮收敛比对（Infra-1b，2026-10-05，ECC-1F540718AEE5 / RCA=A8）─────────────
@@ -4433,28 +4559,94 @@ def render_html(agg: dict, meta: dict | None = None, trend: list | None = None) 
             trace = rep.get("trace") or {}
     key = str((trace.get("attribution") or {}).get("anchor") or agg.get("mode") or "agg")[:24]
     _stop = meta.get("stop") or {}
-    _stop_banner = ""
-    if isinstance(_stop, dict) and _stop.get("verdict") == "NO_CONVERGENCE":
-        _stop_banner = ('<div class="banner-warn"><b>已停止复评（NO_CONVERGENCE）</b>：r̂='
-                        + esc(str(_stop.get("r_hat"))) + ' · rounds=' + esc(str(_stop.get("rounds")))
-                        + ' · switch_to=' + esc(str(_stop.get("switch_to")))
-                        + ' · finding <code>' + esc(str(_stop.get("finding") or "")) + '</code>'
-                        + '。本页结论仅作参考，下一步是机制修复，不要重跑同类评审。</div>')
+    _mu = meta.get("mu") or []
+    # 2026-11-12（owner 令）：跨轮聚合是否跑过、结论是什么，必须在本页**显式**可见；
+    #   不能只给一张趋势图让读者猜。verdict 来自链尾 `steps.early_stop`（测量轴）。
+    _cross_banner = ""
+    if isinstance(_stop, dict) and _stop.get("verdict"):
+        _vd = str(_stop.get("verdict"))
+        _cls = "banner-warn" if _vd in ("NO_CONVERGENCE", "INSUFFICIENT_ROUNDS", "UNKNOWN") else "banner"
+        _tail = ("。本页结论仅作参考，下一步是机制修复，不要重跑同类评审。"
+                 if _vd == "NO_CONVERGENCE" else
+                 ("。跨轮样本不足，不能据此判定收敛。" if _vd == "INSUFFICIENT_ROUNDS" else ""))
+        _cross_banner = ('<div class="%s"><b>跨轮聚合：%s</b> · μ=%s · r̂=%s · rounds=%s'
+                         ' · switch_to=%s · finding <code>%s</code>%s</div>'
+                         % (_cls, esc(_vd), esc(str(_mu)), esc(str(_stop.get("r_hat"))),
+                            esc(str(_stop.get("rounds"))), esc(str(_stop.get("switch_to") or "")),
+                            esc(str(_stop.get("finding") or "")), _tail))
+    _id_bits = []
+    for _k, _lab in (("plan", "计划"), ("version", "版本"), ("round", "轮次"), ("batch", "批次")):
+        if meta.get(_k):
+            _id_bits.append(_lab + ' <code>' + esc(str(meta[_k])) + '</code>')
+    _id_line = ('<div class="meta">' + ' · '.join(_id_bits) + '</div>') if _id_bits else ""
+    # 2026-11-12（owner 质询「跨轮结论怎么只有这几个参数」）：结论不能只给 5 个摘要字段；
+    #   把测量轴全参数、台账轴、逐轮 μ 序列全部摊开，页面自证「跑没跑 / 怎么算的」。
+    _journal = meta.get("journal") or {}
+    _rd = meta.get("rounds_detail") or []
+    _cross_card = ""
+    if isinstance(_stop, dict) and (_stop.get("verdict") or _rd):
+        def _v(x) -> str:
+            return "—" if x is None or x == "" else esc(str(x))
+
+        _params = [
+            ("判定", _v(_stop.get("verdict"))),
+            ("r̂", _v(_stop.get("r_hat"))),
+            ("r_min", _v(_stop.get("r_min"))),
+            ("K（连续轮数）", _v(_stop.get("k_rounds"))),
+            ("trailing_k", _v(_stop.get("trailing_k"))),
+            ("rounds（测量行）", _v(_stop.get("rounds"))),
+            ("switch_to", _v(_stop.get("switch_to"))),
+            ("suppressed", _v(_stop.get("suppressed"))),
+            ("finding", _v(_stop.get("finding"))),
+            ("source", _v(_stop.get("source"))),
+            ("台账轴 verdict", _v(_journal.get("verdict"))),
+            ("n_star", _v(_journal.get("n_star"))),
+            ("breaker", _v(_journal.get("breaker"))),
+            ("台账轴 source", _v(_journal.get("source"))),
+        ]
+        _pt = "".join("<tr><td>%s</td><td><code>%s</code></td></tr>" % (esc(k), v)
+                      for k, v in _params)
+        _seq = ""
+        if _rd:
+            _rows = []
+            for _i, _r in enumerate(_rd, 1):
+                _rows.append(
+                    '<tr><td>#%d</td><td>%s</td><td><code>%s</code></td><td>%s</td>'
+                    '<td><code>%s</code></td><td><code>%s</code></td></tr>'
+                    % (_i, esc(str(_r.get("round") or "")), _v(_r.get("mu")),
+                       _v(_r.get("top_weight")), esc(str(_r.get("batch") or "计划级（无批）")),
+                       esc(str(_r.get("finding") or ""))))
+            _seq = ('<h3>测量序列（每轮 μ）</h3><table><tr><th>#</th><th>时间</th><th>μ(refs)</th>'
+                    '<th>权重</th><th>批次</th><th>finding</th></tr>'
+                    + "".join(_rows) + '</table>')
+        _cross_card = ('<div class="card"><h3>跨轮参数（测量轴）</h3>'
+                       '<table><tr><th>参数</th><th>值</th></tr>' + _pt + '</table>'
+                       + _seq
+                       + '<div class="meta">算法：μ_n = 第 n 轮新增测量压力（refs）；'
+                         'r̂ = (μ_N/μ_0)^(1/N)；早停 = 连续 K 轮 r̂ ≥ r_min；'
+                         'N* = ⌈ln(μ_0/μ_tgt)/ln(1/r̂)⌉。'
+                         '台账轴不可用（如 RATES_DEGENERATE_SINGLE_ROUND）时以测量轴为准。</div></div>')
 
     o = ['<!DOCTYPE html>', '<html lang="zh-CN"><head><meta charset="utf-8">',
          '<meta name="viewport" content="width=device-width,initial-scale=1">',
          '<title>MoA 人工裁定页（散文结论 · 双盲）</title>', '<style>' + _CSS + '</style>',
-         '</head>', '<body data-key="' + esc(key, quote=True) + '" data-view="prose">',
+         '</head>', '<body data-key="' + esc(key, quote=True) + '" data-view="prose"'
+         ' data-plan="' + esc(str(meta.get("plan", "")), quote=True) + '"'
+         ' data-version="' + esc(str(meta.get("version", "")), quote=True) + '"'
+         ' data-round="' + esc(str(meta.get("round", "")), quote=True) + '"'
+         ' data-batch="' + esc(str(meta.get("batch", "")), quote=True) + '">',
          '<div class="wrap">',
          '<h1>MoA 人工裁定页</h1>',
          '<div class="meta">模式 <code>' + esc(str(agg.get("mode", ""))) + '</code>'
          + (' · 目标 <code>' + esc(str(meta.get("target", ""))) + '</code>' if meta.get("target") else "")
          + ' · 生成 ' + esc(str(meta.get("generated_at", ""))) + '</div>',
+         _id_line,
          '<div class="banner"><b>双盲纪律</b>：本页<b>不含</b> agent 侧分数锚 —— 请先独立打分再提交。'
          + _abbr("divergence") + ' 与 ' + _abbr("HUMAN_OVERSCORE") + ' / ' + _abbr("HUMAN_UNDERSCORE")
          + ' 由 CLI 侧 <code>' + _abbr("adjudicate") + '</code> 事后计算。'
          '本页纯只读：不写 state，出口只有「导出散文 <code>prose.txt</code> + 复制三步命令链」。</div>',
-         _stop_banner,
+         _cross_banner,
+         _cross_card,
          _kpi_band(agg, refs, trend),
          _html_pollution(agg),
          '<div class="nav"><a href="#sec-mat" data-i18n="nav-mat">一 · 聚合材料</a>'
@@ -4806,6 +4998,33 @@ def _finding_plan(f: dict) -> str:
     return ""
 
 
+def _rounds_detail(state_file: str, plan: str = "") -> list:
+    """跨轮序列的**完整参数行**（HTML 面板用）：μ / 权重 / 批次 / finding / 时间。
+
+    `_trend_from_state` 只给图线所需的最小字段；页内参数表需要可追溯的批次与 finding id。
+    只读 state union；映射失败不阻断渲染（缺失字段留空）。
+    """
+    tr = _trend_from_state(state_file, plan=plan)
+    ids, batches = {}, {}
+    try:
+        import gk_finding
+        for f in gk_finding.load_findings_union(state_file) or []:
+            rk = str(f.get("root_key") or "")
+            if not rk:
+                continue
+            ids[rk] = f.get("id")
+            batches[rk] = _finding_batch(f)
+    except Exception:  # noqa: BLE001 — 参数增强失败不阻断 HTML
+        pass
+    out = []
+    for t in tr:
+        rk = str(t.get("root_key") or "")
+        out.append({"round": t.get("round"), "mu": t.get("mu"),
+                    "top_weight": t.get("top_weight"), "root_key": rk,
+                    "batch": batches.get(rk, ""), "finding": ids.get(rk, "")})
+    return out
+
+
 def _trend_from_state(state_file: str, plan: str = "") -> list:
     """S3（2026-10-06）：从 state 的 `ecc_findings` 取 `moa-agg:`/`noconv:` **测量 finding 序列**
     （跨轮趋势源）。**只读**；无 state / 无 finding ⟹ 空（不进图表）。
@@ -4826,7 +5045,10 @@ def _trend_from_state(state_file: str, plan: str = "") -> list:
         rk = str(f.get("root_key", "") or "")
         if not (rk.startswith("moa-agg:") or rk.startswith("noconv:")):
             continue
-        if plan and _finding_plan(f) != str(plan):
+        # 2026-11-12（HTML 标识回填暴露）：计划身份必须走 `plan_identity` 归一 ——
+        #   调用方可能传 `docs/analysis/<plan>.md`，finding facet 只存 basename；
+        #   逐字比较会 0 命中 ⟹ 趋势空 ⟹ 跨轮结论误报 INSUFFICIENT_ROUNDS。
+        if plan and plan_identity(_finding_plan(f)) != plan_identity(plan):
             continue
         note = str(f.get("source_note", "") or "")
         m = re.search(r"引用=(\d+)\s+簇=\d+\s+一致度=([0-9.]+)", note)
@@ -5169,6 +5391,8 @@ def main() -> int:
     # T4（2026-10-14，C 计划 §3-T4）：链尾 HTML 自动导出**opt-out**。
     p.add_argument("--no-html", action="store_true",
                    help="T4：链尾不自动导出 HTML（缺省自动写盘到 state 域规则化路径）")
+    p.add_argument("--round-label", default="",
+                   help="HTML 标识：显式轮次（如 R3；重试用 R3-retry）；缺省按批次派发时间自动排 R1..")
     # T5（2026-10-15，C 计划 §3-T5）：链尾散文接收 → 自动 from-prose → 并入台账（root_key 幂等）。
     p.add_argument("--prose", default="",
                    help="T5：散文文件（`-`=读 stdin）⟹ 自动 from-prose 并入台账（prose:<hash> 幂等）")
@@ -5223,7 +5447,7 @@ def main() -> int:
                         no_html=bool(args.no_html), prose_file=args.prose or "",
                         from_plan=args.from_plan or "",
                         arms_per_group=int(args.arms_per_group or 0),
-                        out_file=args.out or "")
+                        out_file=args.out or "", round_label=args.round_label or "")
         print(json.dumps(res, ensure_ascii=False))
         return 0 if res.get("ok") else 1
 

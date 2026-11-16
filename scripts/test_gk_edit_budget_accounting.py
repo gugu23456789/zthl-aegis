@@ -143,9 +143,16 @@ def test_cli_write_class_subcommand_counts_toward_edit_budget(idle_sandbox):
     assert wt in json.dumps(d.get("worktrees_extra") or [], ensure_ascii=False), (
         "`apply-worktree --bind` 未生效 ⟹ 本臂前提不成立（子命令未跑到）")
     used, remaining = _budget(idle_sandbox)
-    assert (used, remaining) == (1, 3), (
-        f"Q14 裁定 B：CLI 写类子命令必须计入 `edit_budget`，实测 used={used} remaining={remaining}"
-        "（期望 1 / 3）—— 修前 used 恒 0 = 计费口径缺口")
+    box = ((d.get("gate_data") or {}).get("edit_budget") or {})
+    # 2026-11-12（ECC-AF5CC971935C · owner 令「拆开批次单位与会话 cap」）：Q14 裁定 B 的覆盖**不变**
+    #   （写类子命令仍必须计费），但落**命令轴** `cli_used`/`cli_remaining` —— 不再与批次轴
+    #   `used`/`remaining`（Gate 4 会话 cap）混算（原状两单位相加后 96/24 无法解释）。
+    assert (box.get("cli_used"), box.get("cli_remaining")) == (1, 3), (
+        f"Q14 裁定 B：CLI 写类子命令必须计入命令轴 `cli_*`，实测 "
+        f"cli_used={box.get('cli_used')} cli_remaining={box.get('cli_remaining')}（期望 1 / 3）"
+        "—— 修前 used 恒 0 = 计费口径缺口")
+    assert (used, remaining) == (0, 4), (
+        f"② 挤占了批次轴（used/remaining={used}/{remaining}，期望 0 / 4）：两轴未拆开")
 
 
 def test_gate_internal_write_does_not_count(idle_sandbox):

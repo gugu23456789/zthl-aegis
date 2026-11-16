@@ -70,6 +70,13 @@ WROTE=()
 
 copy_managed() {
   local src="$1" dst="$2" rel bak
+  # 瞬态产物不进安装面（2026-11-13）：`context` 发布是「tmp + rename」原子写，`find` 快照
+  #   可能带上**别的进程正中间**的 `*.sig.tmp.<pid>`；随后该文件被 rename ⟹ `cp -p` 报
+  #   cannot stat ⟹ `set -e` 直接打断安装（并行跑全量时实测假红）。
+  #   `*.lock` 同理：锁文件只对活进程有意义，装进目标树是死文件。
+  case "${src##*/}" in
+    *.tmp|*.tmp.*|*.lock) return 0 ;;
+  esac
   rel="${dst#"$DEST"/}"
   if [ -f "$dst" ]; then
     if cmp -s "$src" "$dst"; then

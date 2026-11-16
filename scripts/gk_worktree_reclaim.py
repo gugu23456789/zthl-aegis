@@ -717,6 +717,19 @@ def _unbind_extras(state_path: str, paths) -> tuple:
     return done, failed
 
 
+def _detach_route(state_path: str, wt: str, fallback: str) -> dict:
+    """删树前的**路由复位**（实现单源 = `gk_state_patch.detach_route`，禁第二实现）。"""
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    try:
+        import gk_state_patch as sp
+    except Exception as e:  # noqa: BLE001 — 边界：拿不到写通路 ⟹ fail-loud（不删树）
+        return {"ok": False, "error": "写通路不可用: %s: %s" % (type(e).__name__, e)}
+    try:
+        return sp.detach_route(state_path, wt, fallback)
+    except Exception as e:  # noqa: BLE001 — 边界：写通路抛 ⟹ 视同失败
+        return {"ok": False, "error": "%s: %s" % (type(e).__name__, e)}
+
+
 def _sweep_dangling_extras(state: str, report: dict, apply: bool) -> None:
     """RC1-S4 段：**只报**（dry-run）或**只解绑悬空项**（apply）。零目录写、只减不增。
 
@@ -784,6 +797,25 @@ def _patch_equivalent(baseline: str, branch: str) -> bool:
     return all(ln.startswith("-") for ln in lines)
 
 
+# ── 主分支锁定（2026-11-11）：**无论是否检出/是否已并入，永不回收** ──────────────────
+# 病象（可复现）：`--all-branches` 的判据只有「已并入 baseline + 未检出」；主树一旦被 detach，
+#   或主分支在**别的 worktree** 被检出而没人检出，`master` 就同时满足两条 ⟹ 会被
+#   `git branch -D` 删掉（主分支被误回收 = 仓库失去锚点，只能靠 reflog 捞）。
+# 故加**硬名单 + 前缀**双层锁，并在 `reclaim` 末尾加硬不变量（判据回归也删不掉）。
+PROTECTED_BRANCHES = ("master", "main", "trunk", "develop")
+_PROTECTED_PREFIXES = ("gk-pool/",)
+
+
+def is_protected_branch(branch: str) -> bool:
+    """主分支 / 池分支 ⟹ 永不进回收删除面（与是否 checked-out 无关）。"""
+    b = str(branch or "").strip()
+    if not b:
+        return False
+    if b in PROTECTED_BRANCHES:
+        return True
+    return any(b.startswith(p) for p in _PROTECTED_PREFIXES)
+
+
 def sweep_loose_branches(main_repo: str, baseline: str, apply: bool = False,
                          exclude=None) -> dict:
     """**游离分支**回收（不属于任何 worktree 的本地分支）。
@@ -793,12 +825,13 @@ def sweep_loose_branches(main_repo: str, baseline: str, apply: bool = False,
     检出中的分支（主树 / 任一 worktree）与 `exclude`（如 `master`/`main`）永不删。
     `apply=False` = 只报告（零写）。删分支不丢提交对象（reflog/对象库仍在），故无归档步。
     """
-    exclude_set = set(exclude or []) | {"master", "main"}
+    exclude_set = set(exclude or [])
     checked = _checked_out_branches(main_repo)
-    result = {"would_remove": [], "removed": [], "guarded": [], "checked_out": []}
+    result = {"would_remove": [], "removed": [], "guarded": [],
+              "checked_out": [], "protected": []}
     for br in _local_branches(main_repo):
-        if br in exclude_set:
-            result["checked_out"].append(br)
+        if br in exclude_set or is_protected_branch(br):
+            result["protected"].append(br)
             continue
         if br in checked:
             result["checked_out"].append(br)
@@ -906,6 +939,29 @@ def reclaim(main_repo: str, root: str, apply: bool = False, trash: str = "",
         return report
     ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     root_abs = os.path.abspath(root) if root else ""
+    # 热池 TTL 自动回收（2026-11-10，方案 A）：崩溃 / 忘 release 的槽位按 `ts+ttl_s < now` 收回
+    #   （清理 → 归池）。判据与清理全在 `gk_worktree_pool` 单源，本处只调用；失败不阻断回收。
+    _wp = None
+    _pool_base = "HEAD"
+    try:
+        import gk_worktree_pool as _wp
+        # 池目录名 = **主仓名**（`<root>/_pool/<主仓名>`）。调用方 `--repo` 常是**会话 worktree**
+        # （CLI 内 `$SKILL_DIR`）⟹ 直接用会算出 `<root>/_pool/<sid>`（不存在）⟹ sweep 静默空转
+        # （2026-11-10 实测：kept=0 正是该形态）。故按 `git worktree list` **首项**归一。
+        _pool_main = main_repo
+        for _ln in (_git(main_repo, "worktree", "list", "--porcelain")[1] or "").splitlines():
+            if _ln.startswith("worktree "):
+                _pool_main = _ln[len("worktree "):].strip()
+                break
+        _pdir = _wp.pool_dir(_pool_main, root) if root else None
+        _pool_base = (_git(main_repo, "rev-parse", "HEAD")[1] or "").strip() or "HEAD"
+        if _pdir is not None and _pdir.is_dir():
+            report["pool_sweep"] = _wp.sweep(_pool_main, root, baseline=_pool_base)
+        else:
+            report["pool_sweep"] = {"ok": True, "reclaimed": 0, "kept": 0, "failed": 0}
+    except Exception as _e:  # noqa: BLE001 — 边界：热池不可用不影响既有回收面
+        _wp = None
+        report["pool_sweep"] = {"ok": False, "error": str(_e)[:200]}
     # §16 D-a/D-b①：回收链接 claims 台账（判据单源 = gk_write_claims.claims_for_worktree）。
     #   lazy import：台账依赖不可用时只**关闸**，不让 reclaim 既有调用面整体失败。
     try:
@@ -927,6 +983,30 @@ def reclaim(main_repo: str, root: str, apply: bool = False, trash: str = "",
     report["loose_branch_checked_out"] = []
     for w in wts:
         wt = w["path"]
+        # 热池 slot（2026-11-10，方案 A）：池生命周期归 `gk_worktree_pool`（claim / TTL / 清理）。
+        #   回收一个**被租用**的 slot = **归还池**（清理 → free），不是删目录 —— 删了热池就退化冷池。
+        _wt_norm = str(wt).replace("\\", "/")
+        if "/_pool/" in _wt_norm or str(w.get("branch") or "").startswith("gk-pool/"):
+            _item = {"path": wt, "branch": w.get("branch") or "",
+                     "alive": w.get("alive"), "unregistered": w.get("unregistered", False),
+                     "pending": 0, "broken": w.get("broken", False),
+                     "age_days": w.get("age_days"), "fallback": "", "noise_only": False}
+            if apply and _wp is not None:
+                _rel = _wp.release(main_repo, root, wt, baseline=_pool_base)
+                _item["pool"] = _rel
+                if _rel.get("ok"):
+                    _item["action"] = "POOL-RELEASED"
+                    report["removed"].append(wt)
+                else:
+                    _item["action"] = "HELD"
+                    _item["reason"] = _rel.get("error") or "pool release failed"
+                    report["held"].append(wt)
+                    report["ok"] = False
+            else:
+                _item["action"] = "WOULD-POOL-RELEASE"
+                report["skipped"].append(wt)
+            report["items"].append(_item)
+            continue
         # 路径白名单（并发会话保护）：非指定路径 ⟹ 显式 skip（不静默、不报 held）
         if only_abs and os.path.abspath(wt) not in only_abs:
             report["skipped"].append(wt)
@@ -1014,7 +1094,8 @@ def reclaim(main_repo: str, root: str, apply: bool = False, trash: str = "",
         # B-2 前置：分支回收判据 = `_is_merged_clean`（**已并入 baseline HEAD 且工作树干净**）——
         #   须在**目录仍存在**时算（该谓词依赖 `worktree_state(wt)`）；删除后再算必假。
         _br = w.get("branch", "")
-        _br_merged = bool(branch_reclaim and _br and _is_merged_clean(baseline, wt, _br))
+        _br_merged = bool(branch_reclaim and _br and not is_protected_branch(_br)
+                          and _is_merged_clean(baseline, wt, _br))
         st = worktree_state(wt, baseline)
         item = {"path": wt, "branch": w.get("branch", ""), "alive": w.get("alive", False),
                 "unregistered": bool(w.get("unregistered")), "pending": len(st["entries"]),
@@ -1058,6 +1139,23 @@ def reclaim(main_repo: str, root: str, apply: bool = False, trash: str = "",
                 report["items"].append(item)
                 continue
         if apply:
+            # ⓪ **路由复位（reclaim 事务化第一半；2026-11-13 P0-b）**：删树**前**把
+            #    `state.worktree` 挪到 fallback（= 主树，只读终点），并在**同一次** state 写里
+            #    摘掉 `worktrees_extra[]` 的该路径项。病象（实测）：删完树 `state.worktree`
+            #    仍指向已删路径 ⟹ 唯一路由链悬空 ⟹ 后续编辑静默落空 / 空 BLOCK。
+            #    复位失败 ⟹ **拒删**（fail-closed：宁可留着树，也不制造悬空路由）。
+            if state:
+                _det = _detach_route(state, wt, baseline)
+                item["route_detach"] = _det
+                if not _det.get("ok"):
+                    item["action"] = "HELD"
+                    item["reason"] = (
+                        "路由复位失败（%s）⟹ 拒删（否则 state.worktree 指向已删树）"
+                        % (_det.get("error") or "unknown"))
+                    report["held"].append(wt)
+                    report["ok"] = False
+                    report["items"].append(item)
+                    continue
             # ① **委托 git-workflow**（`git-workflow worktree delete --path <dir> --force`）——
             #    与创建侧 `apply-worktree → git-workflow worktree create` **对称** ⟹ 单源。
             #    2026-09-24 用户裁定「按建议做」取 A；为此给 git-workflow 的 delete 补了
@@ -1074,6 +1172,15 @@ def reclaim(main_repo: str, root: str, apply: bool = False, trash: str = "",
             #    无法处理（不是重复实现，是能力缺口的唯一下沉）。交付面：删目录 + `prune`。
             if not done and os.path.isdir(wt):
                 shutil.rmtree(wt, ignore_errors=True)
+                _git(main_repo, "worktree", "prune")
+            elif not done:
+                # ③ 悬挂注册（2026-11-10，实测 `agent/session/ce8ffb0b`）：**目录已删、注册仍在**
+                #    （`git worktree list` 仍列该路径，常带 `locked`）—— 上面两路都要求
+                #    `os.path.isdir(wt)` ⟹ 全跳过；注册留着，随后 `git branch -D` 必报
+                #    `checked out at '<path>'` ⟹ 分支**永久** GUARDED，而本项仍报 REMOVED
+                #    （报成功却没干完）。目录不在 = 无内容可归档，只摘元数据；
+                #    locked 注册 `prune` 不摘（git 语义）⟹ 先 unlock 再 prune（失败均无妨）。
+                _git(main_repo, "worktree", "unlock", wt)
                 _git(main_repo, "worktree", "prune")
             item["action"] = "REMOVED"
             report["removed"].append(wt)
@@ -1119,6 +1226,7 @@ def reclaim(main_repo: str, root: str, apply: bool = False, trash: str = "",
         report["loose_branch_removed"] = _loose["removed"]
         report["loose_branch_guarded"] = _loose["guarded"]
         report["loose_branch_checked_out"] = _loose["checked_out"]
+        report["loose_branch_protected"] = _loose.get("protected", [])
     # ── RC6：目录层残留（`git worktree list` 看不到的那一层）—— dry-run 只报，`--apply` 才清 ──
     #    与 worktree 面**同一纪律**：归档前置（孤儿 state 先归档再删；空壳无内容可归档）·
     #    fail-loud（归档/删除失败进 held 且 `ok=false`）· 默认 dry-run（`--apply` 才落刀）。
@@ -1164,6 +1272,16 @@ def reclaim(main_repo: str, root: str, apply: bool = False, trash: str = "",
                           "**解绑（--unbind）不释放 claim**（claim 在 gk_write_claims 台账）⟹ 先 "
                           "`apply-worktree --release-claim <sid>` 释放；或以 `--path <dir>` 指名"
                           "（窄面自动释放）；应急旁路 GK_RECLAIM_CLAIM_GUARD=0（慎用）。")
+    # 硬不变量（2026-11-11）：**主分支/池分支永不出现在删除面**——即使上面判据将来回归，
+    #   也不许把 master 删掉（只报 `guard_violation` 并置 ok=false，不做任何二次动作）。
+    _removed_all = list(report.get("loose_branch_removed") or [])
+    for _it in (report.get("items") or []):
+        if _it.get("branch") and _it.get("branch_removed"):
+            _removed_all.append(_it["branch"])
+    _viol = sorted({b for b in _removed_all if is_protected_branch(b)})
+    if _viol:
+        report["guard_violation"] = _viol
+        report["ok"] = False
     return report
 
 

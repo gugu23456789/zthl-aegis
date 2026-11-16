@@ -42,12 +42,20 @@ def test_reader_probe_takes_shared_lock():
 
 
 def test_writer_update_takes_exclusive_lock():
-    """写者必须独占取锁。两条等价形态：就地 flock，或经可重入助手 `_ctx_lock_acquire`
-    （后者是本仓现形态：同进程二次取锁会自死锁，故取锁收敛为单点）。"""
+    """写者必须独占取锁，且锁覆盖「签名 + 发布」临界区。
+
+    两条等价形态：就地 flock，或经可重入助手 `_ctx_lock_acquire`（后者是本仓现形态：
+    同进程二次取锁会自死锁，故取锁收敛为单点）。
+
+    2026-11-10（AV-9 根因③）：`build` 已移到**锁外**（3-8s 构建排队会撞 20s 超时），
+    锁内只做「签 temp + 自验 + 两次 rename」⟹ 判据窗口从「build 之前」改为「build 与 `mv` 发布之间」。
+    """
     text = _txt(CLI)
     i = text.find('scripts/gk_context_build.py" build')
     assert i > 0
-    seg = text[max(0, i - 1500):i]
+    j = text.find('mv -f "$_tmp_ctx"', i)
+    assert j > i, "未找到发布 rename（判据窗口无法界定）"
+    seg = text[i:j]
     inline = ".lock" in seg and "flock" in seg
     helper = _slice(text, "_ctx_lock_acquire() {")
     via_helper = (
@@ -72,6 +80,22 @@ def test_selfheal_is_single_flight():
 def test_selfheal_retries_probe_before_healing():
     body = _slice(_txt(CLI), "local _probe; _probe=$(_ctx_inject_probe", end="\n    if [ \"$_probe\" = \"ok\" ]")
     assert "sleep 0.1" in body, "瞬时窗口未退避重探 ⟹ 误触发自愈"
+
+
+def test_selfheal_is_bounded():
+    """2026-11-14（派发挂死根因之二）：自愈 `context --update` 必须有顶层 deadline。
+
+    事故链（实测）：`monitor --subagent` 的 ctx 自愈无 timeout → `context --update` 内的
+    gitnexus 锁等待把**整条派发路径**挂死（600s 零输出、runner 未拉起）。修复要求：
+    裸调 `bash ... context --update` 不得再出现，必须经 `timeout` + 可调旋钮包装。
+    """
+    body = _slice(_txt(CLI), "local _probe; _probe=$(_ctx_inject_probe", end="\n    if [ \"$_probe\" = \"ok\" ]")
+    assert "GK_CTX_SELFHEAL_TIMEOUT" in body, "自愈无超时旋钮 ⟹ 无法按环境收紧 deadline"
+    assert 'timeout -k 10 "$_heal_to" bash "$SKILL_DIR/gatekeeper-cli.sh" context --update' in body, (
+        "context 自愈未经 timeout 包装 ⟹ 单点卡住即挂死 subagent 派发")
+    assert 'bash "$SKILL_DIR/gatekeeper-cli.sh" context --update >>' not in body.replace(
+        'timeout -k 10 "$_heal_to" bash "$SKILL_DIR/gatekeeper-cli.sh" context --update >>', ''), (
+        "仍存在裸调 context --update（无 deadline）")
 
 
 def test_builder_writes_atomically(tmp_path):

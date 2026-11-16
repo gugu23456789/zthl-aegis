@@ -408,16 +408,17 @@ class TestMainCli:
     def test_close_flag_and_legacy_positional(self, state_file, monkeypatch, capsys):
         f1 = register(state_file, "b1", "red")
         code, out = self._run(monkeypatch, capsys, "close", state_file, f1["id"],
-                              "--verify-source", "R8.5 复验", "--ack-accept")
+                              "--verify-source", "tests:ok")
         assert code == 0 and out["finding"]["status"] == "closed"
-        assert out["finding"]["verify_source"] == "R8.5 复验"
+        assert out["finding"]["verify_source"] == "tests:ok"
         f2 = register(state_file, "b2", "red")
         code, out = self._run(monkeypatch, capsys, "close", state_file, f2["id"],
-                              "manual-legacy", "--ack-accept")
-        assert code == 0 and out["finding"]["verify_source"] == "manual-legacy"
+                              "tests:legacy")
+        assert code == 0 and out["finding"]["verify_source"] == "tests:legacy"
+        # 2026-11-12 锁：机械类 finding 无证据 + `--ack-accept` 不再放行
         f3 = register(state_file, "b3", "red")
         code, out = self._run(monkeypatch, capsys, "close", state_file, f3["id"], "--ack-accept")
-        assert code == 0 and out["finding"]["verify_source"] == "manual"
+        assert code == 1 and "closure_oracle=judgment" in out["error"], out
 
     def test_close_missing_id_error(self, state_file, monkeypatch, capsys):
         code, out = self._run(monkeypatch, capsys, "close", state_file)
@@ -642,6 +643,54 @@ class TestFindingJournal:
         assert not any("记录被删" in a["reason"] for a in rec["anomalies"])
         assert rec["events"] == 1 and rec["raw_events"] == 2
 
+    # ── 2026-11-12（owner 令「ECC-finding 应有全链路全生命周期追踪」）──────────────
+    #   病灶：`save_findings` 整份回写、不 diff ⟹ 收缩（discover 重建/并发覆盖）可无痕删条。
+    def test_save_findings_refuses_unannounced_shrink(self, state_file):
+        """未声明收缩 ⟹ 拒写（台账与 journal 都不动），fail-loud。"""
+        a = register(state_file, "s1", "red")
+        register(state_file, "s2", "red")
+        with pytest.raises(ValueError, match="ECC_LEDGER_SHRINK_REFUSED"):
+            gk_finding.save_findings(state_file, [f for f in load_findings(state_file)
+                                                  if f["id"] != a["id"]])
+        assert len(load_findings(state_file)) == 2
+        assert not [e for e in gk_finding._journal_events(state_file)
+                    if e.get("event") == "shrink"]
+
+    def test_save_findings_allowed_shrink_is_journaled(self, state_file):
+        """合法收缩（显式 allow_shrink + 理由）⟹ 落 `shrink` 事件（removed_fids）。"""
+        a = register(state_file, "s3", "red")
+        b = register(state_file, "s4", "red")
+        gk_finding.save_findings(state_file,
+                                 [f for f in load_findings(state_file) if f["id"] != a["id"]],
+                                 allow_shrink=True, shrink_reason="test: 归并")
+        assert [f["id"] for f in load_findings(state_file)] == [b["id"]]
+        sh = [e for e in gk_finding._journal_events(state_file)
+              if e.get("event") == "shrink"]
+        assert len(sh) == 1 and sh[0]["removed_fids"] == [a["id"]]
+        assert sh[0]["reason"] == "test: 归并"
+
+    def test_reconcile_reports_legacy_loss_without_blocking(self, state_file):
+        """代际边界**之前**的 register 消失 ⟹ `legacy_loss`（只报不阻断：ok/anomalies 不变）。"""
+        f = register(state_file, "legacy", "red")
+        gk_finding.epoch(state_file, reason="test: 代际更替")
+        data = json.loads(Path(state_file).read_text(encoding="utf-8"))
+        data["gate_data"]["ecc_findings"] = []
+        Path(state_file).write_text(json.dumps(data, indent=2), encoding="utf-8")
+        rec = gk_finding.reconcile(state_file)
+        assert rec["ok"] is True                  # 不阻断（WARN 语义）
+        assert rec["anomalies"] == []             # 不进 anomalies（不污染既有判据）
+        assert rec["legacy_loss"] == [f["id"]]
+
+    def test_reconcile_legacy_loss_excludes_purged(self, state_file):
+        """epoch 显式 `purged_fids` 声明 ⟹ 不算 legacy-loss。"""
+        f = register(state_file, "legacy2", "red")
+        gk_finding.epoch(state_file, reason="test: 声明清洗", purged_fids=[f["id"]])
+        data = json.loads(Path(state_file).read_text(encoding="utf-8"))
+        data["gate_data"]["ecc_findings"] = []
+        Path(state_file).write_text(json.dumps(data, indent=2), encoding="utf-8")
+        rec = gk_finding.reconcile(state_file)
+        assert rec["legacy_loss"] == [] and rec["ok"] is True
+
 
 class TestDomainGuard:
     """ECC-C98BDE1D2B3B — ECC-FINDING 跨仓污染守卫：`--domain <repo>.<plan>` 域化 state（fail-closed）。
@@ -732,7 +781,7 @@ class TestDomainGuard:
                               "--domain", self.TOKEN)
         assert code == 0 and out["finding"]["status"] == "fixed"
         code, out = self._run(monkeypatch, capsys, "close", base, fid, "--domain", self.TOKEN,
-                              "--ack-accept")
+                              "--verify-source", "tests:domain")
         assert code == 0 and out["finding"]["status"] == "closed"
 
     def test_domain_writes_journal_sidecar(self, domain_state, monkeypatch, capsys):
@@ -1493,6 +1542,129 @@ class TestRootKeyDedupSchema:
         code, out = self._run(monkeypatch, capsys, "register", state_file, "t", "manual",
                               "--root-key")
         assert code == 1 and "--root-key" in out["error"]
+
+
+# ---------------------------------------------------------------------------
+# 全量预检（2026-11-12）：`precheck --all` 一次扫描 + `anchors` 字段补查
+#   动机：逐 fid 起进程 ≈ 19s/40 条；且旧判据只看标题锚，anchors 字段完全没查。
+# ---------------------------------------------------------------------------
+class TestPrecheckAll:
+    def _state(self, tmp_path, anchors):
+        p = tmp_path / "pc.json"
+        p.write_text(json.dumps({"gate_data": {"ecc_findings": [
+            {"id": "ECC-%04d" % i, "status": "open", "title": "t%d" % i, "anchors": a}
+            for i, a in enumerate(anchors)]}}), encoding="utf-8")
+        return str(p)
+
+    def test_anchor_verdict_prefix_symbol_and_bounds(self, tmp_path):
+        (tmp_path / "a.py").write_text("x = 1\ny = 2\n", encoding="utf-8")
+        roots = [str(tmp_path)]
+        assert gk_finding._anchor_verdict("a.py:2", roots)[0] == "ok"
+        assert gk_finding._anchor_verdict("a.py:9", roots)[0].startswith("line_oob")
+        assert gk_finding._anchor_verdict("test:a.py", roots)[0] == "ok"
+        assert gk_finding._anchor_verdict("a.py::sym", roots)[0] == "ok"
+        assert gk_finding._anchor_verdict("batch:abc", roots)[0] == "nonfile"
+        assert gk_finding._anchor_verdict("plan:-", roots)[0] == "nonfile"
+        assert gk_finding._anchor_verdict("missing.py:1", roots)[0] == "file_missing"
+
+    def test_scan_anchors_field_reports_missing_and_oob(self, tmp_path, monkeypatch):
+        (tmp_path / "a.py").write_text("x\n", encoding="utf-8")
+        sf = self._state(tmp_path, [["a.py:1", "missing.py:3"], ["a.py:99"]])
+        monkeypatch.setattr(gk_finding, "_candidate_repos", lambda s: [str(tmp_path)])
+        d = gk_finding._scan_anchors_field(sf, ["ECC-0000", "ECC-0001"])
+        got = {(x["fid"], x["verdict"]) for x in d}
+        assert ("ECC-0000", "file_missing") in got
+        assert any(f == "ECC-0001" and v.startswith("line_oob") for f, v in got)
+
+    def test_cli_precheck_all_clean_and_drift(self, tmp_path, monkeypatch, capsys):
+        (tmp_path / "a.py").write_text("x\n", encoding="utf-8")
+        monkeypatch.setattr(gk_finding, "_candidate_repos", lambda s: [str(tmp_path)])
+        sf = self._state(tmp_path, [["a.py:1"]])
+        monkeypatch.setattr(sys, "argv", ["gk_finding.py", "precheck", sf, "--all"])
+        gk_finding.main()
+        out = json.loads(capsys.readouterr().out)
+        assert out["ok"] is True and out["scanned"] == 1
+        assert out["title_drift"] == [] and out["anchors_drift"] == []
+
+        sf2 = self._state(tmp_path, [["gone.py:1"]])
+        monkeypatch.setattr(sys, "argv", ["gk_finding.py", "precheck", sf2, "--all"])
+        with pytest.raises(SystemExit) as e:
+            gk_finding.main()
+        assert e.value.code == 1
+        out2 = json.loads(capsys.readouterr().out)
+        assert out2["ok"] is False and out2["anchors_drift"][0]["verdict"] == "file_missing"
+
+
+# ---------------------------------------------------------------------------
+# 2026-11-12 噪声根治：度量型 RED 不因重扫重开（非度量型保持原重开语义）
+# ---------------------------------------------------------------------------
+def _seed_findings(sf, rec):
+    Path(sf).write_text(json.dumps({"gate_data": {"ecc_findings": [rec]}}), encoding="utf-8")
+
+
+_CLOSED = {"id": "RED-METRIC-X", "status": "closed", "title": "1 x", "evidence_hash": "h1",
+           "first_added": "2026-09-01T00:00:00+00:00",
+           "last_modified": "2026-09-01T00:00:00+00:00"}
+
+
+def test_metric_red_stays_closed_on_rescan(state_file, monkeypatch):
+    monkeypatch.setattr(gk_finding, "_RED_METRIC_IDS", frozenset({"RED-METRIC-X"}))
+    _seed_findings(state_file, dict(_CLOSED))
+    r = gk_finding.upsert_red_findings(state_file, [{
+        "id": "RED-METRIC-X", "status": "open", "title": "2 x", "evidence_hash": "h2",
+        "first_added": "2026-09-01T00:00:00+00:00",
+        "last_modified": "2026-11-12T00:00:00+00:00"}])
+    f = [x for x in load_findings(state_file) if x["id"] == "RED-METRIC-X"][0]
+    assert r["updated"] == 1
+    assert f["status"] == "closed" and f["title"] == "2 x" and f["evidence_hash"] == "h2"
+
+
+def test_non_metric_red_still_reopens_on_rescan(state_file, monkeypatch):
+    monkeypatch.setattr(gk_finding, "_RED_METRIC_IDS", frozenset())
+    _seed_findings(state_file, dict(_CLOSED))
+    gk_finding.upsert_red_findings(state_file, [{
+        "id": "RED-METRIC-X", "status": "open", "title": "2 x", "evidence_hash": "h2"}])
+    f = [x for x in load_findings(state_file) if x["id"] == "RED-METRIC-X"][0]
+    assert f["status"] == "open"
+
+
+# ---------------------------------------------------------------------------
+# 2026-11-12 多源死锁出口：`close --all-sources` 把同 id 的全部可写副本写成同一终态
+# ---------------------------------------------------------------------------
+def _two_source_state(tmp_path):
+    base = tmp_path / ".gatekeeper.state"
+    dom = tmp_path / ".gatekeeper.state.skill.p"
+    rec = {"id": "RED-X", "status": "open", "title": "t", "evidence_hash": "h"}
+    for p in (base, dom):
+        p.write_text(json.dumps({"gate_data": {"ecc_findings": [dict(rec)]},
+                                 "project_type": "standard"}), encoding="utf-8")
+    return str(base), str(dom)
+
+
+def test_close_all_sources_closes_every_writable_copy(tmp_path, monkeypatch):
+    monkeypatch.setenv("GK_FINDING_ISOLATE", "1")
+    base, dom = _two_source_state(tmp_path)
+    out = gk_finding.close_all_sources(base, "RED-X", "tests:multi")
+    assert sorted(out["closed_sources"]) == [".gatekeeper.state", ".gatekeeper.state.skill.p"]
+    for p in (base, dom):
+        assert [x for x in load_findings(p) if x["id"] == "RED-X"][0]["status"] == "closed"
+
+
+def test_reopen_all_sources_restores_every_copy(tmp_path, monkeypatch):
+    monkeypatch.setenv("GK_FINDING_ISOLATE", "1")
+    base, dom = _two_source_state(tmp_path)
+    gk_finding.close_all_sources(base, "RED-X", "tests:multi")
+    out = gk_finding.reopen_all_sources(base, "RED-X", "restore")
+    assert sorted(out["reopened_sources"]) == [".gatekeeper.state", ".gatekeeper.state.skill.p"]
+    for p in (base, dom):
+        assert [x for x in load_findings(p) if x["id"] == "RED-X"][0]["status"] == "open"
+
+
+def test_single_source_close_still_refuses_multi(tmp_path, monkeypatch):
+    monkeypatch.setenv("GK_FINDING_ISOLATE", "1")
+    base, _dom = _two_source_state(tmp_path)
+    with pytest.raises(ValueError, match="FINDING_MULTI_SOURCE"):
+        gk_finding.close(base, "RED-X", "tests:single")
 
 
 # ---------------------------------------------------------------------------

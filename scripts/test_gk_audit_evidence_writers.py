@@ -96,3 +96,37 @@ def test_生产者不变量正控():
     src = _cli_src()
     for k in ("audit_state_result", "audit_docs_result"):
         assert re.search(r"_state_write[^\n]*\[['\"]%s['\"]\]\s*=" % re.escape(k), src), k
+
+
+# ─── §27.1 独立门（2026-11-16）：`audit_result` 死路 emit 清理 ───
+# 病象：E13 后 `audit_result` 零采信方（`gk_advance._hint_for` 已改走
+# `audit_all_recorded`；三写面已被 `_AUDIT_EVIDENCE_KEYS` 封禁），但
+# `gatekeeper-cli.sh::transition` 的 AUDIT-* 四分支仍把 `audit --state/…` 的
+# 输出回填成 `"audit_result": …` ⟹ 死输出面（无人读），且与「零生产者」声明自相矛盾。
+# 边界：**副作用生产**（cmd_audit 写 `gate_data.audit_*_result`）必须保留。
+def _transition_block() -> str:
+    src = _cli_src()
+    start = src.index("# PROTECTED_REGION_START::transition")
+    end = src.index("# PROTECTED_REGION_END::transition", start)
+    return src[start:end]
+
+
+def test_transition不再输出死路audit_result键():
+    """红先臂：`audit_result` 键回填必须在 transition 内消失。
+
+    注意源文本是 bash 拼接 `audit_extra=",\\"audit_result\\":$(…)"` ⟹ 键名两侧带
+    反斜杠转义引号；判据用 `\\\\?` 同时覆盖 `audit_result":` 与 `audit_result\\":`
+    两种形态（只匹配「键 + 引号 + 冒号」，不误伤注释里的裸词 `audit_result`）。
+    """
+    blk = _transition_block()
+    hit = re.search(r'audit_result\\?"\s*:', blk)
+    assert not hit, (
+        "transition 仍回填 audit_result（E13 后零采信方）——只保留 audit 子命令副作用，"
+        "不得再把结果拼进输出 JSON")
+
+
+def test_transition保留四域audit副作用生产():
+    """正控：清理不得连 audit 子命令的落盘副作用一起删掉。"""
+    blk = _transition_block()
+    for dom in ("--state", "--memory", "--crossr", "--report"):
+        assert ('bash "$0" audit %s' % dom) in blk, dom

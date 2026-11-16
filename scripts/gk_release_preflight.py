@@ -8,33 +8,37 @@ v0.9.6.8–v0.9.6.10 连续三版在 `pack` 步 argparse 退出 2（workflow 传
 `pack_release.py` 不认），且 publish 步要求的 `dist/PROVENANCE.json` 从未产出。
 本脚本把这些契约在**打包前**变成可执行判据（fail-loud），而不是等 CI 红。
 
-八项检查（全部确定性、零网络）
-==============================
+十五项检查（全部确定性、零网络）
+================================
 1. `pack_contract`   workflow 中 `pack_release.py` 用到的 flag ⊆ 脚本 parser 支持的 flag；
 2. `pack_fixture`    用最小夹具真跑一次 `pack(... --source-*)`，断言 zip / manifest /
                      PROVENANCE 三件套产出且来源字段可核；
 3. `docgen`          `gk_docgen_facts.py check` 必须 PASS（事实块未漂移）；
 4. `doc_features`    常驻功能覆盖门（`--skip-facts`，避免与 3 重复）；
-5. `release_assets`  publish 步必须挂 7 个资产（5 核心 + 2 基准），否则发版资产静默缺项；
-6. `workflow_paths`  workflow `run:` 引用的仓库内路径必须**存在**，或登记在
+5. `doc_align`       `gk_doc_align.py --summary` 的 FAIL 级检查器（WARN 放行）；
+6. `list_registry`   `references/list-registry.json` 与源码一致（`--check` 漂移即红）；
+7. `package_integrity` 命令 / 插件 / 钩子注册面必须有载体；
+8. `ci_security_lint` CI 最小权限 / SHA pin / run 注入；
+9. `release_assets`  publish 步必须挂 7 个资产（5 核心 + 2 基准），否则发版资产静默缺项；
+10. `workflow_paths` workflow `run:` 引用的仓库内路径必须**存在**，或登记在
                      `references/ci-external-paths.json`（带 reason）。
-                     2026-11-05 事故：公开 `ci.yml` 引用 `docs/analysis/bomb-inventory-*.json`
-                     （`docs/` 是导出排除面）⟹ 公开 CI 恒红，而私仓 preflight 永远绿；
-7. `repo_index`      `FILES.md` / `llms.txt` 必须与当前公开面一致（`gk_repo_index.py --check`）。
-                     移动端/抓取入口，手写必漂移 ⟹ 与 GK-FACTS 同款「生成器 + 漂移门」；
-8. `vendor_artifact` 随包 wheel 三件套自洽：`PROVENANCE.json` ↔ `SHA256SUMS` ↔ 实际文件哈希
-                     必须一致（版本/文件名/哈希）。发新版 wheel 时忘了同步 ⟹ 这里直接红。
-9. `bench_regression` 发布前性能门（2026-11-08，owner 裁定）：跑 `gk_bench_state --quick` 并与
-                     `references/bench-baseline.json` 比对。**仅真回归判红**；口径不匹配 /
-                     机制变化 / 基线过时只提示（不阻断）。`GK_PREFLIGHT_BENCH=0` 可跳过。
+11. `repo_index`      `FILES.md` / `llms.txt` 必须与当前公开面一致（`gk_repo_index.py --check`）；
+12. `vendor_artifact` 随包 wheel 三件套自洽：`PROVENANCE.json` ↔ `SHA256SUMS` ↔ 实际文件哈希；
+13. `release_notes`   `--version` 给定时要求 `RELEASE-NOTES-v<ver>.md` 存在，并跑
+                     `gk_release_notes.py check` 的 C1/C2（防静默退回 `--generate-notes`）；
+14. `bench_baseline`  基线不得过期（`stale_after_commits`）且必须含 `amp_per_state` 口径；
+15. `bench_regression` 发布前性能门：state / gate / satellite 三套 quick 与基线比对，
+                     **仅真回归判红**；口径不匹配 / 机制变化只提示。`GK_PREFLIGHT_BENCH=0` 可跳过。
 
-用法：`python scripts/gk_release_preflight.py [--json]`；退出码 0 = 全绿，1 = 有失败。
+用法：`python scripts/gk_release_preflight.py [--json] [--version vX.Y.Z]`；
+退出码 0 = 全绿，1 = 有失败。
 `oss_scrub.py export` 会在**导出树**内自动再跑一次（`--skip-preflight` 可显式跳过）。
 """
 import argparse
 import fnmatch
 import json
 import os
+import platform
 import re
 import subprocess
 import sys
@@ -312,12 +316,160 @@ def vendor_artifact() -> dict:
             "detail": "%s / %s…" % (ver or w.name, actual[:12])}
 
 
+def _run_text(args, timeout=300):
+    """跑子进程并保留文本输出（用于只打印表格/文本的门）。"""
+    return subprocess.run([sys.executable] + args, cwd=str(ROOT),
+                          capture_output=True, text=True, timeout=timeout)
+
+
+def doc_align_check() -> dict:
+    """`gk_doc_align.py --summary`：只把 FAIL 级（issues>0）判红；WARN 放行。
+
+    导出树（无 `.git`）追加 `--release`：导出排除面文档缺席属预期，检查器降级 SKIP；
+    否则公开树预检会因 `docs/` 不在包内而恒红。
+    """
+    args = [str(ROOT / "scripts" / "gk_doc_align.py"), "--summary"]
+    if not (ROOT / ".git").exists():
+        args.append("--release")
+    try:
+        p = _run_text(args, timeout=300)
+    except (OSError, subprocess.SubprocessError) as e:
+        return {"id": "doc_align", "status": "FAIL", "detail": "执行失败：%s" % e}
+    head = next((ln.strip() for ln in (p.stdout or "").splitlines() if ln.strip()), "")
+    ok = p.returncode == 0
+    return {"id": "doc_align", "status": "PASS" if ok else "FAIL",
+            "detail": head or (p.stderr or "")[-200:] or "rc=%s" % p.returncode}
+
+
+def list_registry_check() -> dict:
+    """`gk_list_registry.py --check`：裁决面清单与源码漂移即红。"""
+    try:
+        p = _run_text([str(ROOT / "scripts" / "gk_list_registry.py"), "--check"], timeout=120)
+    except (OSError, subprocess.SubprocessError) as e:
+        return {"id": "list_registry", "status": "FAIL", "detail": "执行失败：%s" % e}
+    if p.returncode == 0:
+        return {"id": "list_registry", "status": "PASS", "detail": "list-registry 无漂移"}
+    lines = [x.strip() for x in (p.stdout or "").splitlines() if x.strip()]
+    return {"id": "list_registry", "status": "FAIL",
+            "detail": "；".join(lines[:4]) or (p.stderr or "")[-200:]}
+
+
+def package_integrity_check() -> dict:
+    """命令 / 插件 / 钩子注册面必须有载体（release.yml verify 已跑，这里前移）。"""
+    r = _run_json([str(ROOT / "scripts" / "gk_package_integrity.py"), "--json"])
+    ok = bool(r.get("ok"))
+    return {"id": "package_integrity", "status": "PASS" if ok else "FAIL",
+            "detail": ("errors=%s warnings=%s" % (r.get("errors"), r.get("warnings")))
+                      if ok else json.dumps(r.get("issues") or r, ensure_ascii=False)[:300]}
+
+
+def ci_security_lint_check() -> dict:
+    """CI 最小权限 / SHA pin / run 注入（release.yml verify 已跑，这里前移）。"""
+    r = _run_json([str(ROOT / "scripts" / "gk_ci_security_lint.py"), "--json"])
+    ok = bool(r.get("ok"))
+    return {"id": "ci_security_lint", "status": "PASS" if ok else "FAIL",
+            "detail": ("checks=%s workflows=%s" % (r.get("checks"), len(r.get("workflows") or [])))
+                      if ok else json.dumps(r.get("issues") or r, ensure_ascii=False)[:300]}
+
+
+def _prev_tag(version: str = "") -> str:
+    """上一版本 tag（按版本排序取第一个非当前版本）。"""
+    try:
+        out = subprocess.check_output(["git", "-C", str(ROOT), "tag", "--sort=-v:refname"],
+                                      text=True, stderr=subprocess.DEVNULL)
+    except Exception:  # noqa: BLE001 — 非 git 环境
+        return ""
+    for t in out.split():
+        if t != version:
+            return t
+    return ""
+
+
+def release_notes_check(version: str) -> dict:
+    """`--version` 给定时：说明文件必须存在，且 C1/C2 机检通过。"""
+    v = str(version or "").strip()
+    if not v:
+        return {"id": "release_notes", "status": "SKIP",
+                "detail": "未传 --version ⟹ 不校验发布说明"}
+    if not v.startswith("v"):
+        v = "v" + v
+    notes = ROOT / "RELEASE-NOTES" / ("RELEASE-NOTES-%s.md" % v)
+    if not notes.is_file():
+        return {"id": "release_notes", "status": "FAIL",
+                "detail": "缺 %s（禁止退回 --generate-notes 静默发版）"
+                          % notes.relative_to(ROOT).as_posix()}
+    prev = _prev_tag(v)
+    args = [str(ROOT / "scripts" / "gk_release_notes.py"), "check", "--notes", str(notes)]
+    if prev:
+        args += ["--from", prev]
+    # 2026-11-16 实测：worktree 落在 drvfs（/mnt/c）时，`git log`/`diff` 逐提交往返
+    #   会让本项 >120s ⟹ 预检误红。给足 300s（本项仍是本地只读，无网络）。
+    try:
+        p = _run_text(args, timeout=300)
+    except (OSError, subprocess.SubprocessError) as e:
+        return {"id": "release_notes", "status": "FAIL", "detail": "检查执行失败：%s" % e}
+    if p.returncode == 0:
+        return {"id": "release_notes", "status": "PASS",
+                "detail": "%s + C1/C2（from %s）" % (notes.name, prev or "无")}
+    bad = [x.strip() for x in (p.stdout or "").splitlines() if x.strip().startswith("FAIL")]
+    return {"id": "release_notes", "status": "FAIL",
+            "detail": "；".join(bad[:4]) or (p.stderr or "")[-200:]}
+
+
+def _commits_since(base_head: str) -> int:
+    """基线 commit → HEAD 的提交数（无基线/非 git ⟹ 0）。"""
+    if not base_head:
+        return 0
+    try:
+        out = subprocess.check_output(
+            ["git", "-C", str(ROOT), "rev-list", "--count", "%s..HEAD" % base_head],
+            text=True, stderr=subprocess.DEVNULL)
+        return int(out.strip() or 0)
+    except Exception:  # noqa: BLE001 — 非 git / 基线不可达
+        return 0
+
+
+def bench_baseline_check() -> dict:
+    """基线不得过期，且 state 场景必须带 `amp_per_state` 口径。"""
+    p = ROOT / "references" / "bench-baseline.json"
+    if not p.is_file():
+        return {"id": "bench_baseline", "status": "FAIL",
+                "detail": "缺 references/bench-baseline.json"}
+    try:
+        d = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        return {"id": "bench_baseline", "status": "FAIL", "detail": "基线不可解析：%s" % e}
+    problems = []
+    head = str(d.get("git_head") or "")
+    if not head:
+        problems.append("缺 git_head")
+    else:
+        limit = int(d.get("stale_after_commits", 150) or 150)
+        age = _commits_since(head)
+        if age > limit:
+            problems.append("落后 %d 提交（阈值 %d）" % (age, limit))
+    st = (((d.get("benchmarks") or {}).get("state") or {}).get("scenarios") or [])
+    if not st:
+        problems.append("state 场景为空")
+    elif not any(s.get("amp_per_state") is not None for s in st):
+        problems.append("state 场景缺 amp_per_state（口径过旧）")
+    if problems:
+        return {"id": "bench_baseline", "status": "FAIL", "detail": "；".join(problems)}
+    return {"id": "bench_baseline", "status": "PASS",
+            "detail": "head=%s / 场景 %d / amp_per_state 在" % (head[:8], len(st))}
+
+
+_BENCH_QUICK = (("state", "gk_bench_state.py"),
+                ("gate", "gk_bench_gate.py"),
+                ("satellite", "gk_bench_satellite.py"))
+
+
 def bench_regression() -> dict:
-    """发布前性能门（2026-11-08，owner 裁定）：跑 quick bench 并与基线比对 + 归因。
+    """发布前性能门（2026-11-14 扩面）：state / gate / satellite 三套 quick 与基线比对 + 归因。
 
     判红**仅限**：硬失败（失败写 / 崩溃 checksum / tmp 残留 / 场景 ok=false）与
     `diagnose` 归类为 `regression`（机制模块未变 + 口径一致 + 超阈）。
-    口径不匹配 / 机制变化 / 基线过时 ⟹ **PASS + 提示**（避免「新机制与旧基线」误判成回归）。
+    口径不匹配 / 机制变化 / 基线过时 ⟹ **PASS + 提示**。
     跳过条件：`GK_PREFLIGHT_BENCH=0`、无 `.git`（导出树）、无基线、无 bench 脚本。
     """
     if os.environ.get("GK_PREFLIGHT_BENCH", "1") == "0":
@@ -327,14 +479,18 @@ def bench_regression() -> dict:
         return {"id": "bench_regression", "status": "SKIP",
                 "detail": "无 .git（导出树）⟹ 基线不可定位，跳过性能门"}
     baseline_p = ROOT / "references" / "bench-baseline.json"
-    bench = ROOT / "scripts" / "gk_bench_state.py"
-    if not baseline_p.is_file() or not bench.is_file():
-        return {"id": "bench_regression", "status": "SKIP",
-                "detail": "缺 bench-baseline.json 或 gk_bench_state.py"}
+    if not baseline_p.is_file():
+        return {"id": "bench_regression", "status": "SKIP", "detail": "缺 bench-baseline.json"}
+    cur = {}
     try:
-        p = subprocess.run([sys.executable, str(bench), "--quick", "--json"],
-                           cwd=str(ROOT), capture_output=True, text=True, timeout=600)
-        cur = json.loads(p.stdout)
+        for key, script in _BENCH_QUICK:
+            path = ROOT / "scripts" / script
+            if not path.is_file():
+                return {"id": "bench_regression", "status": "SKIP",
+                        "detail": "缺 scripts/%s" % script}
+            p = subprocess.run([sys.executable, str(path), "--quick", "--json"],
+                               cwd=str(ROOT), capture_output=True, text=True, timeout=600)
+            cur[key] = json.loads(p.stdout)
     except (OSError, subprocess.SubprocessError, ValueError) as e:
         return {"id": "bench_regression", "status": "FAIL",
                 "detail": "quick bench 执行失败：%s" % e}
@@ -342,21 +498,25 @@ def bench_regression() -> dict:
         sys.path.insert(0, str(ROOT / "scripts"))
         import gk_bench_compare as BC
         baseline = json.loads(baseline_p.read_text(encoding="utf-8"))
-        # 只比**当前档位存在的场景**（基线可能是 full 12 场景、本门跑 quick 4 场景）；
-        # 否则「当前结果缺该场景」会被误判成 violation。裁剪只影响对比面，不改基线文件。
-        names = {s.get("scenario") for s in (cur.get("scenarios") or [])}
-        bstate = ((baseline.get("benchmarks") or {}).get("state") or {})
-        bstate = dict(bstate, scenarios=[s for s in (bstate.get("scenarios") or [])
-                                         if s.get("scenario") in names])
-        baseline = dict(baseline, benchmarks={"state": bstate})
-        res = BC.compare(baseline, {"state": cur}, tolerance=1.25, only=["state"])
-        dg = BC.diagnose(res, baseline, {"state": cur}, repo=str(ROOT))
+        # 只比**当前档位存在的场景**；quick 已是 full 的同名子集，裁剪只为防旧基线缺段。
+        trimmed = {}
+        for key, doc in cur.items():
+            names = {s.get("scenario") for s in (doc.get("scenarios") or [])}
+            sec = ((baseline.get("benchmarks") or {}).get(key) or {})
+            trimmed[key] = dict(sec, scenarios=[s for s in (sec.get("scenarios") or [])
+                                                if s.get("scenario") in names])
+        baseline = dict(baseline, benchmarks=trimmed)
+        # 跨环境（基线 Windows vs 当前 Linux）ratio 不可直接比：降级为 WARN，只留硬失败。
+        env_same = str((baseline.get("environment") or {}).get("os") or "") == platform.platform()
+        res = BC.compare(baseline, cur, tolerance=1.25, only=list(cur), no_ratio=not env_same)
+        dg = BC.diagnose(res, baseline, cur, repo=str(ROOT))
     except Exception as e:  # noqa: BLE001 — 边界：对比器自身异常按红（不静默放行）
         return {"id": "bench_regression", "status": "FAIL",
                 "detail": "对比/归因失败：%s: %s" % (type(e).__name__, e)}
 
     hard = [v for v in res.get("violations", [])
-            if str(v.get("metric", "")).startswith(("state.failed", "state.crash", "state.ok"))]
+            if str(v.get("metric", "")).startswith(
+                ("state.failed", "state.crash", "state.ok", "gate.ok", "satellite.ok"))]
     regress = [it for it in dg.get("items", []) if it.get("kind") == "regression"]
     if hard or regress:
         bits = ["硬失败 %d" % len(hard) if hard else "",
@@ -366,6 +526,9 @@ def bench_regression() -> dict:
         return {"id": "bench_regression", "status": "FAIL",
                 "detail": "%s（%s）" % (detail, ", ".join(str(s) for s in sample))}
     notes = []
+    if not env_same:
+        notes.append("跨环境（基线 %s ≠ 当前 %s）⟹ ratio 降级 WARN"
+                     % ((baseline.get("environment") or {}).get("os"), platform.platform()))
     if dg.get("probe_mismatch"):
         notes.append("口径不匹配（amp_per_state 仅一侧）⟹ 建议重采基线")
     if dg.get("changed_modules"):
@@ -374,32 +537,38 @@ def bench_regression() -> dict:
     stale = [w for w in res.get("warnings", []) if w.get("metric") == "baseline.stale"]
     if stale:
         notes.append(stale[0].get("detail", "")[:120])
-    ops = [s.get("ops_s") for s in (cur.get("scenarios") or []) if s.get("ops_s")]
-    base = ("%d 场景 / 吞吐 %s ops/s" % (len(cur.get("scenarios") or []),
-                                         ("%.1f–%.1f" % (min(ops), max(ops))) if ops else "n/a"))
+    n_scen = sum(len(v.get("scenarios") or []) for v in cur.values())
+    ops = [s.get("ops_s") for s in ((cur.get("state") or {}).get("scenarios") or [])
+           if s.get("ops_s")]
+    base = ("%d 场景（state/gate/satellite）%s" % (
+        n_scen, " / 吞吐 %.1f–%.1f ops/s" % (min(ops), max(ops)) if ops else ""))
     return {"id": "bench_regression", "status": "PASS",
             "detail": base + (("；" + "；".join(notes)) if notes else "")}
 
 
-def run_all() -> dict:
+def run_all(version: str = "") -> dict:
     try:
         wf = WORKFLOW.read_text(encoding="utf-8")
     except OSError as e:
         return {"ok": False, "checks": [{"id": "workflow", "status": "FAIL",
                                          "detail": "读不到 %s: %s" % (WORKFLOW, e)}]}
     checks = [pack_contract(wf), pack_fixture(), docgen_check(),
-              doc_features_check(), release_assets(wf), workflow_paths(),
-              repo_index_check(), vendor_artifact(), bench_regression()]
-    # 2026-11-08：允许 SKIP（性能门在导出树/显式关闭时跳过）。既有 8 项从不返回 SKIP ⟹
-    #   本行对它们等价于原 `== "PASS"`；FAIL 仍判红（fail-closed 不变）。
+              doc_features_check(), doc_align_check(), list_registry_check(),
+              package_integrity_check(), ci_security_lint_check(),
+              release_assets(wf), workflow_paths(), repo_index_check(),
+              vendor_artifact(), release_notes_check(version),
+              bench_baseline_check(), bench_regression()]
+    # 2026-11-08：允许 SKIP（性能门在导出树/显式关闭时跳过）。FAIL 仍判红（fail-closed 不变）。
     return {"ok": all(c["status"] in ("PASS", "SKIP") for c in checks), "checks": checks}
 
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="gk_release_preflight.py")
     ap.add_argument("--json", action="store_true")
+    ap.add_argument("--version", default="",
+                    help="待发版本（如 v0.10.0）：校验 RELEASE-NOTES 与 C1/C2")
     ns = ap.parse_args(argv)
-    out = run_all()
+    out = run_all(ns.version)
     if ns.json:
         print(json.dumps(out, ensure_ascii=False, indent=2))
     else:

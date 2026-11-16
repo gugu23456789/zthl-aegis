@@ -197,13 +197,32 @@ def provenance_check(task: str, material: str, acknowledge: str = "") -> dict:
     injected_terms = 引号短语 + ASCII 专名 未命中（高精度）
     novel_phrases  = CJK 长串 未命中（2026-09-10 用户定案：**任何长串都能藏危险内容** →
                      同样作阻断依据，不再只是 advisory）
-    acknowledge    = 逗号分隔的显式豁免项（命中则移出阻断集并记入 acknowledged）。"""
+    acknowledge    = 逗号分隔的显式豁免项（命中则移出阻断集并记入 acknowledged）
+
+    2026-11-12（`RED-POISON-M-P2IN` / GB-3 真修）：**编码变体不得静默**。病象（红队实测 2/2）：
+    全角 `ｓｙｓｔｅｍ：` / 零宽 `sys\\u200btem:` 在原文本上既不成 ASCII 专名、也不成 CJK 长串，
+    ⟹ grounding 恒返回空集，既不命中也不告警（变体可承载与裸串等价的可执行内容）。修法两条：
+      ① 提取与比对统一走 `gk_norm.normalize`（NFKC + 剥零宽/Tags/旗帜）⟹ 与语料同口径；
+      ② **归一改变过的片段**（`encoded_variants`）本身作为未命中项报告（`encoded_variant:` 前缀）
+         —— 它们不可能在语料里「逐字」出现，却携带内容 ⟹ 必须显式解释或 `acknowledge`。
+    """
     ack = ack_set(acknowledge)
-    mat = (material or "").lower()
-    if not mat:
+    mat_raw = material or ""
+    if not mat_raw.strip():
         return {"skipped": "material_unreadable", "injected_terms": [],
                 "novel_phrases": [], "acknowledged": []}
+    try:                                   # 单源归一（缺失则退化为原文本，不新增失败面）
+        import gk_norm as _gn
+        _norm = _gn.normalize
+    except Exception:  # noqa: BLE001
+        _norm = lambda s: s              # noqa: E731
+    mat = _norm(mat_raw).lower()
     scan = strip_paths(task)
+    variants = []
+    for tok in re.split(r"[\s，。；：、,.;:!?！？（）()\[\]【】<>《》\"'“”‘’]+", scan):
+        if len(tok) >= 2 and _norm(tok) != tok and tok not in variants:
+            variants.append(tok)
+    scan = _norm(scan)                   # ① 归一后再提取（与 mat 同口径）
 
     raw_hi = []
     for q in _QUOTE_RE.findall(scan):
@@ -221,6 +240,14 @@ def provenance_check(task: str, material: str, acknowledge: str = "") -> dict:
         seen.add(k)
         (acknowledged if k in ack else injected).append(t)
 
+    # ② 编码变体：归一即改变 ⟹ 语料里不可能逐字存在（除非恰好写成变体）；显式上报或 ack
+    for v in variants:
+        item = "encoded_variant:%s" % v
+        _vl = v.lower()
+        # ack 允许带尾部标点（用户复制的可见串常是 `ｓｙｓｔｅｍ：`，而分词已剥掉冒号）
+        _acked = _vl in ack or any(a.rstrip(":：") == _vl for a in ack)
+        (acknowledged if _acked else injected).append(item)
+
     novel, nseen, novel_ack = [], set(), []
     for s in cjk_segments(scan):
         if s.lower() in mat or s in nseen:
@@ -228,6 +255,7 @@ def provenance_check(task: str, material: str, acknowledge: str = "") -> dict:
         nseen.add(s)
         (novel_ack if s.lower() in ack else novel).append(s)
     return {"injected_terms": injected[:12], "novel_phrases": novel[:16],
+            "encoded_variants": variants[:8],
             "acknowledged": acknowledged + novel_ack}
 
 

@@ -289,6 +289,51 @@ class TestAuditState:
         assert c["match"] is False
         assert any("concentrated" in i for i in c.get("issues", []))
 
+    def test_block_log_uses_reason_dimension(self, tmp_path):
+        """ECC-69F9DC1D5D4F：`command` 恒为入口名 `pre-tool-check` ⟹ 判据须按 `reason`。
+
+        原判据按 `command` 计数 ⟹ 任意 ≥3 条 block 恒判 concentrated（结构性不可达）。
+        """
+        sp = _write_state({"gate_data": {"block_log": [
+            {"command": "pre-tool-check", "reason": "file_cap:10",
+             "timestamp": "2026-11-12T04:35:50Z"},
+            {"command": "pre-tool-check", "reason": "file_cap:10",
+             "timestamp": "2026-11-12T04:36:41Z"},
+            {"command": "pre-tool-check", "reason": "file_cap:10",
+             "timestamp": "2026-11-12T04:37:00Z"},
+        ]}}, str(tmp_path / "s.json"))
+        r = gas.check_state_file(sp)
+        c = next(x for x in r["state_checks"] if x["field"] == "block_log")
+        assert c["match"] is False, c
+        assert any("file_cap:10" in i for i in c["issues"]), c
+
+    def test_block_log_past_burst_is_not_live_loop(self, tmp_path):
+        """历史爆发（尾部已换原因）不再永久钉红 —— 只有**尾部连续同因**才是活循环。"""
+        sp = _write_state({"gate_data": {"block_log": [
+            {"command": "pre-tool-check", "reason": "file_cap:10",
+             "timestamp": "2026-11-12T04:35:50Z"},
+            {"command": "pre-tool-check", "reason": "file_cap:10",
+             "timestamp": "2026-11-12T04:36:41Z"},
+            {"command": "pre-tool-check", "reason": "file_cap:10",
+             "timestamp": "2026-11-12T04:37:00Z"},
+            {"command": "pre-tool-check", "reason": "edit_gate:OVERWRITE_EXISTING_FILE",
+             "timestamp": "2026-11-12T04:42:30Z"},
+        ]}}, str(tmp_path / "s.json"))
+        r = gas.check_state_file(sp)
+        c = next(x for x in r["state_checks"] if x["field"] == "block_log")
+        assert c["match"] is True, c
+        assert "tail=edit_gate:OVERWRITE_EXISTING_FILE" in c["declared"], c["declared"]
+
+    def test_block_log_declared_carries_judged_slice(self, tmp_path):
+        """`declared` 须带被判切片（tail/recent/older）⟹ 判决可由声明值复现。"""
+        sp = _write_state({"gate_data": {"block_log": [
+            {"command": "pre-tool-check", "reason": "r%d" % i,
+             "timestamp": "2026-11-12T04:3%d:00Z" % i} for i in range(5)
+        ]}}, str(tmp_path / "s.json"))
+        r = gas.check_state_file(sp)
+        c = next(x for x in r["state_checks"] if x["field"] == "block_log")
+        assert "tail=" in c["declared"] and "recent=" in c["declared"], c["declared"]
+
     def test_sealed_score_missing_with_eco_edit(self, tmp_path):
         sp = _write_state({"gate_data": {
             "eco_completions": {"ECO-EDIT": {"completed_at": "2026-08-15"}},
@@ -530,8 +575,16 @@ class TestAuditHint:
 class TestAuditSelf:
     def test_self_runs(self):
         r = gas.check_self(SKILL_DIR)
-        assert r["audit_summary"]["total_fields"] == 4
+        # SELF-01..04（静态源码面）+ SELF-05（2026-11-11 cron dead-man switch，委托单源执行）
+        assert r["audit_summary"]["total_fields"] == 5
         assert "self_checks" in r
+
+    def test_cron_deadman_item_present(self):
+        """SELF-05 必须在 self 域内，且 `match` 只认 PASS/SKIP（WARN 不算通过）。"""
+        r = gas.check_self(SKILL_DIR)
+        c = next(x for x in r["self_checks"] if x["field"] == "self_cron_health")
+        assert c["match"] is (c["status"] in ("PASS", "SKIP")), c
+        assert "failed_jobs" in c and "tick_age_s" in c
 
 
 class TestAuditHook:
@@ -566,10 +619,12 @@ class TestRunAll:
     def test_run_all_37(self, tmp_path):
         sp = _empty_state(str(tmp_path / "s.json"))
         r = gas.run_all(sp, SKILL_DIR)
-        # state 19 + hint 4 + self 4 + hook 6 + red 12 = 45
-        # （2026-09-02 HOOK-05/06 + hook_block_log；E21 branch_cleaned、E22 ci_green 收窄产出范围）
-        assert r["audit_summary"]["total_fields"] >= 41
-        assert r["domains"] == ["state", "hint", "self", "hook", "red"]
+        # state 21 + hint 4 + self 5 + hook 6 + red 12 + cost 9 = 57
+        # （2026-09-02 HOOK-05/06 + hook_block_log；E21 branch_cleaned、E22 ci_green 收窄产出范围；
+        #  2026-11-11 Phase 4g AUDIT-COST 动态攻防面防退化 +8；
+        #  2026-11-11 SELF-05 cron dead-man switch +1；违约→额度银行只读投影 +1）
+        assert r["audit_summary"]["total_fields"] >= 57
+        assert r["domains"] == ["state", "hint", "self", "hook", "red", "cost"]
 
 
 # ---------------------------------------------------------------------------
@@ -649,3 +704,45 @@ def test_degrade_rows_do_not_count_toward_daily_threshold(tmp_path):
     _seed_ledger(sp, gas.RAISES_TODAY_MAX + 5, kind="degrade")
     c = _raises_item(gas.check_state_file(sp))
     assert c["match"] is True, f"降级早警行被误算成提额（C1 破）：{c}"
+
+
+# ── D6b（2026-11-16，owner 选「可见性覆盖」）：提额 ↔ credit 记账覆盖 ──────────
+def _seed_budget(sp, rows):
+    Path(str(sp) + ".budget-log.jsonl").write_text(
+        "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows),
+        encoding="utf-8", newline="\n")
+
+
+def _seed_credit(sp, rows):
+    Path(str(sp) + ".credit-ledger.jsonl").write_text(
+        "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows),
+        encoding="utf-8", newline="\n")
+
+
+def test_debt_source_coverage_uncovered_warns(tmp_path):
+    """有提额、无 credit 记账 ⟹ uncovered>0 + WARN（可见性覆盖的核心判据）。"""
+    sp = _write_state({"gate_data": {}}, str(tmp_path / "s.json"))
+    _seed_budget(sp, [{"ts": "x", "kind": "raise", "source": "advance_env", "to_max": 24}] * 2)
+    out = gas.debt_source_coverage(sp)
+    assert out["overrides"] == 2 and out["credited"] == 0, out
+    assert out["uncovered"] == 2 and out["status"] == "WARN" and out["match"] is False, out
+
+
+def test_debt_source_coverage_covered_passes_and_counts_raise_backed(tmp_path):
+    """记账行数 ≥ 提额事件 ⟹ PASS；`raise_backed` 单列（设计口径 bookkeeping，raise 仅对照）。"""
+    sp = _write_state({"gate_data": {}}, str(tmp_path / "s.json"))
+    _seed_budget(sp, [{"ts": "x", "kind": "raise", "source": "advance_env", "to_max": 24}] * 2)
+    _seed_credit(sp, [{"ts": "y", "kind": "bookkeeping", "delta": 0, "source": "advance_env"},
+                      {"ts": "z", "kind": "raise", "delta": 0, "source": "state_patch"}])
+    out = gas.debt_source_coverage(sp)
+    assert out["overrides"] == 2 and out["credited"] == 2, out
+    assert out["raise_backed"] == 1 and out["uncovered"] == 0, out
+    assert out["status"] == "PASS" and out["match"] is True, out
+
+
+def test_state_domain_exposes_debt_source_coverage_readonly(tmp_path):
+    """接入面：`check_state_file` 顶层带该观测，且**不进** `state_checks`（不改 total_fields）。"""
+    sp = _write_state({"gate_data": {}}, str(tmp_path / "s.json"))
+    out = gas.check_state_file(sp, SKILL_DIR)
+    assert out.get("debt_source_coverage", {}).get("field") == "debt_source_coverage", out
+    assert all(c.get("field") != "debt_source_coverage" for c in out["state_checks"])

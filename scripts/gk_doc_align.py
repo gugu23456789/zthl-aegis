@@ -8,11 +8,11 @@ monitor --align 的升格实现：0 API、纯静态扫描、JSON 检查项输出
 2026-08-28 合并 audit --docs 文档审查引擎（gk_audit_docs.check_docs 的 C1-C5
 7 项检查全部吸纳），统一 doc-align 为文档一致性 + 漂移的单一入口。
 
-检查器（31 项 = run_all 静态注册数的**唯一事实源**；`comment_code_mismatch` 双向判等，
-       见该检查器 ④。audit_docs 的 7 项经 `for r in check_audit_docs_merged()` **一次
-       append** 展开 ⟹ 静态计数 31 = 下表 1–28 行中 audit_docs 的 7 行折为 1 个单位，
-       另含 3 项后加检查：`skill_duty_pointer`、`gk_facts` 事实块比对、
-       `retired_doc_export` 退役文档不得留在导出面）:
+检查器（32 项 = run_all 静态注册数的**唯一事实源**；`comment_code_mismatch` 双向判等，
+       见该检查器 ④。下表按职能列出检查器；`audit_docs` 的 7 项经
+       `for r in check_audit_docs_merged()` **一次 append** 展开 ⟹ 计为 1 个注册单位；
+       另有后加检查：`skill_duty_pointer`、`gk_facts` 事实块比对、
+       `retired_doc_export` 退役文档不得留在导出面、`template_registries` 模板登记表统一审计）:
  1. papers_framework_drift   — 论文框架 vs 当前架构事实（2026-10-27 起一篇已归档；
                                在册篇目建事实清单，部分篇目在 SKIP 内 ⟹ 检查面 = 在册且未 skip 的篇目）
  2. cli_protocol_commands    — references/cli-protocol.md 命令数 vs gatekeeper-cli.sh _CMD_REG
@@ -53,6 +53,7 @@ exit code: 1 if issues > 0（FAIL 项计 issue）；`--strict` 时 WARN 亦计�
            （2026-10-28：旧行为 WARN 恒不阻断 ⟹ 151 条锚漂移/17 条计划漂移可以「issues=0」假绿）
 """
 import ast
+import datetime
 import inspect
 import json
 import os
@@ -1341,6 +1342,27 @@ def check_red_arm_templates(skill_dir: str) -> dict:
     return result
 
 
+# ── 模板登记表统一审计（2026-11-11）────────────────────────────────────────────
+# 单一事实源 = `references/template-registries.json`；实现 = `scripts/gk_template_audit.py`
+#   （红先 / 注释 / 后续 checklist/data/spec 共用；**禁**在 doc-align 内复制第二套判据）。
+#   缺清单或审计器 ⟹ SKIP（公开面可能未随包），不得把「未随包」判成漂移。
+def check_template_registries(skill_dir: str) -> dict:
+    sp = Path(skill_dir) / "scripts" / "gk_template_audit.py"
+    mp = Path(skill_dir) / "references" / "template-registries.json"
+    if not sp.exists() or not mp.exists():
+        return {"check": "template_registries", "status": "SKIP",
+                "detail": "未随包 template-registries.json / gk_template_audit.py — 跳过"}
+    try:
+        sys.path.insert(0, str(Path(skill_dir) / "scripts"))
+        import gk_template_audit as _ta
+        res = _ta.audit(str(skill_dir))
+    except Exception as e:  # noqa: BLE001
+        return {"check": "template_registries", "status": "FAIL",
+                "detail": f"审计器不可用: {type(e).__name__}: {e}"}
+    return {"check": "template_registries", "status": res.get("status", "FAIL"),
+            "detail": res.get("detail", "")}
+
+
 # ── A-2（T10，2026-10-29）：段职责表 ↔ STAGE 分支 gate-id 双向比对 ────────────────
 # 病根（Q4 质询第 3 条）：`gk_advance.py::_structural_gates` 只有 `fail()` 字符串，
 #   **没有**「段职责注释」这一对象 ⟹ 判据只能落在 **gate-id 清单**上，注释锚不可用。
@@ -1678,6 +1700,38 @@ def check_contract_enum_impl_binding(skill_dir: str) -> dict:
 #   与 `_accept_baseline.txt` 同模式）—— 不冻结则恒红 123 条，门禁失去判别力。
 SUBAGENT_BASELINE_REL = "docs/analysis/subagent-unlogged-baseline.json"
 
+# 报告产出时间（2026-11-11）：文件名时间戳优先，mtime 仅兜底。
+#   病象（实测）：890 份报告 mtime 全被「工作树重建 / 批量 checkout」刷成当日 ⟹ 880 份历史
+#   报告被误判为「24h 内新增未入账」⟹ doc-align 恒 FAIL。mtime 是**可被重置**的代理信号，
+#   与 `RECENT_BATCH_TS` 写死同类；`sub-<epoch>-<pid>-<rand>` 的 epoch 才是产物自带的不变时间面。
+_REPORT_EPOCH_RE = re.compile(r"^sub-(\d{6,})[-_]")
+_REPORT_YYYYMMDD_RE = re.compile(r"(20\d{6})")
+
+
+def _report_ts(name: str, path: "Path") -> float:
+    """报告产出时间：`sub-<epoch>` 用 epoch；`moa-*` 用文件名 YYYYMMDD（00:00 UTC）；否则 mtime。"""
+    m = _REPORT_EPOCH_RE.match(name or "")
+    if m:
+        try:
+            v = float(m.group(1))
+            # 只接受 2001–2100 的秒级 epoch（防 `sub-20260101-...` 这类日期式误读成 1970）
+            if 1e9 <= v <= 4.1e9:
+                return v
+        except ValueError:
+            pass
+    m = _REPORT_YYYYMMDD_RE.search(name or "")
+    if m:
+        try:
+            return datetime.datetime.strptime(m.group(1), "%Y%m%d").replace(
+                tzinfo=datetime.timezone.utc).timestamp()
+        except ValueError:
+            pass
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return 0.0
+
+
 
 def _state_roots(skill_dir: str) -> list:
     """账本读取根：本目录 + `git worktree list` 里的主树（linked worktree 兜底）。
@@ -1766,7 +1820,13 @@ def _subagent_ledger(skill_dir: str) -> tuple:
 
 
 def check_subagent_unlogged(skill_dir: str, fresh_h: float = 24.0) -> dict:
-    """报告 ↔ 账本对账（A：常驻 WARN + 近期 FAIL + 历史基线冻结）。"""
+    """报告 ↔ 账本对账（A：常驻 WARN + 近期 FAIL + 历史基线冻结）。
+
+    时间面 = **文件名时间戳**（`_report_ts`：`sub-<epoch>` / `moa-YYYYMMDD`），mtime 仅作
+    无时间戳旧命名的兜底。2026-11-11 实测：890 份报告 mtime 被工作树重建统一刷成当日 ⟹
+    880 份历史报告被判「24h 内新增未入账」而恒 FAIL —— mtime 是**可被重置**的代理信号，
+    与 `RECENT_BATCH_TS` 写死同类。改用产物自带的 epoch 后，判据不再随 checkout 漂移。
+    """
     base = Path(skill_dir)
     reports = sorted((base / "docs" / "analysis" / "subagent").glob("*.md"))
     r = {"check": "subagent_unlogged"}
@@ -1787,21 +1847,25 @@ def check_subagent_unlogged(skill_dir: str, fresh_h: float = 24.0) -> dict:
     except (OSError, UnicodeDecodeError, ValueError, json.JSONDecodeError):
         base_names, frozen_at = set(), 0.0
     now = time.time()
+    # 判据时间面 = 文件名时间戳（见 `_report_ts`）：mtime 会被工作树重建重置，不可作判据。
+    ts_of = {}
+    for p in reports:
+        ts_of[p.name] = _report_ts(p.name, p)
+    ledger_ts = [ts_of[n] for n in names if n in ts_of]
+    if ledger_ts:
+        cutoff = min(ledger_ts)
     in_scope, unlogged = 0, []
     for p in reports:
-        try:
-            mt = p.stat().st_mtime
-        except OSError:
-            continue
-        if mt < cutoff:
+        ts = ts_of.get(p.name, 0.0)
+        if ts < cutoff:
             continue
         in_scope += 1
         if p.name in names:
             continue
-        # 基线只冻结**冻结时点之前**的同名文件：冻结后被重写的同名报告仍须报（防洗白）
-        if p.name in base_names and mt <= frozen_at:
+        # 基线只冻结**冻结时点之前**的同名报告：冻结后被重写的同名报告仍须报（防洗白）
+        if p.name in base_names and ts <= frozen_at:
             continue
-        unlogged.append((p.name, now - mt))
+        unlogged.append((p.name, now - ts))
     fresh = [n for n, age in unlogged if age <= fresh_h * 3600]
     r.update(scope=in_scope, ledger=len(names), baselined=len(base_names),
              unlogged=len(unlogged), fresh_h=fresh_h)
@@ -1915,6 +1979,12 @@ def run_all(skill_dir: str, papers_dir: str, review_skill_dir: str,
 
     # 2026-09-23：红先模版登记表漂移（用户裁定「红先测试模版需要被 doc-align 检查是否存在漂移」）
     r = check_red_arm_templates(skill_dir)
+    if r["status"] == "FAIL":
+        issues += 1
+    checks.append(r)
+
+    # 2026-11-11：模板登记表统一审计（红先/注释共用；清单单一事实源）
+    r = check_template_registries(skill_dir)
     if r["status"] == "FAIL":
         issues += 1
     checks.append(r)
@@ -2148,38 +2218,83 @@ def _looks_like_target(tok: str) -> bool:
     return ("/" in tok or "\\" in tok) and re.search(r"\.(py|sh|md|json|js|ts)$", tok) is not None
 
 
+_PLAN_EXCLUDE_KEYS = ("不改", "不动", "排除", "无落刀项")
+_PLAN_LANDED_RE = re.compile(r"已落刀|✅\s*已落")
+
+
+def _plan_excluded(seg: str) -> bool:
+    """显式**排除面**判定（非落刀点）：表格行与 §3 段共用同一份关键词。"""
+    return any(k in seg for k in _PLAN_EXCLUDE_KEYS)
+
+
+def _plan_landed_marked(seg: str) -> bool:
+    """计划已显式断言「已落刀」（`✅ 已落刀 <日期>`）⟹ 合法关单路径（→ `ok_landed`）。"""
+    return bool(_PLAN_LANDED_RE.search(seg))
+
+
+def _plan_row_excluded(rest: str) -> bool:
+    """表格行的排除判定 —— **只**看第二格（覆盖/改动列）。
+
+    2026-11-12 修假阴性：原实现把第一格之后的**整行**喂给 `_plan_excluded` ⟹
+    三列表的第三格是「排除面（不改）」，写 `**不动** PROTECTED_REGION` 本意是
+    「不改别人的面」，却把整行判成非落刀点 ⟹ 真落刀点被静默跳过
+    （实测 09-29 `gatekeeper-cli.sh（新增 mcp 子命令段）` 因此从未被报）。
+    口径：`排除面` 列声明的是**不改哪些面**，与「本行是不是落刀点」正交。
+    """
+    cover = rest.split("|", 1)[0]
+    return _plan_excluded(cover)
+
+
 def _plan_targets(text: str) -> list:
-    """抽计划文本里的「落刀点」→ [(t_item, target_relpath, declared_symbol)]。
+    """抽计划文本里的「落刀点」→ [(t_item, target_relpath, declared_symbol, marked_landed)]。
 
     面（`ECC-PLAND` §2.1）：§3 `### T<n> …` 段的 `**文件**` 行 + §0.3 落刀点表行
-    （跳过含「不改 / 不动 / 排除」的行 —— 那是**显式排除面**，非落刀点）。
+    （跳过含「不改 / 不动 / 排除 / 无落刀项」的段或行 —— 那是**显式排除面**，非落刀点；
+    §3 段级排除与表格行同权，2026-11-12 修：原实现只对表格行生效）。
+
+    `marked_landed` = 该段/行显式标了「已落刀」（`✅ 已落刀 <日期>`，仓内既有写法）
+    ⟹ **合法关单路径**：计划状态已断言落地，交 `_landing_verdict` 判 `ok_landed`。
     """
     out = []
     for m in re.finditer(r"(?ms)^###\s+(T\d+[^\n]*)\n(.*?)(?=^###\s|\Z)", text):
         t_item, body = m.group(1).strip(), m.group(2)
+        if _plan_excluded(t_item + "\n" + body):
+            continue
         fmm = re.search(r"\*\*文件\*\*[：:](.*)", body)
         if not fmm:
             continue
         line = fmm.group(1)
         sm = re.search(r"新增\s*`([^`]+)`", line)
         sym = sm.group(1) if sm else ""
+        marked = _plan_landed_marked(t_item + "\n" + body)
         for tok in re.findall(r"`([^`]+)`", line):
             tgt, tsym = (tok.split("::", 1) if "::" in tok else (tok, sym))
             if _looks_like_target(tgt):
-                out.append((t_item, tgt.replace("\\", "/").lstrip("./"), tsym))
+                out.append((t_item, tgt.replace("\\", "/").lstrip("./"), tsym, marked))
                 break
     for m in re.finditer(r"(?m)^\|\s*`([^`]+)`\s*\|(.*)$", text):
         row = m.group(2)
-        if any(k in row for k in ("不改", "不动", "排除")):
+        if _plan_row_excluded(row):
             continue
         tgt, tsym = (m.group(1).split("::", 1) if "::" in m.group(1) else (m.group(1), ""))
         if _looks_like_target(tgt):
-            out.append(("§0.3", tgt.replace("\\", "/").lstrip("./"), tsym))
+            out.append(("§0.3", tgt.replace("\\", "/").lstrip("./"), tsym,
+                        _plan_landed_marked(row)))
     return out
 
 
-def _landing_verdict(sd: Path, target: str, sym: str, plan_stem: str) -> tuple:
-    """落刀点判定 → (verdict, why)。verdict ∈ {ok, suspect, landed_stale}。"""
+def _landing_verdict(sd: Path, target: str, sym: str, plan_stem: str,
+                     marked: bool = False) -> tuple:
+    """落刀点判定 → (verdict, why)。verdict ∈ {ok, ok_landed, suspect, landed_stale}。
+
+    `marked`（计划已标 `✅ 已落刀`）⟹ `ok_landed`：这是本器**唯一**的合法关单路径
+    （2026-11-12 补：原实现只能报 WARN、无法被任何计划状态更新消解 ⟹ 假警告无出口）。
+    `target` == 计划自身 ⟹ `ok`：计划必然提到自己的文件名，自引不构成落刀痕。
+    """
+    if marked:
+        return "ok_landed", "计划已标「已落刀」"
+    if plan_stem and Path(target).as_posix() == f"docs/plans/{plan_stem}.md":
+        return "ok", "目标=计划自身（自引不构成落刀痕）"
     p = sd / target
     if not p.is_file():
         return "ok", "目标不存在"
@@ -2190,7 +2305,10 @@ def _landing_verdict(sd: Path, target: str, sym: str, plan_stem: str) -> tuple:
     marks = []
     if plan_stem and plan_stem in body:
         marks.append(f"引计划 basename `{plan_stem}`")
-    if re.search(r"\bDRAFT-\d+", body):
+    # `DRAFT-N` 只算**代码**文件的落刀痕（源码头注携带计划版本号）；
+    # 文档里的沿革叙述/正则示例（如 `DRAFT-<n>` 规则说明、修订序号链）是**误报源**
+    # （2026-11-12 实测 2 处）⟹ 限 `.py/.sh` 面。⚠ 本注释自身也不得写出「DRAFT-<数字>」。
+    if target.endswith((".py", ".sh")) and re.search(r"\bDRAFT-\d+", body):
         marks.append("含 `DRAFT-N`")
     if sym and re.search(r"(?m)^\s*def\s+" + re.escape(sym) + r"\b", body):
         marks.append(f"已定义声明符号 `{sym}`")
@@ -2207,8 +2325,10 @@ def check_plan_landing_drift(skill_dir: str) -> dict:
 
     输入 = `docs/plans/*.md`（含 `<!-- META`）的 §0.3 落刀点表 + §3 `### T<n>` 段 `**文件**`
     点名的 `file`（可带 `::symbol`）。判定（§2.1）：目标**不存在** ⟹ `ok`；存在且含**落刀痕**
-    （文本引本计划 basename / `DRAFT-N`，或该步声明的新符号已 `def`）⟹ `landed_stale`(high)；
+    （文本引本计划 basename / 代码文件含 `DRAFT-N`，或该步声明的新符号已 `def`）⟹ `landed_stale`(high)；
     存在但无落刀痕（可能别的计划建的）⟹ `suspect`(low，**仅此** ⟹ INFO，不污染 WARN 面)。
+    计划段/行**已标** `✅ 已落刀 <日期>` ⟹ `ok_landed`（合法关单路径，不进 WARN 面）；
+    落刀点 = 计划自身 ⟹ `ok`（自引不是落刀痕）。
     开关 `GK_PLAND_DRIFT=0` ⟹ SKIP。含 `landed_stale` ⟹ WARN。
     """
     result = {"check": "plan_landing_drift"}
@@ -2230,13 +2350,14 @@ def check_plan_landing_drift(skill_dir: str) -> dict:
             continue
         if "<!-- META" not in text:
             continue
-        for t_item, target, sym in _plan_targets(text):
-            verdict, why = _landing_verdict(sd, target, sym, md.stem)
+        for t_item, target, sym, marked in _plan_targets(text):
+            verdict, why = _landing_verdict(sd, target, sym, md.stem, marked)
             items.append({"plan": md.name, "t_item": t_item, "target": target,
                           "verdict": verdict, "why": why})
     result["items"] = items
     stale = [it for it in items if it["verdict"] == "landed_stale"]
     suspect = [it for it in items if it["verdict"] == "suspect"]
+    landed = [it for it in items if it["verdict"] == "ok_landed"]
     if stale:
         result["status"] = "WARN"
         result["detail"] = (f"{len(stale)} 处落刀语义过期（计划称待落刀，目标已在且含落刀痕）: "
@@ -2247,7 +2368,8 @@ def check_plan_landing_drift(skill_dir: str) -> dict:
                             + "; ".join(f"{it['plan']}:{it['target']}" for it in suspect[:8]))
     else:
         result["status"] = "PASS"
-        result["detail"] = f"计划落刀点无过期（核 {len(items)} 个落刀点）"
+        tail = f"，其中 {len(landed)} 处计划已标已落刀" if landed else ""
+        result["detail"] = f"计划落刀点无过期（核 {len(items)} 个落刀点{tail}）"
     return result
 
 
@@ -2694,6 +2816,12 @@ def check_doc_freshness(skill_dir: str, release: bool = False) -> dict:
     `release=True`（发布门，2026-11-09）：该总表属**导出排除面**（`oss-export-whitelist.json`，
     owner 2026-11-02 裁定仅私仓留存）⟹ 公开树缺席是**预期**，降级 SKIP；私仓（release=False）
     仍 FAIL（内部必须存在且回流）。
+
+    `已退役`（2026-11-11，用户裁定「总表退役、条例另立活文档」）：总表若显式声明
+    `已退役为历史归档` **且**指向 `violation-charter.md` ⟹ SKIP（新鲜度守护随表停用，detail 指路）。
+    两个条件缺一不可 —— 只写退役标记不给活文档指针 ⟹ 回落旧判据（防「删 pin 逃检」）。
+    退役原因如实登记：`RECENT_BATCH_TS` 是写死常量、只校验「字符串还在」而不与当前时间比对，
+    实测总表停更 47 天仍 PASS ⟹ 该守护无法发现停更（C6 想防的失败模式原样复发）。
     """
     RECENT_BATCH_TS = "2026-09-25"   # 最近登记批次（…→ 09-13 C11 XSPI → 09-25 C12 hook-xenv §15.3-Q3：持久化块日志分母源 + 总表四列网表扩列）
     # 2026-09-25 C12 bump：持久化块日志（误报率分母源）+ 四列网表（层/判据/误报率口径/守方）回流后须同步，防呆 pin 面即本行
@@ -2714,6 +2842,17 @@ def check_doc_freshness(skill_dir: str, release: bool = False) -> dict:
     except OSError as e:
         result["status"] = "FAIL"
         result["detail"] = "总表不可读: " + str(e)
+        return result
+    # 2026-11-11 退役判定（用户裁定「总表退役、条例另立活文档」）：
+    #   病象：RECENT_BATCH_TS 是**写死的 pin**，只校验「字符串还在」而不与当前时间比对
+    #   ⟹ 总表停更 47 天仍恒 PASS（实测 detail 报「已回流 2026-09-25」）。
+    #   处置：退役必须是**显式声明**（`已退役为历史归档` + 指向活文档），不得靠删 pin 骗过检查；
+    #   命中 ⟹ SKIP 且 detail 指向新承载面（不静默通过，也不让死表继续冒充活台账）。
+    retired = ("已退役为历史归档" in text) and ("violation-charter.md" in text)
+    if retired:
+        result["status"] = "SKIP"
+        result["detail"] = ("安全网总表已退役（2026-11-11）：新鲜度守护随表停用；"
+                            "现行承载面 = references/violation-charter.md")
         return result
     has_ts = RECENT_BATCH_TS in text
     reg_lines = re.findall(r"^> \*\*C\d+(?:\+\s*A\d+)? (?:追加|不适配判定)", text, re.MULTILINE)

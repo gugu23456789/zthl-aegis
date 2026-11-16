@@ -20,13 +20,18 @@ def snapshot(state_file: str, session_id: str = "") -> tuple:
     except Exception:  # noqa: BLE001 — 损坏/缺失统一降级为不可用
         return ("-", "-", "-")
     eb = (d.get("gate_data") or {}).get("edit_budget") or {}
+    # 2026-11-12（`ECC-AF5CC971935C`）：② 写类子命令改落**命令轴** `cli_used`/`cli_remaining`
+    #   （不再挤占批次轴 `remaining`）。快照的 `used` = **两轴合计**（本口径只服务「交易凭证
+    #   差额 = 本笔 cost」，不是 cap）；`remaining` 仍报**批次轴**（会话 cap 的唯一度量）。
+    def _used(box):
+        return int(box.get("used", 0) or 0) + int(box.get("cli_used", 0) or 0)
+
     if session_id:
         box = (eb.get("sessions") or {}).get(session_id)
         if isinstance(box, dict):
-            return ("session", int(box.get("used", 0) or 0),
-                    int(box.get("remaining", 0) or 0))
+            return ("session", _used(box), int(box.get("remaining", 0) or 0))
         return ("session", 0, int(eb.get("max", 0) or 0))
-    return ("global", int(eb.get("used", 0) or 0), int(eb.get("remaining", 0) or 0))
+    return ("global", _used(eb), int(eb.get("remaining", 0) or 0))
 
 
 def main() -> int:

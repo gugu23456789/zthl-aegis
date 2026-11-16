@@ -274,6 +274,40 @@ def test_eco_scan_to_read_ok(tmp_path):
     assert "gates" in r
 
 
+def test_eco_scan_to_read_writes_advance_log(tmp_path):
+    """RED-SCOPE-03 真修（2026-11-12）：**direct 流也须写门禁重放明细**。
+
+    病象：`_advance_log` 只在 `_run_standard` 内联追加，`_run_nonstandard` 只写
+    `eco_completions` ⟹ 经 direct 流推进的 state 永远「无可重放历史」（现场：生产 state
+    `eco_completions` 3 条、`_advance_log` 空）。两流现共用 `_append_advance_log`。
+    """
+    gd = {"project_type": "standing"}
+    sf = _write_state(tmp_path / "s.json", "ECO-SCAN", gate_data=gd)
+    r = _run(sf, "ECO-READ", force=False, dry_run=False, env={}, monitor_json=None,
+             cc={}, remote="origin https://x", skill_dir=str(tmp_path))
+    assert r.get("ok") is True and r["mode"] == "direct", r
+    d = json.loads(Path(sf).read_text(encoding="utf-8"))
+    gl = d["gate_data"].get("_advance_log") or []
+    assert len(gl) == 1, gl
+    assert gl[0]["to_stage"] == r["to"], gl
+    assert gl[0]["mode"] == "direct" and gl[0]["all_ok"] is True, gl
+    assert 0.0 <= gl[0]["entropy_rate"] <= 1.0, gl
+
+
+def test_append_advance_log_caps_and_clamps():
+    """`_append_advance_log` 单源：cap=10、entropy 夹到 [0,1]、坏值按 0（不崩）。"""
+    import gk_advance as GA
+    gd = {}
+    for i in range(12):
+        GA._append_advance_log(gd, "ECO-%d" % i, True, i, 0.5)
+    assert len(gd["_advance_log"]) == 10, gd["_advance_log"]
+    assert gd["_advance_log"][-1]["to_stage"] == "ECO-11"
+    GA._append_advance_log(gd, "X", True, 0, 9.9)
+    assert gd["_advance_log"][-1]["entropy_rate"] == 1.0
+    GA._append_advance_log(gd, "Y", True, 0, "bad")
+    assert gd["_advance_log"][-1]["entropy_rate"] == 0.0
+
+
 def test_standing_scheduler_advances_cosine(tmp_path):
     """2026-08-31 优化器接线修复：standing 分支 advance 推进 cosine scheduler。
 
@@ -431,6 +465,73 @@ def test_standing_budget_dry_run_no_inject(tmp_path):
     d = json.load(open(sf, encoding="utf-8"))
     assert "edit_budget" not in d["gate_data"]
     assert d["gate_data"]["scheduler"]["current_step"] == 0  # 未推进
+
+
+def test_standing_budget_capped_during_threat_cooldown(tmp_path, monkeypatch):
+    """违约 → 额度银行（2026-11-11）：冷却期内注入额度**减半封顶**（只读投影，不扣款、不进熵）。"""
+    import gk_threat as T
+    monkeypatch.setenv("GK_SESSION_ID", "thr3at01abcd")
+    monkeypatch.delenv("GATEKEEPER_EDIT_BUDGET", raising=False)
+    monkeypatch.delenv("GK_THREAT_BUDGET_FREEZE", raising=False)
+    gd = {
+        "project_type": "standing",
+        "scheduler": {"mode": "cosine", "max_lr": 4, "min_lr": 1,
+                      "total_steps": 6, "current_step": 0, "current_lr": 4},
+    }
+    sf = _write_state(tmp_path / "s.json", "ECO-SCAN", gate_data=gd)
+    T.record("thr3at01abcd", "canary_hit", state=sf)
+    r = _standing_run(sf, "ECO-SCAN", "ECO-READ")
+    assert r.get("ok") is True, r
+    eb = json.load(open(sf, encoding="utf-8"))["gate_data"]["edit_budget"]
+    assert (eb["max"], eb["remaining"]) == (12, 12), eb   # 24 → 减半
+    assert r["threat_advisory"]["reason"] == "threat_cooldown", r
+    assert (r["threat_advisory"]["from"], r["threat_advisory"]["to"]) == (24, 12)
+
+
+def test_standard_edit_budget_capped_during_cooldown(tmp_path, monkeypatch):
+    """standard 轨同一判据（`_edit_budget` 注入点），不是只钉 standing 一条路。"""
+    from gk_advance import _edit_budget
+    import gk_threat as T
+    monkeypatch.setenv("GK_SESSION_ID", "thr3at01abcd")
+    monkeypatch.delenv("GK_THREAT_BUDGET_FREEZE", raising=False)
+    sf = _write_state(tmp_path / "s.json", "STAGE_1", gate_data={
+        "scheduler": {"mode": "constant", "max_lr": 4, "min_lr": 0,
+                      "total_steps": 6, "current_step": 0, "current_lr": 4}})
+    T.record("thr3at01abcd", "canary_hit", state=sf)
+    d = json.load(open(sf, encoding="utf-8"))
+    out = _edit_budget(d, {"edit_used": 0}, False, sf)
+    assert (out["max"], out["remaining"]) == (12, 12), out
+    assert out["threat_advisory"]["reason"] == "threat_cooldown", out
+
+
+def test_threat_cap_fails_open_and_env_off(tmp_path, monkeypatch):
+    """台账不可读 / 显式关闭 ⟹ 原样放行（fail-open），绝不把账本问题变成 advance 崩溃面。"""
+    import gk_threat as T
+    monkeypatch.setenv("GK_SESSION_ID", "thr3at01abcd")
+    monkeypatch.delenv("GATEKEEPER_EDIT_BUDGET", raising=False)
+    monkeypatch.delenv("GK_THREAT_BUDGET_FREEZE", raising=False)
+    gd = {"project_type": "standing",
+          "scheduler": {"mode": "constant", "max_lr": 4, "min_lr": 1,
+                        "total_steps": 6, "current_step": 0, "current_lr": 4}}
+
+    def _boom(*a, **k):
+        raise OSError("ledger unreadable")
+
+    monkeypatch.setattr(T, "budget_freeze", _boom)
+    sf = _write_state(tmp_path / "s.json", "ECO-SCAN", gate_data=gd)
+    r = _standing_run(sf, "ECO-SCAN", "ECO-READ")
+    assert r.get("ok") is True, r
+    eb = json.load(open(sf, encoding="utf-8"))["gate_data"]["edit_budget"]
+    assert eb["max"] == 24, eb
+    assert r["threat_advisory"]["fail_open"] is True, r
+
+    # kill switch：GK_THREAT_BUDGET_FREEZE=0 ⟹ 连只读投影都不做（真实违约也被忽略）
+    monkeypatch.setenv("GK_THREAT_BUDGET_FREEZE", "0")
+    sf2 = _write_state(tmp_path / "s2.json", "ECO-SCAN", gate_data=dict(gd))
+    T.record("thr3at01abcd", "canary_hit", state=sf2)
+    r2 = _standing_run(sf2, "ECO-SCAN", "ECO-READ")
+    assert r2.get("ok") is True and "threat_advisory" not in r2, r2
+    assert json.load(open(sf2, encoding="utf-8"))["gate_data"]["edit_budget"]["max"] == 24
 
 
 def test_standard_edit_budget_semantics_unchanged(tmp_path):
@@ -754,3 +855,59 @@ def test_eco_audit_prereq_no_evidence_missing():
     from gk_advance import _eco_prereq_heuristic
     h = _eco_prereq_heuristic({"gate_data": {}}, "ECO-AUDIT")
     assert any(x["item"] == "audit_all" for x in h["missing"])
+
+
+# ── 判据1（2026-11-16）：host 快照只读消费者，advisory-only ────────────────────
+# 病象：`gk_audit_host.poll_once` 有 verdict 但全仓零消费者 ⟹ 判据1 无对象可判。
+# 判据：① 快照进 advance 结果；② **绝不参与任何判定分支**（AST 静态臂）。
+def test_判据1_host_advisory缺账本具名降级(tmp_path):
+    from gk_advance import _audit_host_advisory
+    sf = _write_state(tmp_path / "s.json", "AUDIT-STATE", gate_data={})
+    out = _audit_host_advisory(sf)
+    assert out.get("ok") is False, out
+    assert out.get("error") == "ledger_missing", out
+
+
+def test_判据1_host_advisory透出债务态(tmp_path, monkeypatch):
+    import gk_audit_host as H
+    from gk_advance import _audit_host_advisory
+    monkeypatch.setattr(H, "poll_once",
+                        lambda s, **kw: {"poll_ok": True, "verdict": "debt", "pending": 3,
+                                         "integrity_ok": True, "separation": "unknown"})
+    out = _audit_host_advisory(str(tmp_path / "s.json"))
+    assert out == {"ok": True, "verdict": "debt", "pending": 3,
+                   "integrity_ok": True, "separation": "unknown"}, out
+
+
+def test_判据1_host_advisory异常不影响推进(tmp_path, monkeypatch):
+    import gk_audit_host as H
+    from gk_advance import _audit_host_advisory
+    monkeypatch.setattr(H, "poll_once",
+                        lambda s, **kw: (_ for _ in ()).throw(RuntimeError("boom")))
+    out = _audit_host_advisory(str(tmp_path / "s.json"))
+    assert out.get("ok") is False and out.get("error") == "host_poll_failed", out
+
+
+def test_判据1_host_advisory不参与任何判定():
+    """静态臂：advisory 只允许出现在赋值/输出，不允许出现在任何 if/while/assert 条件里。"""
+    import ast
+    src = (Path(__file__).parent / "gk_advance.py").read_text(encoding="utf-8")
+    tree = ast.parse(src)
+    hits = []
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.If, ast.While, ast.Assert)):
+            seg = ast.get_source_segment(src, node.test) or ""
+            if "audit_host" in seg:
+                hits.append(seg[:120])
+    assert not hits, "host advisory 进入了判定分支：%r" % (hits,)
+    assert 'result["audit_host_advisory"] = _audit_host_advisory(state_file)' in src
+
+
+def test_判据1_advance结果带advisory且仍放行(tmp_path):
+    """行为臂：AUDIT-MEMORY 推进在无账本时仍 ok=true，并带具名 advisory。"""
+    sf = _write_state(tmp_path / "s.json", "AUDIT-STATE", gate_data={"project_type": "analysis"})
+    r = _run(sf, "AUDIT-MEMORY", force=False, dry_run=False, env={}, monitor_json=None,
+             cc={}, remote="", skill_dir=str(tmp_path))
+    assert r.get("ok") is True, r
+    adv = r.get("audit_host_advisory") or {}
+    assert adv.get("ok") is False and adv.get("error") == "ledger_missing", adv

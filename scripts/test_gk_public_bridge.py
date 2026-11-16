@@ -194,3 +194,66 @@ def test_no_force_push_path_and_one_way_source():
     assert "--force" not in src and " -f " not in src, "出现 force push 路径"
     for bad in ('"fetch"', '"pull"', '"checkout"'):
         assert bad not in src, "出现反向取数动作（破坏单向权威）：" + bad
+
+
+# ── 2026-11-09：git-workflow 接入发布管线（检测 + 推送 + 回退）──────────────
+_GOOD_GW = '''#!/bin/bash
+# native implementation marker
+if timeout "$timeout" git push "$push_url" "$branch" 2>&1; then :; fi
+'''
+_BAD_GW = '''#!/bin/bash
+# old broken delegation
+python "$SKILL_DIR/../github-push/github_push.py" git-push "$@"
+'''
+
+
+def _fake_gw(tmp_path, name, body):
+    p = tmp_path / name
+    p.write_text(body, encoding="utf-8")
+    p.chmod(0o755)
+    return str(p)
+
+
+def test_detect_git_workflow_accepts_native(tmp_path):
+    good = _fake_gw(tmp_path, "gw-good.sh", _GOOD_GW)
+    assert pb.detect_git_workflow([good]) == good
+
+
+def test_detect_git_workflow_rejects_old_delegate(tmp_path):
+    bad = _fake_gw(tmp_path, "gw-bad.sh", _BAD_GW)
+    assert pb.detect_git_workflow([bad]) == ""
+
+
+def test_detect_git_workflow_env_override(tmp_path, monkeypatch):
+    good = _fake_gw(tmp_path, "gw-env.sh", _GOOD_GW)
+    monkeypatch.setenv("GK_GIT_WORKFLOW", good)
+    assert pb.detect_git_workflow([], use_env=True) == good
+
+
+def test_push_branch_uses_git_workflow_first(tmp_path):
+    good = _fake_gw(tmp_path, "gw.sh", _GOOD_GW)
+    calls = []
+
+    def runner(cmd, cwd=None):
+        calls.append((cmd, cwd))
+        return 0, "ok", ""
+
+    rc, _out, _err, used = pb.push_branch("/tmp/repo", "HEAD:main", gw=good, runner=runner)
+    assert rc == 0 and used == "git-workflow"
+    assert calls[0][0][:3] == ["bash", good, "push"]
+    assert len(calls) == 1
+
+
+def test_push_branch_falls_back_on_gw_failure(tmp_path):
+    good = _fake_gw(tmp_path, "gw.sh", _GOOD_GW)
+    calls = []
+
+    def runner(cmd, cwd=None):
+        calls.append(cmd)
+        if "git-workflow.sh" in " ".join(cmd) or cmd[1:2] == [good]:
+            return 1, "", "boom"
+        return 0, "ok", ""
+
+    rc, _out, _err, used = pb.push_branch("/tmp/repo", "HEAD:main", gw=good, runner=runner)
+    assert rc == 0 and used == "git"
+    assert calls[-1][:4] == ["git", "-C", "/tmp/repo", "push"]

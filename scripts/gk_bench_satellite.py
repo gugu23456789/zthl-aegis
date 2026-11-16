@@ -209,8 +209,10 @@ def main(argv=None):
         payloads, state_bytes, reclaim_n = [1024], 128 * 1024, 50
     else:
         mode = "quick"
-        cases = [(n, b, "finding") for n in (100, 300) for b in (1, 10)]
-        payloads, state_bytes, reclaim_n = [256], 128 * 1024, 30
+        # 2026-11-14（口径对齐）：quick 取 full 同名的批量路径，保证与 full 基线可对比。
+        #   batch=1 的逐条路径仍由 full/夜间覆盖（太慢，发布前门不跑）。
+        cases = [(1000, 100, k) for k in ("finding", "history")]
+        payloads, state_bytes, reclaim_n = [1024], 128 * 1024, 30
     scenarios = []
     for payload in payloads:
         for n, b, kind in cases:

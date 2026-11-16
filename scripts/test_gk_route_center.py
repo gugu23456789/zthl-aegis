@@ -29,6 +29,69 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import gk_route_center as grc
 
 
+def test_attach_owner_adds_automation_guidance(tmp_path):
+    """派发回包（冷建/复用/池三路共用 `_attach_owner`）必须带 `note`+`next`。
+
+    病象：池派发只回 `{ok,slot,worktree,...}` ⟹ agent 只能手工拼「commit/merge/reclaim」，
+    拼错就跑到别处（实测：`--repo $SKILL_DIR` 算错池根）。引导单源 = `gk_worktree_pool.GUIDE_*`。
+    """
+    out = grc._attach_owner({"ok": True, "worktree": str(tmp_path / "x")}, str(tmp_path / "x"))
+    assert out.get("note") and out.get("next"), out
+    assert "merge --no-ff" in out["next"], out
+    # 显式给的值优先（池路径自带同源文案，不得被覆盖成别的）
+    out2 = grc._attach_owner({"note": "custom", "next": "n2"}, str(tmp_path / "x"))
+    assert (out2["note"], out2["next"]) == ("custom", "n2"), out2
+
+
+def test_pool_hub_is_default_on_and_opt_out(monkeypatch):
+    """中枢走热池**默认开**（2026-11-11 owner 裁定）；`GK_WT_POOL_HUB=0` 才是关。
+
+    默认关的旧理由（discover 不认 `_pool` 布局）已消除 ⟹ 必须是 opt-out，否则新装的
+    finding/family/plan 派发会继续走 34s 冷建（机制存在但不生效）。
+    """
+    monkeypatch.delenv("GK_WT_POOL_HUB", raising=False)
+    assert grc._pool_hub_enabled() is True
+    monkeypatch.setenv("GK_WT_POOL_HUB", "1")
+    assert grc._pool_hub_enabled() is True
+    monkeypatch.setenv("GK_WT_POOL_HUB", "0")
+    assert grc._pool_hub_enabled() is False
+
+
+def test_resolve_worktree_sees_pool_slot(tmp_path, monkeypatch):
+    """**池槽发现**（2026-11-11）：`<root>/_pool/<repo>/slot-N` 必须能被 L3 探到。
+
+    病象：`WORKTREE_ROUTES` 的路径规则推不出槽的真分支（目录名恒 `slot-N`，分支在 HEAD 上）
+    ⟹ 中枢走池派发后 `discover` 探不回该树（`GK_WT_POOL_HUB=1` 因此一直被挡）。
+    判据 = 读槽 HEAD（0 子进程），空闲槽 `gk-pool/N` 跳过。
+    """
+    root = tmp_path / "wts"
+    # 真实布局 = `<root>/_pool/<主仓名>/slot-N`（不是 `<root>/<repo>/_pool/...`）
+    slot = root / "_pool" / "repo" / "slot-0"
+    slot.mkdir(parents=True)
+    gd = tmp_path / "gd"
+    gd.mkdir()
+    (slot / ".git").write_text("gitdir: %s\n" % gd, encoding="utf-8")
+    (gd / "HEAD").write_text("ref: refs/heads/agent/session/abc123\n", encoding="utf-8")
+
+    monkeypatch.setattr(grc, "DEV_WORKTREE_ROOTS", (str(root),))
+    monkeypatch.delenv("GATEKEEPER_WORKTREE_ROOT", raising=False)
+    monkeypatch.delenv("GK_WORKTREE_REPO", raising=False)
+    monkeypatch.delenv("GK_PLAN_FILE", raising=False)
+
+    out = grc.resolve_worktree(skill_dir=str(grc.DEFAULT_SKILL),
+                               main_repo_wsl=str(tmp_path / "repo"), branch_lines=[])
+    assert out["detected"] is True, out
+    assert out["route"] == "pool", out
+    assert out["branch"] == "agent/session/abc123", out
+    assert out["worktree"] == str(slot), out
+
+    # 空闲槽（gk-pool/N）不是会话树 ⟹ 不得被当成分发目标
+    (gd / "HEAD").write_text("ref: refs/heads/gk-pool/0\n", encoding="utf-8")
+    idle = grc.resolve_worktree(skill_dir=str(grc.DEFAULT_SKILL),
+                                main_repo_wsl=str(tmp_path / "repo"), branch_lines=[])
+    assert idle["detected"] is False, idle
+
+
 def _bash_path(p):
     """Windows 绝对路径 → WSL 可解析的 `/mnt/<drive>/...`；非 Windows 原样。
 
@@ -1415,8 +1478,10 @@ class TestL4DomainRoute:
         走子进程 = 真实 CLI 契约（`main()` 的 argv 解析 + dispatch），非 python API 层自证。"""
         import subprocess
         plan = tmp_path / "p.md"
+        # 方案 A（2026-11-14）：域路由要求计划**已定稿**（缺省 draft ⟹ 回主 state）。
         plan.write_text("<!-- META\nphases: R1\ntarget_repo: skill\n"
-                        "state_domain: gp.r1\n-->\nbody", encoding="utf-8")
+                        "state_domain: gp.r1\nplan_status: frozen\n-->\nbody",
+                        encoding="utf-8")
         base = tmp_path / ".gatekeeper.state"
         _write_state(base, str(tmp_path))
         dom = tmp_path / ".gatekeeper.state.gp.r1"
@@ -1472,8 +1537,10 @@ class TestL4DomainRoute:
         按自己声明的计划落到域化 state，只能共用默认 state。"""
         import subprocess
         plan = tmp_path / "rt17.md"
+        # 方案 A（2026-11-14）：域路由要求计划**已定稿**（缺省 draft ⟹ 回主 state）。
         plan.write_text("<!-- META\nphases: R1\ntarget_repo: skill\n"
-                        "state_domain: gp.rt17a2b\n-->\nbody", encoding="utf-8")
+                        "state_domain: gp.rt17a2b\nplan_status: frozen\n-->\nbody",
+                        encoding="utf-8")
         sd = tmp_path / "skill"
         sd.mkdir()
         base = tmp_path / ".gatekeeper.state"

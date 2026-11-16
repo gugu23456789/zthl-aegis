@@ -1,0 +1,109 @@
+{
+  "_comment": "注释骨架登记表（单一事实源）。本表只登记**形态**（某位置该长什么样、需要哪些槽位），不登记具体内容——内容由调用方按占位符填入。消费方 = scripts/gk_comment_scaffold.py（唯一实现，禁第二份形态清单）；写作规格 = references/comment-template.md；漂移由该模块单测守护。",
+  "_source": "9 个形态取自 2026-11-10 对技能仓 762 个源码文件（42,035 行注释）的实测归纳，样例见 references/comment-template.md §1。",
+  "version": 1,
+  "placeholders_common": ["{date}", "{id}", "{why}", "{boundary}", "{evidence}", "{delta}"],
+  "positions": [
+    "file-header",
+    "module-docstring",
+    "anchor-line",
+    "contract",
+    "incident",
+    "inline-why",
+    "section-divider",
+    "marker",
+    "change-log"
+  ],
+  "templates": [
+    {
+      "id": "shell-file-header",
+      "position": "file-header",
+      "lang": ["sh"],
+      "keywords": ["文件头", "脚本头", "banner", "header", "usage", "file-header"],
+      "desc": "Shell 文件头：一句话职责 + 痛点/机理/正解/边界 + Usage/Env/Exit。",
+      "when": "新增 shell 脚本，或脚本职责发生整体变化时",
+      "placeholders": ["{file}", "{purpose}", "{id}", "{date}", "{ruling}", "{pain}", "{mechanism}", "{approach}", "{boundary}", "{usage}", "{env}", "{exit}"],
+      "body": "#!/bin/bash\n# {file} — {purpose}（{id}，{date}；{ruling}）\n# =============================================================================\n# 痛点（实测）：{pain}\n# 机理：{mechanism}\n# 正解：{approach}\n# 边界：{boundary}\n#\n# Usage:\n#   bash scripts/{file} {usage}\n# Env: {env}\n# Exit: {exit}\nset -uo pipefail"
+    },
+    {
+      "id": "python-module-docstring",
+      "position": "module-docstring",
+      "lang": ["py"],
+      "keywords": ["模块头", "docstring", "文件头", "module", "契约", "module-docstring"],
+      "desc": "Python 模块 docstring：职责 + 契约三段 + 单一事实源。",
+      "when": "新增 Python 模块，或模块对外契约变化时",
+      "placeholders": ["{file}", "{purpose}", "{id}", "{date}", "{input}", "{output}", "{failure}", "{single_source}", "{forbidden_impl}"],
+      "body": "\"\"\"{file} — {purpose}（{id}，{date}）\n\n契约:\n  - 输入: {input}\n  - 输出: {output}\n  - 失败: {failure}\n\n单一事实源: {single_source}；禁止第二实现: {forbidden_impl}。\n\"\"\""
+    },
+    {
+      "id": "anchor-line",
+      "position": "anchor-line",
+      "lang": ["py", "sh"],
+      "keywords": ["锚点", "变更行", "工程编号", "净 0 行", "净行数", "anchor", "anchor-line"],
+      "desc": "锚点行：日期 + 工程编号 + 结论 + 原因 + 净行数 + 证据，一行内闭合。",
+      "when": "任何非平凡变更（改语义/接线/边界），用于事后追溯与锚漂移判定",
+      "placeholders": ["{date}", "{id}", "{what}", "{why}", "{delta}", "{evidence}"],
+      "body": "# {date} {id}：{what}；{why}；**净 {delta} 行**；证据：{evidence}"
+    },
+    {
+      "id": "contract-docstring",
+      "position": "contract",
+      "lang": ["py"],
+      "keywords": ["函数契约", "接口", "contract", "输入输出", "失败姿态", "docstring"],
+      "desc": "函数/类契约 docstring：输入/输出/失败三段，禁止复述实现。",
+      "when": "新增或修改对外函数、类、CLI 子命令的契约时",
+      "placeholders": ["{symbol}", "{purpose}", "{id}", "{date}", "{input}", "{output}", "{failure}"],
+      "body": "\"\"\"{symbol} — {purpose}（{id}，{date}）\n\n契约:\n  - 输入: {input}\n  - 输出: {output}\n  - 失败: {failure}\n\"\"\""
+    },
+    {
+      "id": "incident-replay",
+      "position": "incident",
+      "lang": ["py", "sh"],
+      "keywords": ["事故", "复盘", "病灶", "根因", "判据", "incident", "postmortem"],
+      "desc": "事故/决策复盘块：何时 + 现象 + 根因 + 判据 + 防线，防后人回退。",
+      "when": "修复一次真实事故，或做出一项反直觉决策时",
+      "placeholders": ["{forensics}", "{date}", "{symptom}", "{root_cause}", "{criteria1}", "{criteria2}", "{defense}"],
+      "body": "# 事故（{forensics}）：{date} {symptom}。\n# 根因：{root_cause}。\n# 判据：① {criteria1}；② {criteria2}。\n# 防线：{defense}。"
+    },
+    {
+      "id": "inline-why",
+      "position": "inline-why",
+      "lang": ["py", "sh"],
+      "keywords": ["行内", "为什么", "why", "反直觉", "inline", "inline-why"],
+      "desc": "行内 why：只解释反直觉点与后果，不解释代码在做什么。",
+      "when": "某行/某块的写法不明显，或存在更容易但错误的写法时",
+      "placeholders": ["{id}", "{date}", "{why}", "{consequence}"],
+      "body": "# {id}（{date}）：{why} —— {consequence}。"
+    },
+    {
+      "id": "section-divider",
+      "position": "section-divider",
+      "lang": ["sh"],
+      "keywords": ["分节", "分隔线", "区块", "section", "divider"],
+      "desc": "分节线：单文件超过 ~300 行、且区块有独立契约时使用。",
+      "when": "大文件需要给 grep/人眼定位，且每节可独立描述",
+      "placeholders": ["{section}", "{id}"],
+      "body": "# ─── {section}（{id}）───"
+    },
+    {
+      "id": "marker-todo",
+      "position": "marker",
+      "lang": ["py", "sh"],
+      "keywords": ["TODO", "待办", "标记", "marker", "风险", "WARN"],
+      "desc": "标记：TODO 必须带 owner/触发条件，裸 TODO 视为无效注释。",
+      "when": "确需留下未完成项或已知风险时",
+      "placeholders": ["{owner_or_trigger}", "{task}", "{trigger}", "{risk}"],
+      "body": "# TODO({owner_or_trigger}): {task}；触发: {trigger}；缺省风险: {risk}"
+    },
+    {
+      "id": "change-log",
+      "position": "change-log",
+      "lang": ["py", "sh"],
+      "keywords": ["变更记录", "changelog", "追加", "append", "change-log"],
+      "desc": "追加式变更记录：旧行不改写，新结论另起一行。",
+      "when": "同一段注释需要记录多次变更/复核时",
+      "placeholders": ["{date}", "{id}", "{what}", "{delta}"],
+      "body": "# 变更记录（append-only，旧行不改写）:\n# - {date} {id}: {what}；净 {delta} 行。"
+    }
+  ]
+}

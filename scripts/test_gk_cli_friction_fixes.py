@@ -61,6 +61,32 @@ class TestPushActionParsing:
         assert str(tmp_path) in (d.get("url") or ""), d
 
 
+# ── ①b SSH scp 形态远端（`git@host:owner/repo.git`）前缀匹配 ────────────────
+# 病象（2026-11-10 实测）：白名单模式是 `atomgit.com/`（**斜杠**），而 SSH scp 形态 URL 是
+#   `git@atomgit.com:<user>/x.git`（**冒号**）⟹ 子串匹配恒不命中 ⟹ 本仓自己的 origin 被判
+#   `remote_not_allowed`，只能靠放宽 `GK_PUSH_REMOTE_ALLOW=atomgit.com` 绕过。
+# 修法：匹配前把 scp 形态归一为 `host/path`（不改 `url` 回显，仍报原始值）。
+class TestScpRemoteForm:
+    def _repo_with_remote(self, tmp_path, url):
+        repo = tmp_path / "rp"
+        repo.mkdir()
+        _git(repo, "init", "-q", "-b", "master")
+        _git(repo, "remote", "add", "origin", url)
+        return repo
+
+    def test_scp_form_allowed_host_passes(self, tmp_path):
+        repo = self._repo_with_remote(tmp_path, "git@atomgit.com:owner/repo.git")
+        d = json.loads(_cli("push", "--repo", str(repo)).stdout)
+        assert d.get("error") != "remote_not_allowed", d
+        assert d.get("ok") is True, d
+
+    def test_scp_form_unknown_host_still_blocked(self, tmp_path):
+        repo = self._repo_with_remote(tmp_path, "git@evil.example.com:owner/repo.git")
+        d = json.loads(_cli("push", "--repo", str(repo)).stdout)
+        assert d.get("error") == "remote_not_allowed", d
+        assert "evil.example.com" in (d.get("url") or ""), d
+
+
 # ── ② `push confirm` 刷新 remote-tracking ref ───────────────────────────────
 class TestPushTrackingRef:
     def test_confirm_refreshes_remote_tracking_ref(self, tmp_path):

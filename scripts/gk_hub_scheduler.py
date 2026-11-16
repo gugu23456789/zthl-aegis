@@ -332,28 +332,58 @@ def release(fd: int) -> None:
 
 
 # ────────────────────────── 准入 + 上下文 ──────────────────────────
+def effective_free_mb(reserved_mb: int = 0, free_mb=None):
+    """**有效**空闲内存 = 空闲 − 已预留（408 ⑦，2026-11-16）。
+
+    分层：预留读数由**调用方**传入（accept 启动闸读 `gk_audit_lifecycle.reserved_claim`），
+    本模块**不 import** lifecycle（保持单向依赖：lifecycle→scheduler 探针单源）。
+    `free_mb=None` ⟹ 现场读 `free_avail_mb()`；仍不可用 ⟹ `None`（调用方按 fail-safe 处理）。
+    默认 `reserved_mb=0` ⟹ 与旧行为逐字一致（既有调用方零回归）。
+    """
+    fm = free_avail_mb() if free_mb is None else free_mb
+    if fm is None:
+        return None
+    try:
+        r = max(0, int(reserved_mb or 0))
+    except (TypeError, ValueError):
+        r = 0
+    return max(0, int(fm) - r)
+
+
 def admit(root: str = None, max_c: int = None, min_mb: int = None,
-          timeout_s: float = None) -> dict:
-    """准入判定（内存闸 → 槽位闸）。返回 {"ok", ...}；失败附 reason（不静默）。"""
+          timeout_s: float = None, reserved_mb: int = 0) -> dict:
+    """准入判定（内存闸 → 槽位闸）。返回 {"ok", ...}；失败附 reason（不静默）。
+
+    `reserved_mb`：审计模型 warming 期预留（读侧 claim 值）。内存闸比较的是**有效空闲**
+    （`effective_free_mb`），返回值同时带 `free_mb`/`effective_free_mb`/`reserved_mb`。
+    """
     root = root or slots_root()
     max_c = max_concurrency() if max_c is None else max_c
     min_mb = min_free_mb() if min_mb is None else min_mb
     timeout_s = acquire_timeout_s() if timeout_s is None else timeout_s
     fm = free_avail_mb()
-    if fm is not None and min_mb > 0 and fm < min_mb:
-        return {"ok": False, "reason": "low_memory", "free_mb": fm, "min_free_mb": min_mb}
+    eff = effective_free_mb(reserved_mb, free_mb=fm)
+    try:
+        rsv = max(0, int(reserved_mb or 0))
+    except (TypeError, ValueError):
+        rsv = 0
+    if eff is not None and min_mb > 0 and eff < min_mb:
+        return {"ok": False, "reason": "low_memory", "free_mb": fm,
+                "effective_free_mb": eff, "reserved_mb": rsv, "min_free_mb": min_mb}
     got = try_acquire(root, max_c, timeout_s)
     if got is None:
         return {"ok": False, "reason": "low_slots", "max_concurrency": max_c,
-                "timeout_s": timeout_s}
+                "timeout_s": timeout_s, "reserved_mb": rsv}
     fd, idx = got
-    return {"ok": True, "fd": fd, "slot": idx, "free_mb": fm, "max_concurrency": max_c}
+    return {"ok": True, "fd": fd, "slot": idx, "free_mb": fm,
+            "effective_free_mb": eff, "reserved_mb": rsv, "max_concurrency": max_c}
 
 
 @contextlib.contextmanager
-def gate(root: str = None, max_c: int = None, min_mb: int = None, timeout_s: float = None):
+def gate(root: str = None, max_c: int = None, min_mb: int = None, timeout_s: float = None,
+         reserved_mb: int = 0):
     """`with gate():` 持槽；准入失败 ⟹ 抛 `HubGateDenied`（fail-loud）。"""
-    res = admit(root, max_c, min_mb, timeout_s)
+    res = admit(root, max_c, min_mb, timeout_s, reserved_mb)
     if not res.get("ok"):
         raise HubGateDenied(res)
     try:

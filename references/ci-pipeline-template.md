@@ -11,6 +11,7 @@ updated: 2026-11-02
 > **性质**：纯工程样板，适用于含 WASM 构建 + 原生二进制的 C++ 项目（GitHub Actions）。
 > **参考实现**：spz2glb `test-wasm-build.yml`（3 jobs，124 次运行全绿）、spz_gatekeeper `ci.yml`（4 jobs + deploy）。
 > **原则**：workflow 是 CI/CD 的源代码——改动后必须 actionlint/zizmor 校验。
+> **机器可判子集**：`references/ci-checklist.json`（`gk_template_audit.py apply --id ci-checklist --root <仓根>`）。
 
 ---
 

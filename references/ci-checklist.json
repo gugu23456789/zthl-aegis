@@ -1,0 +1,64 @@
+{
+  "_comment": "CI 标准管线 checklist（机器可判子集）。只登记**可机检**的必选项；模板正文仍是 references/ci-pipeline-template.md。消费方 = scripts/gk_template_audit.py apply。",
+  "_source": "2026-11-11 从 references/ci-pipeline-template.md §2/§3/§4 抽取；判据均为正则，不解析 YAML AST（零依赖）。",
+  "version": 1,
+  "target_glob": ".github/workflows/*.yml",
+  "items": [
+    {
+      "id": "permissions-minimal",
+      "desc": "基础配置必带最小权限 permissions: contents: read",
+      "pattern": "permissions:\\s*\\{[^}]*contents:\\s*read",
+      "level": "ERROR",
+      "mode": "present"
+    },
+    {
+      "id": "concurrency",
+      "desc": "并发组 + cancel-in-progress，防重复运行互踩",
+      "pattern": "concurrency:\\s*(\\{|$)",
+      "level": "WARN",
+      "mode": "present"
+    },
+    {
+      "id": "manual-dispatch",
+      "desc": "提供 workflow_dispatch 手动触发入口",
+      "pattern": "workflow_dispatch:",
+      "level": "WARN",
+      "mode": "present"
+    },
+    {
+      "id": "shell-strict",
+      "desc": "shell 步骤必须 set -euo pipefail（fail-loud）",
+      "pattern": "set -euo pipefail",
+      "level": "ERROR",
+      "mode": "present"
+    },
+    {
+      "id": "shell-bash",
+      "desc": "shell 步骤显式 shell: bash（跨平台一致）",
+      "pattern": "shell:\\s*bash",
+      "level": "WARN",
+      "mode": "present"
+    },
+    {
+      "id": "security-audit",
+      "desc": "security-audit job 必须跑 actionlint / zizmor",
+      "pattern": "actionlint|zizmor",
+      "level": "ERROR",
+      "mode": "present"
+    },
+    {
+      "id": "wasm-precheck-autofix",
+      "desc": "若含 WASM，pre-check 必须传 --auto-fix（CI 口径）",
+      "pattern": "wasm-pre-check[^\\n]*--auto-fix",
+      "level": "WARN",
+      "mode": "present"
+    },
+    {
+      "id": "no-forbidden-node24-hack",
+      "desc": "禁止把 FORCE_JAVASCRIPT_ACTIONS_TO_NODE24 当通用必带（仅环境需要时加）",
+      "pattern": "FORCE_JAVASCRIPT_ACTIONS_TO_NODE24",
+      "level": "INFO",
+      "mode": "absent"
+    }
+  ]
+}

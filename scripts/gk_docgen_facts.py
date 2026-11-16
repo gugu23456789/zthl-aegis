@@ -27,6 +27,13 @@ from pathlib import Path
 _SKILL_DIR = Path(__file__).resolve().parent.parent
 _START = "<!-- GK-FACTS:START（由 scripts/gk_docgen_facts.py 生成，勿手改） -->"
 _END = "<!-- GK-FACTS:END -->"
+# 2026-11-12（owner）：ECC-FINDING 写入规范（**正本**）也改为**事实块自动刷新** ——
+#   原状该文档纯手工维护 ⟹ 代码里的白名单/阈值改了，正文静默滞后（`ecc-write-spec.md` 只在
+#   `_REF_SECTION` 里被当作「索引项」检查，没人写它的内容）。现新增一块，单源 = `gk_finding.py`
+#   的登记点（源/证据种类/关单可接受证据/oracle/严重度/时效阈值），禁第二份清单。
+_FSTART = "<!-- GK-FINDING-FACTS:START（由 scripts/gk_docgen_facts.py 生成，勿手改） -->"
+_FEND = "<!-- GK-FINDING-FACTS:END -->"
+_FINDING_DOC = "references/ecc-write-spec.md"
 DOCS = ("SKILL.md", "references/architecture-overview.md")
 
 
@@ -349,6 +356,55 @@ def render_state_wall(d: dict) -> str:
     return "\n".join(out)
 
 
+def collect_finding_facts(sd: Path) -> dict:
+    """ECC-FINDING 的**机械事实**（单源 = `scripts/gk_finding.py` 的登记点；失败项 None，不猜）。"""
+    out = {"stale_aging_days": None, "stale_stale_days": None, "sources": None,
+           "verify_sources": None, "accept_kinds": None, "weak_accept_kinds": None,
+           "oracles": None, "severities": None, "report_fields": None}
+    try:
+        sys.path.insert(0, str(sd / "scripts"))
+        import gk_finding as GF  # noqa: E402 — 只读登记点
+        out.update({
+            "stale_aging_days": GF.STALE_AGING_DAYS,
+            "stale_stale_days": GF.STALE_STALE_DAYS,
+            "sources": list(GF._ECC_SOURCES),
+            "verify_sources": list(GF._VERIFY_SOURCES),
+            "accept_kinds": list(GF._ACCEPT_KINDS),
+            "weak_accept_kinds": list(GF._WEAK_ACCEPT_KINDS),
+            "oracles": list(GF._CLOSURE_ORACLES),
+            "severities": list(GF._SEVERITIES),
+            "report_fields": list(GF._REPORT_ALLOWED),
+        })
+    except Exception:  # noqa: BLE001 — 边界：不可用 ⟹ 留 None（渲染为 `?`，check 会报漂移）
+        pass
+    return out
+
+
+def render_finding_facts(f: dict) -> str:
+    """`ecc-write-spec.md` 的事实块（表格；值全部来自 `gk_finding.py`）。"""
+    def _j(x):
+        return " · ".join("`%s`" % i for i in x) if x else "?"
+
+    rows = [
+        ("`source` 合法值", _j(f.get("sources")), "`gk_finding._ECC_SOURCES`"),
+        ("`verify_source` 合法 kind", _j(f.get("verify_sources")), "`gk_finding._VERIFY_SOURCES`"),
+        ("关单可接受证据 kind", _j(f.get("accept_kinds")), "`gk_finding._ACCEPT_KINDS`"),
+        ("其中视为**弱证据**（不可单独）", _j(f.get("weak_accept_kinds")),
+         "`gk_finding._WEAK_ACCEPT_KINDS`"),
+        ("`closure_oracle` 合法值", _j(f.get("oracles")), "`gk_finding._CLOSURE_ORACLES`"),
+        ("`severity` 合法值（升序）", _j(f.get("severities")), "`gk_finding._SEVERITIES`"),
+        ("`--from-report` 允许字段", _j(f.get("report_fields")), "`gk_finding._REPORT_ALLOWED`"),
+        ("时效 `aging` 下界（天）", f.get("stale_aging_days") if f.get("stale_aging_days") is not None else "?",
+         "`gk_finding.STALE_AGING_DAYS`"),
+        ("时效 `stale` 下界（天）", f.get("stale_stale_days") if f.get("stale_stale_days") is not None else "?",
+         "`gk_finding.STALE_STALE_DAYS`"),
+    ]
+    out = [_FSTART, "| 事实 | 值 | 来源（可复算） |", "|:--|:--|:--|"]
+    out += ["| %s | %s | %s |" % r for r in rows]
+    out.append(_FEND)
+    return "\n".join(out)
+
+
 def _doc_blocks(sd: Path) -> list:
     facts = render(collect(str(sd)))
     st = collect_state(sd)
@@ -358,6 +414,9 @@ def _doc_blocks(sd: Path) -> list:
         (_README, _RSTART, _REND, render_refs(sd), "GK-REFS"),
         (_STATE_DOC, _CAP_START, _CAP_END, render_state_cap(st), "GK-CAP"),
         (_STATE_DOC, _WALL_START, _WALL_END, render_state_wall(st), "GK-WALL"),
+        # 2026-11-12：ECC-FINDING 正本的**机械事实块**（自动刷新）。
+        (_FINDING_DOC, _FSTART, _FEND, render_finding_facts(collect_finding_facts(sd)),
+         "GK-FINDING-FACTS"),
     ]
 
 
@@ -385,7 +444,7 @@ def write(skill_dir: str = "") -> dict:
 
 
 def check(skill_dir: str = "") -> dict:
-    """doc-align 消费面：事实块（2 份）+ README 索引 + state 容量/水位表必须与活文件一致。"""
+    """doc-align 消费面：事实块（2 份）+ ECC-FINDING 正本事实块 + README 索引 + state 容量/水位表必须与活文件一致。"""
     sd = Path(skill_dir) if skill_dir else _SKILL_DIR
     bad = []
     try:
@@ -401,7 +460,7 @@ def check(skill_dir: str = "") -> dict:
         except (OSError, ValueError) as e:
             bad.append("%s: %s" % (rel, e))
     return {"check": "gk_facts", "status": "FAIL" if bad else "PASS",
-            "detail": "; ".join(bad) if bad else "事实块 ×2 + README 索引 + state 容量/水位表一致"}
+            "detail": "; ".join(bad) if bad else "事实块 ×3（含 ECC-FINDING 正本）+ README 索引 + state 容量/水位表一致"}
 
 
 def main(argv=None) -> int:

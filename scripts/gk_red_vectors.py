@@ -54,6 +54,18 @@ def load(path: str = "") -> dict:
     ids = [v.get("id") for v in data["vectors"]]
     if len(ids) != len(set(ids)):
         raise ValueError("登记表存在重复向量 id")
+    dv = data.get("dynamic_vectors", [])
+    if not isinstance(dv, list):
+        raise ValueError("dynamic_vectors 需为列表")
+    dids = [d.get("id") for d in dv]
+    if len(dids) != len(set(dids)):
+        raise ValueError("dynamic_vectors 存在重复 id")
+    for d in dv:
+        for k in ("id", "station", "runner", "composes"):
+            if not d.get(k):
+                raise ValueError("dynamic_vector 缺字段 %s: %r" % (k, d.get("id")))
+    if set(dids) & set(ids):
+        raise ValueError("dynamic_vector id 与静态向量 id 冲突")
     return data
 
 
@@ -96,6 +108,24 @@ def chain_stations(path: str = "") -> list:
         return _STEP_RE.findall(p.read_text(encoding="utf-8"))
     except OSError:
         return []
+
+
+def runtime_scenario_ids(skill_dir: Path) -> set:
+    """`red_runtime/scenarios.py::SCENARIOS` 的剧本 id 集合（`kind:"runtime"` 的「代码侧」）。
+
+    运行时向量的执行体不在 `_red_attacks.py`，而在场景剧本里 ⟹ 集合等价必须对**各自代码侧**
+    做：否则运行时向量会被误判为「死向量（表有、代码无）」。解析失败 ⟹ 空集（调用方按
+    `chain_stations` 同口径跳过，不猜）。
+    """
+    p = skill_dir / "scripts" / "red_runtime" / "scenarios.py"
+    try:
+        text = p.read_text(encoding="utf-8")
+    except OSError:
+        return set()
+    m = re.search(r"^SCENARIOS\s*=\s*\[(.*?)^\]", text, re.S | re.M)
+    if not m:
+        return set()
+    return set(re.findall(r'\{"id":\s*"([^"]+)"', m.group(1)))
 
 
 def coverage(reg: dict) -> dict:
@@ -387,10 +417,20 @@ def check(skill_dir: str = "", code_text: str = None) -> dict:
     code = scan_code(code_text, sids)
     reg_ids = set(vector_ids(reg))
     code_ids = set(code["static"])
-    for vid in sorted(code_ids - reg_ids):
+    # 运行时向量（`kind:"runtime"`）的代码侧是场景剧本，不在 `_red_attacks.py` ⟹ 分开对拍，
+    #   否则必然误报「死向量」（2026-11-13 实测：14 条 runtime 全被误判）。
+    rt_ids = {v["id"] for v in reg["vectors"] if v.get("kind") == "runtime"}
+    reg_static = reg_ids - rt_ids
+    for vid in sorted(code_ids - reg_static):
         errors.append("向量未登记（代码有、表无）: " + vid)
-    for vid in sorted(reg_ids - code_ids):
+    for vid in sorted(reg_static - code_ids):
         errors.append("死向量（表有、代码无）: " + vid)
+    rt_code = runtime_scenario_ids(sd)
+    if rt_code:
+        for vid in sorted(rt_ids - rt_code):
+            errors.append("运行时向量未落地（表有、剧本无）: " + vid)
+        for vid in sorted(rt_code - rt_ids):
+            errors.append("剧本未登记（代码有、表无）: " + vid)
     reg_dyn = {d["pattern"] for d in reg["dynamic_patterns"]}
     for pat in sorted(set(code["dynamic"]) - reg_dyn):
         errors.append("动态模板未登记: " + pat)
@@ -408,6 +448,36 @@ def check(skill_dir: str = "", code_text: str = None) -> dict:
         if why:
             errors.append("%s: %s" % (v["id"], why))
 
+    # 2026-11-10（动态组合向量）：静态向量只看**单条代码形态**，全过 ≠ 并发下不被绕过。
+    #   `dynamic_vectors` 把多条静态向量组合成**真实多进程场景**，并要求 runner 真的可执行
+    #   （文件+符号存在）—— 防「登记了动态向量但测试被删/改名」的假覆盖。
+    dyn = reg.get("dynamic_vectors", [])
+    by_id = {v["id"]: v for v in reg["vectors"]}
+    for d in dyn:
+        did, st = d["id"], d.get("station")
+        if not str(did).startswith("RED-DYN-"):
+            errors.append("dynamic_vector id 需以 RED-DYN- 开头: " + str(did))
+        if st not in sids:
+            errors.append("dynamic_vector 站点未登记: %s → %r" % (did, st))
+        if d.get("severity") not in ("critical", "high", "medium", "low", "info"):
+            errors.append("dynamic_vector severity 非法: %s" % did)
+        for key in ("runner", "runner_extra"):
+            runners = d.get(key) or []
+            if key == "runner":
+                runners = [runners]
+            for runner in runners:
+                why = _anchor_ok(str(runner or ""), sd)
+                if why:
+                    errors.append("%s.%s: %s" % (did, key, why))
+        comp = d.get("composes") or []
+        if not comp:
+            errors.append("dynamic_vector 未声明 composes: " + str(did))
+        for cid in comp:
+            if cid not in by_id:
+                errors.append("%s composes 引用未登记向量: %s" % (did, cid))
+            elif by_id[cid].get("station") != st:
+                errors.append("%s composes 跨站引用（%s → %r）" % (did, cid, by_id[cid].get("station")))
+
     ch = chain_stations(str(sd / "scripts" / "gk_chain.py"))
     if ch:
         declared = {s["id"] for s in reg["stations"] if s.get("kind", "station") == "station"}
@@ -418,9 +488,13 @@ def check(skill_dir: str = "", code_text: str = None) -> dict:
             errors.append("登记表站点不在序列: " + sid)
 
     return {"ok": not errors, "errors": errors,
-            "counts": {"vectors": len(reg_ids), "code_vectors": len(code_ids),
+            "counts": {"vectors": len(reg_ids),
+                       "code_vectors": len(code_ids) + len(rt_code),
                        "dynamic": len(reg_dyn), "stations": len(reg["stations"]),
-                       "chain_stations": len(ch)}}
+                       "chain_stations": len(ch),
+                       "dynamic_vectors": len(reg.get("dynamic_vectors", [])),
+                       "dynamic_composed": sum(len(d.get("composes") or [])
+                                               for d in reg.get("dynamic_vectors", []))}}
 
 
 def main(argv=None) -> int:
@@ -439,7 +513,19 @@ def main(argv=None) -> int:
     import datetime
     today = a.today or datetime.date.today().isoformat()
     try:
-        if a.cmd == "check":
+        if a.cmd == "dynamic":
+            reg = load(a.registry)
+            sd = Path(a.skill_dir) if a.skill_dir else _SKILL_DIR
+            rows = []
+            for d in reg.get("dynamic_vectors", []):
+                runners = [d.get("runner")] + list(d.get("runner_extra") or [])
+                rows.append({"id": d["id"], "station": d.get("station"),
+                             "severity": d.get("severity"), "title": d.get("title"),
+                             "composes": d.get("composes") or [],
+                             "runners": [{"runner": r, "ok": not _anchor_ok(str(r or ""), sd)}
+                                         for r in runners]})
+            out = {"ok": True, "count": len(rows), "dynamic_vectors": rows}
+        elif a.cmd == "check":
             out = check(a.skill_dir)
         elif a.cmd == "stale":
             out = {"ok": True, "today": today,

@@ -192,3 +192,57 @@ def test_run_tail_passes_chain_when_enabled(tmp_path):
 def test_run_tail_omits_chain_by_default(tmp_path):
     argv = _run_tail_with_chain(tmp_path, "")
     assert "--chain" not in argv.split(), f"默认不应带 --chain：{argv!r}"
+
+
+# ── 机制修复 #2（2026-11-12）：链尾**不完整** fail-loud ─────────────────────────
+# 病象：`--run` 不带 `--chain` 时，aggregate 返回 `mode=moa_aggregate`（有 references），
+#   但 finding/P·L·M/收敛/HTML 全未跑，封套仍 `ok=true` ⟹ 调用方误以为「质询链已完整跑完」
+#   （本会话实测：前 3 轮均无 P/L/M/convergence，事后才发现入口错）。
+# 判据：非链聚合且有 references ⟹ `error=CHAIN_INCOMPLETE` + 可执行补跑 hint，rc≠0。
+def _run_tail_with_agg(tmp_path, agg: dict, chain: str = ""):
+    import json
+    adj = tmp_path / "adj.json"
+    adj.write_text('{"ok": true}', encoding="utf-8")
+    enq = tmp_path / "enq.json"
+    enq.write_text('{"ok": true}', encoding="utf-8")
+    agg_file = tmp_path / "agg.json"
+    agg_file.write_text(json.dumps(agg, ensure_ascii=False), encoding="utf-8")
+    harness = tmp_path / "fn.sh"
+    harness.write_text(
+        "set -uo pipefail\n"
+        "GK_DBG_LOG=/dev/null; STATE_FILE=/dev/null\n"
+        'cmd_plan_refinement() { cat "$ADJ_FILE"; }\n'
+        'cmd_moa_aggregate() { cat "$AGG_FILE"; }\n'
+        + _tail_fn_src(_src()) + "\n"
+        f'_plan_refine_run_tail p.md "$(cat "$ENQ_FILE")" 6 false "" "{chain}"\n',
+        encoding="utf-8")
+    env = dict(os.environ, ADJ_FILE=str(adj), ENQ_FILE=str(enq), AGG_FILE=str(agg_file))
+    return subprocess.run(["bash", str(harness)], capture_output=True, text=True,
+                          env=env, timeout=60)
+
+
+def test_run_tail_flags_incomplete_chain(tmp_path):
+    import json
+    agg = {"mode": "moa_aggregate", "ok": True,
+           "references": [{"subagent_id": "a1"}],
+           "trace": {"count": 1,
+                     "attribution": {"mode": "plan_bound"},
+                     "batch": {"batches": [{"batch_id": "deadbeef0001"}]}}}
+    r = _run_tail_with_agg(tmp_path, agg)
+    assert r.returncode != 0, (r.returncode, r.stdout, r.stderr)
+    d = json.loads(r.stdout)
+    assert d["ok"] is False and d["error"] == "CHAIN_INCOMPLETE", d
+    assert d.get("chain_required") is True, d
+    assert "--chain" in (d.get("hint") or ""), d
+    assert "deadbeef0001" in (d.get("hint") or ""), "hint 须给出可直接补跑的批锚"
+
+
+def test_run_tail_accepts_complete_chain(tmp_path):
+    import json
+    agg = {"mode": "moa_chain", "ok": True,
+           "steps": {"plm": [], "convergence": {"verdict": "UNKNOWN"}},
+           "references": [{"subagent_id": "a1"}]}
+    r = _run_tail_with_agg(tmp_path, agg, chain="true")
+    assert r.returncode == 0, (r.returncode, r.stdout, r.stderr)
+    d = json.loads(r.stdout)
+    assert d["ok"] is True and "error" not in d, d

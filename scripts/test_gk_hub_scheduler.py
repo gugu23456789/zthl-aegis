@@ -313,3 +313,32 @@ def test_cli_run_denied_tempfail(monkeypatch, capsys):
     monkeypatch.setattr(hs, "free_avail_mb", lambda: 1)
     rc = hs.main(["run", "--min-free-mb", "512", "--", sys.executable, "-c", "print(1)"])
     assert rc == 75, "放行失败须 EX_TEMPFAIL（可重试），非 0"
+
+
+# ── 408 ⑦（2026-11-16）：预留租约扣减（scheduler 侧单源）─────────────────────
+# 分层：scheduler **不 import** lifecycle（读侧 claim 由调用方传入）；默认 0 ⟹ 既有
+# 调用方（subagent_runner.gate / CLI run）零回归。
+def test_effective_free_mb_扣减且下界为零():
+    assert hs.effective_free_mb(300, free_mb=1000) == 700
+    assert hs.effective_free_mb(5000, free_mb=1000) == 0
+    assert hs.effective_free_mb(0, free_mb=1000) == 1000
+
+
+def test_effective_free_mb_读数不可用返回None(monkeypatch):
+    monkeypatch.setattr(hs, "free_avail_mb", lambda: None)
+    assert hs.effective_free_mb(128) is None
+
+
+def test_admit_扣减预留后拒绝(monkeypatch):
+    monkeypatch.setattr(hs, "free_avail_mb", lambda: 1000)
+    r = hs.admit(max_c=1, min_mb=512, timeout_s=0.0, reserved_mb=600)
+    assert r == {"ok": False, "reason": "low_memory", "free_mb": 1000,
+                 "effective_free_mb": 400, "reserved_mb": 600, "min_free_mb": 512}
+
+
+def test_admit_扣减后仍放行并回报(monkeypatch):
+    monkeypatch.setattr(hs, "free_avail_mb", lambda: 1000)
+    r = hs.admit(max_c=1, min_mb=512, timeout_s=0.0, reserved_mb=100)
+    assert r.get("ok") is True, r
+    assert r["reserved_mb"] == 100 and r["effective_free_mb"] == 900, r
+    hs.release(r["fd"])

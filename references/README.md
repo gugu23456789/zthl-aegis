@@ -9,7 +9,7 @@ Citation discipline:
 - Historical line numbers are not kept in the public tree.
 
 <!-- GK-REFS:START（由 scripts/gk_docgen_facts.py 生成，勿手改） -->
-> 公开面共 **22** 份文档（本索引自动生成；出包范围 = `oss-export-whitelist.json`）。
+> 公开面共 **25** 份文档（本索引自动生成；出包范围 = `oss-export-whitelist.json`）。
 
 ### 1. Architecture and routing
 
@@ -57,11 +57,14 @@ Citation discipline:
 
 | Document | Purpose |
 |:--|:--|
+| [comment-template.md](comment-template.md) | 注释模板与写作规格（COMMENT-TEMPLATE） |
 | [credit-economy.md](credit-economy.md) | 信用分与额度银行（Credit Economy） |
 | [oss-hooks.md](oss-hooks.md) | 技能的 Hook：契约、门禁与安装安全网 |
 | [oss-moa-phase-provenance.md](oss-moa-phase-provenance.md) | MoA 相位/污染 provenance（公开口径） |
+| [red-guard.md](red-guard.md) | 红队本地确定性护栏（Red Guard） |
 | [research-408.md](research-408.md) | Research 408 — 计算机 408 四轴优化分析 |
 | [sdk-loop-layering.md](sdk-loop-layering.md) | Agent Loop 分层条款（两层 loop · 暗依赖红线 · DSH 对齐） |
+| [violation-charter.md](violation-charter.md) | 违约定义与处置条例（v1，2026-11-11 定稿） |
 
 <!-- GK-REFS:END -->
 

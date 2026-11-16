@@ -17,14 +17,14 @@ updated: 2026-11-02
 <!-- GK-FACTS:START（由 scripts/gk_docgen_facts.py 生成，勿手改） -->
 | 事实 | 值 | 来源（可复算） |
 |:--|:--|:--|
-| CLI 行数 | 12566 | `wc -l gatekeeper-cli.sh` |
+| CLI 行数 | 13248 | `wc -l gatekeeper-cli.sh` |
 | CLI 命令数 | 52 | `^_CMD_REG[` 计数 |
 | 红队站点 | 16 | `gk_chain.py` 的 `Step("RED-*")` |
 | 自检检查函数 | 39 | `gk_self_check.py` 的 `def check_*` |
-| references 公开 md | 22 | `git ls-files references/*.md`（顶层，扣除导出排除面） |
+| references 公开 md | 25 | `git ls-files references/*.md`（顶层，扣除导出排除面） |
 | 子代理角色 | 9 | `subagent_runner.ROLE_TOOLS` |
-| hook R0 门禁 | Gate R0.1–R0.20（20 个） | `pre_tool_hook.py` 的 `Gate R0.N` |
-| 红队向量 | 166 | `references/red-vectors.json` |
+| hook R0 门禁 | Gate R0.1–R0.25（25 个） | `pre_tool_hook.py` 的 `Gate R0.N` |
+| 红队向量 | 188 | `references/red-vectors.json` |
 | 情报源 | 24 | `references/red-intel-sources.json` |
 | 解释器解析 | `scripts/py_resolve.sh`（发现式，无绝对路径） | `scripts/py_resolve.sh` |
 <!-- GK-FACTS:END -->
@@ -64,8 +64,10 @@ spz-gatekeeper-r-sequence/
 │   ├── state-storage.md
 │   ├── meta-routing-protocol.md
 │   ├── plan-writing-safety-net.md
+│   ├── comment-template.md
 │   ├── extension-registry.md
 │   ├── security-measures.md
+│   ├── violation-charter.md          # 违约定义与处置条例（v1 活文档；security-measures 转历史归档）
 │   ├── security-incident-response.md
 │   ├── prm-monitor-methodology.md
 │   ├── plugin-loading-test-framework.md
@@ -81,6 +83,8 @@ spz-gatekeeper-r-sequence/
 │   ├── red-arm-templates.json
 │   ├── red-vectors.json
 │   ├── red-intel-sources.json
+│   ├── red-guard.md
+│   ├── red-scope.example.json
 │   ├── oss-export-whitelist.json
 │   ├── doc-align-contracts.json
 │   ├── predicates.json
@@ -91,6 +95,7 @@ spz-gatekeeper-r-sequence/
 │   ├── standard-maintenance-module.md
 │   ├── wasm-engineering-template.md
 │   ├── ci-pipeline-template.md
+│   ├── comment-template.md
 │   ├── game-path-audit.md            # 私仓留存（不导出）
 │   ├── trae-cross-user-leakage-report.md
 │   ├── convergence-evaluator.md

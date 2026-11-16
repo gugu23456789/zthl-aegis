@@ -82,9 +82,14 @@ class TestRedScope:
         assert "RED-SCOPE-02" in ids
 
     def test_sealed_score_with_hash_ok(self, tmp_path):
-        """Sealed score with hash does NOT trigger RED-SCOPE-02."""
+        """Sealed score with hash does NOT trigger RED-SCOPE-02.
+
+        2026-11-12（RED-SCOPE-02 真修）：`hash` 不再是「有键即过」——须与内容**一致**
+        （`gk_seal.verify`）。原夹具用任意串 `"abc123"`，等于允许伪造戳 ⟹ 现改为真摘要。
+        """
+        import gk_seal
         state = _make_state(gate_data={
-            "_sealed_agent_score": {"score": 0.9, "hash": "abc123"}
+            "_sealed_agent_score": gk_seal.apply({"score": 0.9})
         })
         sf = _write_state(tmp_path, state)
         with patch("_red_attacks.STATE_FILE", sf):
@@ -2844,3 +2849,43 @@ class TestRedPoisonMatrixXspi:
         for p in (_red_attacks._PM_P4_TEMPLATE[0], "".join(_red_attacks._PM_P6_SPLIT),
                   _red_attacks._PM_P7_INFECT):
             assert sanitize_text(p) != p, p
+
+
+# ── STATE_FILE 解析（worktree → 主树；与 gatekeeper-cli.sh L352-370 同判据，2026-11-10）──
+# 病灶：原式 `os.environ.get("STATE_FILE", SKILL_DIR/.gatekeeper.state)` 在 worktree 里指向
+#   不存在的路径 ⟹ red_scope/exploit/postex/route/poison 全部 ERR 空转（实测 4 条 ERR）。
+class TestStateResolve:
+    def test_non_worktree_uses_local_state(self):
+        got = _red_attacks._resolve_default_state("/tmp/skill")
+        assert got == "/tmp/skill/.gatekeeper.state"
+
+    def test_worktree_uses_main_tree_state(self, tmp_path):
+        wt = tmp_path / "repo" / "worktrees" / "s1"
+        wt.mkdir(parents=True)
+        main = tmp_path / "repo"
+        (main / ".gatekeeper.state").write_text("{}", encoding="utf-8")
+
+        class _R:
+            returncode = 0
+            stdout = str(main / ".git")
+
+        with patch.object(_red_attacks.subprocess, "run", lambda *a, **k: _R()):
+            got = _red_attacks._resolve_default_state(str(wt))
+        assert got == str(main / ".gatekeeper.state")
+
+    def test_worktree_without_main_state_falls_back(self, tmp_path):
+        """主树无 state（fail-safe）：保持 worktree 本地落点，不新造路径。"""
+        wt = tmp_path / "repo" / "worktrees" / "s1"
+        wt.mkdir(parents=True)
+
+        class _R:
+            returncode = 0
+            stdout = str(tmp_path / "repo" / ".git")
+
+        with patch.object(_red_attacks.subprocess, "run", lambda *a, **k: _R()):
+            got = _red_attacks._resolve_default_state(str(wt))
+        assert got == str(wt / ".gatekeeper.state")
+
+    def test_module_state_file_is_absolute_and_named(self):
+        assert _red_attacks.STATE_FILE
+        assert _red_attacks.STATE_FILE.endswith(".gatekeeper.state")

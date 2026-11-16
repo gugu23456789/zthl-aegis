@@ -48,6 +48,31 @@ def _alignment(dirpath) -> dict:
     return gda.check_route_center_alignment(str(dirpath))
 
 
+def _clone_tree(src, dst) -> None:
+    """整仓克隆（跳过**构建缓存**）。`tar` 管道取代 `shutil.copytree`：
+
+    2026-11-13 实测（同一 9p 挂载）：`copytree` 45.8s → `tar|tar` **14.2s**（3.2×）；
+    并行跑全量时（5 worker 抢 9p）差距放大到 ~11× —— 本类的 setup 曾是全量最长项（516s）。
+    排除项只有 `__pycache__` / `.pytest_cache`（构建产物，非源文件，任何断言都不读它们）；
+    `.git` 与 `dist/` **保留**（git 环臂依赖 `.git`，dist 是 tracked 发布件）。
+
+    `tar` 不可用（极简环境）⟹ 回落 `copytree`（语义一致，仅慢）。
+    """
+    args_out = ["tar", "-C", str(src), "-cf", "-",
+                "--exclude=__pycache__", "--exclude=.pytest_cache", "."]
+    try:
+        p_out = subprocess.Popen(args_out, stdout=subprocess.PIPE)
+    except (FileNotFoundError, OSError):
+        shutil.copytree(str(src), str(dst))
+        return
+    p_in = subprocess.Popen(["tar", "-C", str(dst), "-xf", "-"], stdin=p_out.stdout)
+    p_out.stdout.close()                      # 让上游收到 SIGPIPE（下游失败时不得卡死）
+    rc_in = p_in.wait()
+    rc_out = p_out.wait()
+    if rc_out != 0 or rc_in != 0:
+        raise RuntimeError("tar 克隆失败: out=%r in=%r" % (rc_out, rc_in))
+
+
 def _sweep_stale_tempdirs(prefix: str = "gk-tamper-", min_age_h: float = 6.0) -> int:
     """**测试自愈**：清掉本前缀且**超龄**的临时残留，返回清掉的数量。
 
@@ -94,9 +119,12 @@ class TestTamperDocAlign:
         # 自愈（2026-09-24）：先清**超龄**残留 —— 本类的清理只在成功路径上，一旦
         #   `setup_class` 中途抛错，`teardown_class` 不会跑，`mkdtemp` 的目录就永久留下。
         _sweep_stale_tempdirs()
-        # 单次 copytree（含 .git，与运行仓库同 HEAD）→ 各用例就地篡改+恢复
+        # 单次克隆（含 .git，与运行仓库同 HEAD）→ 各用例就地篡改+恢复。
+        # 2026-11-13：克隆走 `_clone_tree`（tar 管道，排除构建缓存）——原 `copytree` 在
+        #   9p 上是全量最长项（并行下 setup 516s）。
         cls.copy = Path(__import__("tempfile").mkdtemp(prefix="gk-tamper-")) / "spz-gatekeeper-r-sequence"
-        shutil.copytree(str(REAL), str(cls.copy))
+        cls.copy.mkdir(parents=True)
+        _clone_tree(REAL, cls.copy)
         assert _alignment(cls.copy)["status"] == "PASS", "篡改副本基线必须 PASS（否则基线本身漂移）"
 
     @classmethod

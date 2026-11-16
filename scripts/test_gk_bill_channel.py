@@ -55,6 +55,14 @@ def _eb(st: Path) -> dict:
     return (d.get("gate_data") or {}).get("edit_budget") or {}
 
 
+def _used(eb: dict) -> int:
+    """两轴合计消耗（2026-11-12 `ECC-AF5CC971935C`：① 批次轴 `used` + ② 命令轴 `cli_used`）。
+
+    计费**覆盖面**判据（「该计 / 不该计」）看合计；`remaining` 仍是**批次轴**（会话 cap）。
+    """
+    return int(eb.get("used", 0) or 0) + int(eb.get("cli_used", 0) or 0)
+
+
 def _ledger_n(st: Path) -> int:
     """旁挂 append-only 账本行数（2026-09-30 G4-e：提额留痕的判据面，`overrides[]` 已降只读遗留）。"""
     p = Path(str(st) + BUDGET_LOG_SUFFIX)
@@ -72,7 +80,7 @@ def test_arm1_finding_is_not_billed(tmp_path):
              "--anchor", "gatekeeper-cli.sh::_bill_edit")
     eb_after = _eb(st)
     assert p.returncode == 0, f"finding register 应成功：rc={p.returncode} {p.stdout[:300]}"
-    assert int(eb_after.get("used", -1)) == 0, \
+    assert _used(eb_after) == 0, \
         f"**finding 被计费**（used=0 → {eb_after.get('used')}）—— 记账动作不应扣额度（G4-d）"
     assert int(eb_after.get("remaining", -1)) == 3, \
         f"remaining 被扣（3 → {eb_after.get('remaining')}）"
@@ -84,8 +92,54 @@ def test_arm2_engineering_command_is_still_billed(tmp_path):
     wt = tmp_path / "wt"; wt.mkdir()
     p = _run(st, "apply-worktree", "--bind", "--path", str(wt))
     assert p.returncode == 0, f"apply-worktree --bind 应成功：{p.stdout[:300]}"
-    assert int(_eb(st).get("used", 0)) == 1, \
+    assert _used(_eb(st)) == 1, \
         "**负臂失效**：工程动作（apply-worktree）竟未被计费 ⟹ 豁免名单过宽 = 无限额度"
+
+
+# ── arm2b/arm2c（2026-11-13 真污染修复）：`--bind` 的默认域双写必须按 worktree 根收窄 ──────
+def _default_domain_state() -> Path:
+    """CLI 的 `_DEFAULT_STATE_FILE` 口径：主树 state（worktree 内的 CLI 亦归主树）。"""
+    p = SD / ".gatekeeper.state"
+    if p.exists():
+        return p
+    try:
+        out = subprocess.run(["git", "-C", str(SD), "rev-parse", "--git-common-dir"],
+                             capture_output=True, text=True, timeout=30).stdout.strip()
+        if out:
+            return (SD / out).resolve().parent / ".gatekeeper.state"
+    except Exception:  # noqa: BLE001 — 边界：无 git ⟹ 按 SKILL_DIR 口径
+        pass
+    return p
+
+
+def test_arm2b_bind_does_not_pollute_default_state(tmp_path):
+    """守卫臂：临时路径（`tmp_path/wt`）**不得**被双写进主树 state。
+
+    病象（实测 8 条）：arm2/arm10 以 `tmp_path/wt` 作 `--path`，旧实现无条件双写默认域 ⟹
+    `/tmp/pytest-of-root/.../wt` 进真 state 的 `worktrees_extra[]`，`route-check` 报坏 extra。
+    临时路径 hook 永不治理 ⟹ 双写零收益、纯污染。
+    """
+    st = _mk_state(tmp_path, remaining=3, used=0)
+    default = _default_domain_state()
+    before = default.read_bytes() if default.exists() else None
+    wt = tmp_path / "wt"; wt.mkdir()
+    p = _run(st, "apply-worktree", "--bind", "--path", str(wt))
+    assert p.returncode == 0, f"apply-worktree --bind 应成功：{p.stdout[:300]}"
+    now = default.read_bytes() if default.exists() else None
+    assert now == before, "临时路径被双写进主树 state（真污染）：%s" % default
+    # 语义主域仍须生效（不是靠「干脆不 bind」蒙过去的）
+    assert any(str(wt) == x for x in
+               json.loads(st.read_text(encoding="utf-8"))["worktrees_extra"])
+
+
+def test_arm2c_dual_write_is_scoped_by_route_root():
+    """形态臂：默认域双写必须按 worktree 根（`route-root` 单源）收窄，不得无条件写。"""
+    src = CLI.read_text(encoding="utf-8")
+    seg = src[src.index('if [ -n "$bind_mode" ];'):]
+    end = seg.find("卫星片回收")
+    seg = seg[:end] if end > 0 else seg[:4000]
+    assert "_gk_pool_root" in seg, "双写未见 worktree 根收窄（route-root 单源）"
+    assert '"${_we_root%/}"/*' in seg, "双写 case 判据缺失（--path 未过白名单）"
 
 
 # ── arm3（红先）：文本巧合**不得**触发留痕 ───────────────────────────────────
@@ -129,7 +183,7 @@ def test_arm6_plan_refinement_check_only_not_billed(tmp_path):
     st = _mk_state(tmp_path, remaining=3, used=0)
     plan = SD / "docs/plans/2026-09-18-edit-budget-dual-track-plan.md"
     _run(st, "plan-refinement", str(plan), "--check-only")
-    assert int(_eb(st).get("used", -1)) == 0, \
+    assert _used(_eb(st)) == 0, \
         f"**假计费**：`plan-refinement --check-only`（纯只读 preflight）被计费（used={_eb(st).get('used')}）"
 
 
@@ -138,7 +192,7 @@ def test_arm7_plan_refinement_list_pending_not_billed(tmp_path):
     st = _mk_state(tmp_path, remaining=3, used=0)
     plan = SD / "docs/plans/2026-09-18-edit-budget-dual-track-plan.md"
     _run(st, "plan-refinement", str(plan), "--list-pending")
-    assert int(_eb(st).get("used", -1)) == 0, \
+    assert _used(_eb(st)) == 0, \
         f"**假计费**：`plan-refinement --list-pending`（纯只读队列视图）被计费（used={_eb(st).get('used')}）"
 
 
@@ -147,7 +201,7 @@ def test_arm8_plan_refinement_task_still_billed(tmp_path):
     st = _mk_state(tmp_path, remaining=3, used=0)
     plan = SD / "docs/plans/2026-09-18-edit-budget-dual-track-plan.md"
     _run(st, "plan-refinement", str(plan), "--task", "额度 阈值 早警 反例", "--tier", "3")
-    assert int(_eb(st).get("used", 0)) >= 1, \
+    assert _used(_eb(st)) >= 1, \
         "**守卫失效**：`--task`（真写 `task_pipeline`）竟未计费 ⟹ 形态豁免过宽（P9）"
 
 
@@ -156,7 +210,7 @@ def test_arm9_plan_refinement_adjudicate_still_billed(tmp_path):
     st = _mk_state(tmp_path, remaining=3, used=0)
     plan = SD / "docs/plans/2026-09-18-edit-budget-dual-track-plan.md"
     _run(st, "plan-refinement", str(plan), "--adjudicate", "pr-nope", "--decision", "drop")
-    assert int(_eb(st).get("used", 0)) >= 1, \
+    assert _used(_eb(st)) >= 1, \
         "**守卫失效**：`--adjudicate`（下发 subagent）竟未计费 ⟹ 形态豁免过宽（P9）"
 
 
@@ -194,7 +248,7 @@ def test_arm10b_first_charge_of_new_session_still_emits_voucher(tmp_path):
     st = _mk_state(tmp_path, remaining=3, used=0)
     wt = tmp_path / "wt"; wt.mkdir()
     _run(st, "apply-worktree", "--bind", "--path", str(wt),
-         extra_env={"GK_SESSION_ID": "sid-fresh"})
+         extra_env={"GK_SESSION_ID": "sid-fresh", "STATE_FILE_EXPLICIT": "1"})
     assert "sessions" not in _eb(st) or "sid-fresh" in (_eb(st).get("sessions") or {}), \
         f"会话域未建立（前提失效）：{_eb(st)}"
     rows = _ledger_rows(st)
@@ -204,9 +258,11 @@ def test_arm10b_first_charge_of_new_session_still_emits_voucher(tmp_path):
     assert rec.get("scope") == "session" and rec.get("session") == "sid-fresh", \
         f"未标会话域（多会话不可分账）：{rec}"
     assert int(rec.get("session_max", -1)) == 3, f"缺本会话 `max`：{rec}"
-    assert int(rec.get("session_used", -1)) == 1, f"缺本会话 `used`：{rec}"
-    # 余额字段必须跟 `scope` 走：扣的是会话域，却报全局余额 = 自相矛盾（实测 global remaining=0）
-    assert (rec.get("used"), rec.get("remaining")) == (1, 2), f"余额口径与 scope 不符：{rec}"
+    assert int(rec.get("session_used", -1)) == 1, f"缺本会话 `used`（两轴合计）：{rec}"
+    # 余额字段必须跟 `scope` 走；2026-11-12（`ECC-AF5CC971935C`）起 `remaining` = **批次轴**
+    # （会话 cap 的唯一度量），命令轴的扣款余额另记 `cli_remaining`。
+    assert (rec.get("used"), rec.get("remaining")) == (1, 3), f"余额口径与 scope 不符：{rec}"
+    assert rec.get("cli_remaining") == 2, f"命令轴余额未随凭证落账：{rec}"
 
 
 # ── arm11（负臂）：**不动额度的调用不得开票** ────────────────────────────────

@@ -71,6 +71,34 @@ def test_reinstall_keeps_uninstall_coverage(tmp_path):
     assert not (dest / "gatekeeper-cli.sh").exists(), "卸载后仍残留安装面文件"
 
 
+def test_install_skips_transient_temp_and_lock_files(tmp_path):
+    """安装面不得拷「原子发布中途」的瞬态产物（`*.sig.tmp.<pid>` / `*.lock`）。
+
+    2026-11-13 实测（并行跑全量时）：`install.sh` 的 `find references/` 快照带上了**另一进程**
+    正在发布的 `subagent-context.json.sig.tmp.<pid>`；该文件随后被 rename ⟹ `cp -p` 报
+    `cannot stat` ⟹ `set -e` 打断安装 ⟹ 用例假红。锁文件同理（装进目标树是死文件）。
+    """
+    root = Path(__file__).resolve().parent.parent
+    src = tmp_path / "src"
+    (src / "references").mkdir(parents=True)
+    (src / "install.sh").write_bytes((root / "install.sh").read_bytes())
+    (src / "gatekeeper-cli.sh").write_text("#!/bin/sh\n", encoding="utf-8")
+    (src / "references" / "keep.json").write_text("{}", encoding="utf-8")
+    (src / "references" / "subagent-context.json.sig.tmp.12345").write_text("x", encoding="utf-8")
+    (src / "references" / "subagent-context.json.lock").write_text("", encoding="utf-8")
+    dest = tmp_path / "inst"
+    env = dict(os.environ, HOME=_bash_path(tmp_path), TRAE_ENV="cn")
+    cp = subprocess.run(["bash", _bash_path(src / "install.sh"),
+                         "--dest", _bash_path(dest), "--no-hooks"],
+                        cwd=str(src), env=env, capture_output=True, text=True)
+    assert cp.returncode == 0, (cp.stdout[-300:], cp.stderr[-500:])
+    assert (dest / "references" / "keep.json").exists(), "正常文件被漏装"
+    assert not (dest / "references" / "subagent-context.json.sig.tmp.12345").exists(), \
+        "瞬态 temp 文件被装进目标树"
+    assert not (dest / "references" / "subagent-context.json.lock").exists(), \
+        "锁文件被装进目标树"
+
+
 def test_plugin_manifest_detects_missing_builtin(tmp_path):
     manifests = {"p": {"id": "p", "url": "builtin:${SKILL_DIR}/scripts/nope.py",
                        "intercept": ("x",), "write": False, "undo": None}}

@@ -271,3 +271,39 @@ def test_arm8_state_patch_set_top_syncs_claim(tmp_path, monkeypatch):
     recs = [json.loads(x) for x in led.read_text(encoding="utf-8").splitlines() if x.strip()]
     # [ECC-F24156A47BEB] 同 arm8_sync：存储经 `_norm` 归一 ⟹ 断言同源归一（Windows 反斜杠不误红）。
     assert any(r.get("sid") == SID_A and r.get("worktree") == C._norm(wt) for r in recs), recs
+
+
+# ── 回收前置闸的**扫描复杂度**（2026-11-10，实测 320s 的回归臂）───────────────
+def test_unreleased_claims_scan_realpath_is_memoized(tmp_path, monkeypatch):
+    """`unreleased_claims_for_worktree` 不得对**每条台账记录**各做一次 realpath。
+
+    现场（2026-11-10 实测）：台账 11,931 行，同一 worktree 反复出现 ⟹ 逐条
+    `_overlaps → _canon → _resolve_abs → os.path.realpath` 共 23,862 次、203,784 次
+    `lstat`；drvfs（9p）上 320s ⟹ `apply-worktree --reclaim` 干跑 399s，回收 5–14 分钟。
+    判据：同一 worktree 的 N 条记录 ⟹ realpath 调用数 **与 N 无关**（≤ 8），且结果仍取每 sid 末条。
+    """
+    rp = _repo(tmp_path)
+    led = tmp_path / "led.jsonl"
+    monkeypatch.setenv("GK_WRITE_CLAIMS_PATH", str(led))
+    wt = str((tmp_path / "wt-scan").resolve())
+    n = 200
+    rows = [{"sid": "s%04d" % i, "worktree": wt, "paths": [wt], "state": "live",
+             "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "ttl_s": 3600}
+            for i in range(n)]
+    led.write_text("\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
+
+    calls = {"n": 0}
+    real = os.path.realpath
+
+    def _counting(p, *a, **k):
+        calls["n"] += 1
+        return real(p, *a, **k)
+
+    monkeypatch.setattr(os.path, "realpath", _counting)
+    getattr(C, "_realpath_cached", lambda p: None).cache_clear() if hasattr(
+        getattr(C, "_realpath_cached", None), "cache_clear") else None
+    out = C.unreleased_claims_for_worktree(None, wt)
+    assert len(out) == n, (len(out), out[:2])
+    assert calls["n"] <= 8, (
+        "回收前置闸逐条 realpath（%d 条记录 → %d 次调用）⟹ drvfs 上会退化为分钟级"
+        % (n, calls["n"]))

@@ -65,3 +65,59 @@ def test_arm4_emit_gated_on_error():
     src = (_HERE / "gk_moa_aggregate.py").read_text(encoding="utf-8")
     assert 'and not agg.get("error")' in src, \
         "未知批号仍会落 finding ⟹ 误归因台账（HEAD 无该门）"
+
+
+# ── 机制修复 #3（2026-11-12）：流水线批号 → batch_id **反查** ────────────────────
+# 病象：`--batch pr-<epoch>-<hex>` 只做 `subagent_history[].batch_id` 精确匹配 ⟹ 全部
+#   流水线批号落 `batch_unresolved`（本会话实测：用户拿 enqueue 回执的批号聚合，报无匹配）。
+# 单一可复原关联：`task_pipeline[].full_task` 逐字等于 `subagent_history[].task`
+#   （CLI 派发时原样落库；F-REV-53 起不截断），故可按批内 full_task 集合反查历史批指纹。
+def _mk_pipeline_state(tmp: str, *, second_batch_id: str = "deadbeef0001") -> str:
+    ft1 = "【preflight】通道=standing\n\n【本臂窄任务（G1｜id=nt-1）】 审 A"
+    ft2 = "【preflight】通道=standing\n\n【本臂窄任务（G1｜id=nt-2）】 审 B"
+    doc = {"gate_data": {
+        "subagent_history": [
+            {"subagent_id": "a1", "task": ft1, "batch_id": "deadbeef0001", "conclusion": "PASS"},
+            {"subagent_id": "a2", "task": ft2, "batch_id": second_batch_id, "conclusion": "WARN"},
+        ],
+        "task_pipeline": [
+            {"id": "pr-1794461236-83072bbd-1", "batch": "pr-1794461236-83072bbd",
+             "full_task": ft1, "status": "approved"},
+            {"id": "pr-1794461236-83072bbd-2", "batch": "pr-1794461236-83072bbd",
+             "full_task": ft2, "status": "approved"},
+        ],
+    }}
+    p = os.path.join(tmp, "state.json")
+    Path(p).write_text(json.dumps(doc, ensure_ascii=False), encoding="utf-8")
+    return p
+
+
+def test_arm5_pipeline_batch_reverse_resolves(tmp_path):
+    """臂5（主判据）：流水线批号 ⟹ 按 full_task 反查到历史 batch_id（不再 batch_unresolved）。"""
+    st = _mk_pipeline_state(str(tmp_path))
+    entries, attr = M.collect_entries(st, None, None, batch="pr-1794461236-83072bbd")
+    assert [e["subagent_id"] for e in entries] == ["a1", "a2"], attr
+    assert attr.get("mode") == "batch_bound", attr
+    assert attr.get("batch_id") == "deadbeef0001", attr
+    assert attr.get("resolved_from") == "pipeline", "须留痕反查来源（非静默改写）"
+
+
+def test_arm6_pipeline_record_id_reverse_resolves_one_arm(tmp_path):
+    """臂6：可传**流水线记录号**（`pr-…-2`）⟹ 只反查该条记录对应的历史臂。"""
+    st = _mk_pipeline_state(str(tmp_path))
+    entries, attr = M.collect_entries(st, None, None, batch="pr-1794461236-83072bbd-2")
+    assert [e["subagent_id"] for e in entries] == ["a2"], attr
+    assert attr.get("mode") == "batch_bound", attr
+    assert attr.get("batch_id") == "deadbeef0001", attr
+
+
+def test_arm7_pipeline_batch_ambiguous_not_silent(tmp_path):
+    """臂7：同一流水线批跨了两个历史批 ⟹ **不武断取第一个**（fail-loud + 候选清单）。"""
+    st = _mk_pipeline_state(str(tmp_path), second_batch_id="cafebabe0002")
+    entries, attr = M.collect_entries(st, None, None, batch="pr-1794461236-83072bbd")
+    assert entries == [], "歧义批不得静默取一批"
+    assert attr.get("mode") == "batch_unresolved", attr
+    assert attr.get("ambiguous_pipeline_batch") is True, attr
+    assert set(attr.get("pipeline_batch_ids") or []) == {"deadbeef0001", "cafebabe0002"}, attr
+    agg = M.aggregate(st, None, None, batch="pr-1794461236-83072bbd")
+    assert agg.get("error") == "no_entry_matches_batch", agg

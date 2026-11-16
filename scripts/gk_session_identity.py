@@ -38,11 +38,14 @@ def _sha8(s: str) -> str:
     return hashlib.sha1(s.encode("utf-8")).hexdigest()[:8]
 
 
-def derive(path: str) -> dict:
+def derive(path: str, roots=None) -> dict:
     """由路径派生会话身份 token。
 
     返回 `{token, source, worktree, repo, reason}`；无 token 时 `token=""`。
     `source` ∈ {`, `name`, `hash`}`。
+
+    `roots` 非空 ⟹ 覆盖 dev-worktree 根白名单（**仅供测试注入**；生产恒走
+    `DEV_WORKTREE_ROOTS` 常量，单源不变）。
     """
     out = {"token": "", "source": "", "worktree": "", "repo": "", "reason": ""}
     if not path:
@@ -52,7 +55,7 @@ def derive(path: str) -> dict:
     np = _norm(path)
     npl = np.lower()
     root = ""
-    for r in DEV_WORKTREE_ROOTS:
+    for r in (DEV_WORKTREE_ROOTS if roots is None else tuple(roots)):
         rn = _norm(r).lower()
         rn = rn if rn.endswith("/") else rn + "/"
         if npl == rn.rstrip("/") or npl.startswith(rn):
@@ -67,6 +70,13 @@ def derive(path: str) -> dict:
         return out
     repo = segs[0]
     out["repo"] = repo
+    # 热池槽 `<repo>/_pool/<repo>/slot-N`（2026-11-10）⟹ token = `slot-N`。
+    #   不加这条会落到「其它 2 段布局」取 segs[2] = **repo 名** ⟹ 同一池的**所有槽**派生同一 token
+    #   ⟹ 槽间可互写（worktree 归属闸被架空）。
+    if len(segs) >= 4 and segs[1] == "_pool":
+        out.update({"token": segs[3], "source": "name",
+                    "worktree": root + "/".join(segs[:4]), "reason": "pool_slot_name"})
+        return out
     # `<repo>/agent/<family>/<leaf>`（apply-worktree 布局）→ token = leaf = segs[3]（name 优先）
     if len(segs) >= 4 and segs[1] == "agent":
         out.update({"token": segs[3], "source": "name",

@@ -28,6 +28,7 @@ CLI::
 """
 import argparse
 import json
+import os
 import sys
 import urllib.error
 import urllib.request
@@ -202,11 +203,35 @@ def sweep(state_file, *, endpoint="", key_dir="", limit=5, timeout=30.0, dry_run
                 "hint": "设置 GK_AUDIT_OUTCOME_ENDPOINT 后才会产出 success/fail（不伪造）"}
     results = []
     for rid in pending[:max(0, int(limit))]:
+        lease = ""
         try:
+            # T3（2026-11-12）：每条 raise 记一条 `kind=raises` 租约，先确保模型单元就绪。
+            #   未配置启停命令 ⟹ `ensure` 返回 advisory（不阻断旧部署/单测）。
+            if os.environ.get("GK_AUDIT_MODEL_LIFECYCLE_WIRING", "1") != "0":
+                try:
+                    import gk_audit_lifecycle as LC
+                    lc = LC.ensure("raises", owner_pid=os.getpid(),
+                                   ttl_s=max(120.0, float(timeout) + 30.0))
+                except Exception as e:  # noqa: BLE001 — 接线不可用 ⟹ 该 raise 具名失败
+                    results.append({"raise_id": rid, "ok": False,
+                                    "error": "lifecycle_unavailable: %s" % e})
+                    continue
+                if not lc.get("ok"):
+                    results.append({"raise_id": rid, "ok": False,
+                                    "error": "lifecycle: %s" % lc.get("error")})
+                    continue
+                lease = lc.get("lease_id") or ""
             out = produce(state_file, rid, endpoint=endpoint, key_dir=key_dir,
                           timeout=timeout, dry_run=dry_run)
         except Exception as e:
             out = {"ok": False, "error": "produce_exception: %s" % e}
+        finally:
+            if lease:
+                try:
+                    import gk_audit_lifecycle as LC
+                    LC.drop_lease(lease)
+                except Exception:  # noqa: BLE001 — 回收失败不覆盖主结果
+                    pass
         results.append({"raise_id": rid, "ok": bool(out.get("ok")),
                         "decision": out.get("decision"), "error": out.get("error")})
     return {"ok": True, "attempted": len(results), "pending_before": len(pending),

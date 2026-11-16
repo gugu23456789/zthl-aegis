@@ -45,7 +45,11 @@ jobs:
           python scripts/gk_bench_state.py --full --json --out-dir dist/bench
           python scripts/gk_bench_satellite.py --full --json --out-dir dist/bench
           python scripts/gk_bench_gate.py --full --json --out-dir dist/bench
-          python scripts/gk_bench_release.py --json --out-dir dist/bench
+          # 治理热点（路由 / 计划指针 / 速率闸 / 合并闸）：full 追加合并闸全扫。
+          python scripts/gk_bench_runtime.py --full --json --out-dir dist/bench
+          # 发布门 bench 只记录 rc/耗时（对齐 release.yml 的 continue-on-error）：
+          # 公开树 doc-release --strict 会因导出面缺文档 rc=1，不应让夜间作业恒红。
+          python scripts/gk_bench_release.py --json --out-dir dist/bench || true
       - name: compare vs committed baseline
         run: |
           set -o pipefail

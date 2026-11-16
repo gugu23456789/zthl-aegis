@@ -250,3 +250,21 @@ def test_edit_budget_env_override_is_clamped_by_ceiling(tmp_path, monkeypatch):
     from gk_advance import EDIT_BUDGET_CEILING as _CEIL
     assert eb["max"] <= _CEIL, (
         "env 覆盖未被外生上限夹取（CEILING=%s）：%r" % (_CEIL, eb))
+
+
+# ── D6b（2026-11-16，owner 选「可见性覆盖」）：advance_env 同点补 credit bookkeeping ──
+def test_advance_env_writes_credit_bookkeeping_not_raise(tmp_path, monkeypatch):
+    """注入侧提额必须补一条 credit **bookkeeping**（delta=0）；**不得**新发 raise（不计债）。"""
+    monkeypatch.setenv("GATEKEEPER_EDIT_BUDGET", "6")
+    sf = _advance_state(tmp_path, {"ts": "2026-09-19T00:00:00Z", "source": "state_patch",
+                                   "max": 4, "used": 0, "remaining": 4, "reason": "prior"})
+    r = _standing_run(sf, "ECO-SCAN", "ECO-READ")
+    assert r.get("ok") is True, f"advance 未放行：{r}"
+    led = str(sf) + ".credit-ledger.jsonl"
+    rows = [json.loads(x) for x in open(led, encoding="utf-8").read().splitlines() if x.strip()]
+    assert rows, "advance_env 未写 credit 记账行"
+    last = rows[-1]
+    assert last.get("kind") == "bookkeeping", last
+    assert last.get("source") == "advance_env" and last.get("delta") == 0, last
+    assert not any(x.get("kind") == "raise" for x in rows), (
+        "advance_env 不得新发 raise（owner 2026-10-19 方案 a：预算记账不计债）")

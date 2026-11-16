@@ -29,8 +29,8 @@ def _reg():
 
 
 def _tmp_tree(tmp_path, reg, code_text=None, chain_text=None):
-    (tmp_path / "references").mkdir(exist_ok=True)
-    (tmp_path / "scripts").mkdir(exist_ok=True)
+    (tmp_path / "references").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "scripts").mkdir(parents=True, exist_ok=True)
     (tmp_path / "references" / "red-vectors.json").write_text(
         json.dumps(reg, ensure_ascii=False), encoding="utf-8")
     (tmp_path / "scripts" / "_red_attacks.py").write_text(
@@ -218,3 +218,114 @@ def test_external_map_rejects_unknown_station():
            "frameworks": {"X": {"entries": [{"id": "E1", "stations": ["RED-NOPE"]}]}}}
     out = V.external_map(_reg(), ext)
     assert out["ok"] is False and "RED-NOPE" in out["errors"][0]
+
+
+# ── 第三期：动态组合向量（2026-11-10）───────────────────────────────────
+# 静态向量只校验「单条代码形态」，全过 ≠ 并发下不被绕过；`dynamic_vectors` 把多条
+# 静态向量组合成**真实多进程场景**，并要求 runner 真可执行（防「测试被删/改名仍算覆盖」）。
+
+def _dyn(reg, **kw):
+    d = dict(reg["dynamic_vectors"][0])
+    d.update(kw)
+    return d
+
+
+def _tree_with_runner(tmp_path, reg):
+    sd = _tmp_tree(tmp_path, reg)
+    (tmp_path / "scripts" / "test_dyn.py").write_text(
+        "def test_dyn():\n    assert True\n", encoding="utf-8")
+    return sd
+
+
+def test_dynamic_vectors_registered_on_repo():
+    reg = _reg()
+    dv = reg.get("dynamic_vectors")
+    assert dv, "登记表应至少一条动态组合向量"
+    d = dv[0]
+    assert d["id"].startswith("RED-DYN-") and d["station"] == "RED-CTX"
+    assert d["runner"].endswith("test_av9_six_parallel_updates_never_expose_invalid")
+    assert d["runner_extra"], "AV-9 的轮换姊妹臂（AV-12）须一并登记"
+    assert len(d["composes"]) >= 5
+    assert set(d["composes"]) <= set(V.vector_ids(reg))
+    out = V.check()
+    assert out["counts"]["dynamic_vectors"] == len(dv)
+    assert out["counts"]["dynamic_composed"] == sum(len(x["composes"]) for x in dv)
+
+
+def test_dynamic_runner_file_must_exist(tmp_path):
+    reg = _reg()
+    reg["dynamic_vectors"] = [_dyn(reg, runner="scripts/nope.py::test_x", runner_extra=[])]
+    out = V.check(_tree_with_runner(tmp_path, reg))
+    assert out["ok"] is False
+    assert any("runner" in e and "anchor 文件不存在" in e for e in out["errors"]), out["errors"]
+
+
+def test_dynamic_runner_symbol_must_exist(tmp_path):
+    reg = _reg()
+    reg["dynamic_vectors"] = [
+        _dyn(reg, runner="scripts/test_dyn.py::test_dyn",
+             runner_extra=["scripts/test_dyn.py::test_gone"])]
+    out = V.check(_tree_with_runner(tmp_path, reg))
+    assert out["ok"] is False
+    assert any("runner_extra" in e and "anchor 符号不存在" in e for e in out["errors"]), out["errors"]
+
+
+def test_dynamic_composes_must_be_registered(tmp_path):
+    reg = _reg()
+    reg["dynamic_vectors"] = [
+        _dyn(reg, runner="scripts/test_dyn.py::test_dyn", runner_extra=[],
+             composes=["RED-CTX-01", "RED-CTX-99"])]
+    out = V.check(_tree_with_runner(tmp_path, reg))
+    assert out["ok"] is False
+    assert any("RED-CTX-99" in e and "未登记" in e for e in out["errors"]), out["errors"]
+
+
+def test_dynamic_composes_reject_cross_station(tmp_path):
+    reg = _reg()
+    reg["dynamic_vectors"] = [
+        _dyn(reg, runner="scripts/test_dyn.py::test_dyn", runner_extra=[],
+             composes=["RED-CTX-01", "RED-SCOPE-01"])]
+    out = V.check(_tree_with_runner(tmp_path, reg))
+    assert out["ok"] is False
+    assert any("跨站" in e for e in out["errors"]), out["errors"]
+
+
+def test_dynamic_composes_must_be_non_empty(tmp_path):
+    reg = _reg()
+    reg["dynamic_vectors"] = [
+        _dyn(reg, runner="scripts/test_dyn.py::test_dyn", runner_extra=[], composes=[])]
+    out = V.check(_tree_with_runner(tmp_path, reg))
+    assert out["ok"] is False
+    # 空 composes 在 `load()` 阶段即 fail-loud（更早），check 以「登记表不可用」透出。
+    assert any("composes" in e for e in out["errors"]), out["errors"]
+
+
+def test_dynamic_id_prefix_and_severity_enforced(tmp_path):
+    reg = _reg()
+    reg["dynamic_vectors"] = [
+        _dyn(reg, id="DYN-CTX-01", runner="scripts/test_dyn.py::test_dyn", runner_extra=[])]
+    out = V.check(_tree_with_runner(tmp_path, reg))
+    assert any("RED-DYN-" in e for e in out["errors"]), out["errors"]
+    reg["dynamic_vectors"] = [
+        _dyn(reg, severity="severe", runner="scripts/test_dyn.py::test_dyn", runner_extra=[])]
+    out2 = V.check(_tree_with_runner(tmp_path / "b", reg))
+    assert any("severity 非法" in e for e in out2["errors"]), out2["errors"]
+
+
+def test_dynamic_duplicate_ids_rejected(tmp_path):
+    reg = _reg()
+    reg["dynamic_vectors"] = [reg["dynamic_vectors"][0], reg["dynamic_vectors"][0]]
+    (tmp_path / "references").mkdir()
+    p = tmp_path / "references" / "red-vectors.json"
+    p.write_text(json.dumps(reg, ensure_ascii=False), encoding="utf-8")
+    with pytest.raises(ValueError, match="dynamic_vectors"):
+        V.load(str(p))
+
+
+def test_dynamic_cli_lists_runners(capsys):
+    assert V.main(["dynamic"]) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["ok"] is True and out["count"] >= 1
+    rows = out["dynamic_vectors"]
+    assert all(r["runners"] and all(x["ok"] for x in r["runners"]) for r in rows), rows
+    assert all(r["composes"] for r in rows)

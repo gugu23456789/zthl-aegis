@@ -11,6 +11,12 @@
 
 （下表逐字自 `subagent_runner.py` 迁出；注释块随迁。）
 """
+# ─── 图片输入能力白名单（2026-11-14）───────────────────────────────────────────
+# 与 SUBA_TIERS 同理：runner 顶层 heavy import（openai/agents）⟹ 选图侧
+# （gk_paper_review）不能 import runner；两处字面量必漂移，故唯一事实源放本模块。
+# 新增 image-capable 模型只改这里（runner 与 paper-review 同时生效）。
+IMAGE_CAPABLE_MODELS = ("deepseek-flash", "deepseek-v4-flash-vision-exp")
+
 # ─── 4 档梯度表（2026-08-27 建档，2026-08-28 补输出上限，2026-08-28 补超时/重试，
 #     2026-09-11 token 类全套 ×2.5）───
 # token_budget:    L2 任务级 token 总预算 = 输入+输出（含 thinking）累计合计（_BudgetHooks

@@ -48,7 +48,7 @@ _ENTRY_KEYS=('task','subagent_id','conclusion','kept','slashed','challenges','ev
              'vocab_violations','budget_status','total_tokens','token_budget','total_items',
              'item_budget','hmac_status','output_file','report_file','machine_check',
              'access_violations','batch_id','tier','arm_group','arm_delta','arm_obs',
-             'assertions','tool_call_count')
+             'assertions','tool_call_count','default_reason')
 def _mc_field(x, key):
   return (x or {}).get(key, '') if isinstance(x, dict) else ''
 # 2026-10-31（owner 裁定 A）：monitor --api 的分数只进 monitor_history（advisory），复盘面
@@ -177,7 +177,10 @@ entry={
   # W2A-P2（2026-10-16）：消融腿 —— Δ（派发侧显式注入，聚合端只读不猜）+ 观测量（φ/det_F1/cache，
   #   由 §2 五件在**臂装配侧**产出，非事后从 verdicts 推）。
   'arm_delta':os.environ.get('GK_ARM_DELTA',''),
-  'arm_obs':_obs
+  'arm_obs':_obs,
+  # 2026-11-14（owner 令「default 模式必须说为什么」）：落 default 角色的显式理由。
+  #   由 CLI default 前置闸校验并 export（GK_DEFAULT_REASON）；非 default 角色恒空串。
+  'default_reason':os.environ.get('GK_DEFAULT_REASON','')
 }
 # Capture access violations for audit trail (crypto material access attempts)
 avs=out.get('access_violations',[])
@@ -213,11 +216,13 @@ if len(jti_store)>_JTI_MAX:
 nonce=out.get('nonce','')
 if _evicted or not nonce:
   try:
-    open(os.path.join(os.environ['GK_PY_SCRIPTS'],'gk_dbg.log'),'a',encoding='utf-8').write(
-      '[jti] WARN %s pruned=%d evicted=%d size=%d nonce=%s %s\n'
+    import gk_dbg as _gk_dbg
+    _gk_dbg.write(
+      '[jti] WARN %s pruned=%d evicted=%d size=%d nonce=%s %s'
       % ('nonce 缺失 → 本轮防重放未生效' if not nonce else '上限驱逐',
          len(expired), _evicted, len(jti_store), nonce or '<empty>',
-         __import__('datetime').datetime.now().astimezone().isoformat()))
+         __import__('datetime').datetime.now().astimezone().isoformat()),
+      base=os.environ.get('GK_PY_SCRIPTS'))
   except Exception:
     pass
 if nonce and nonce in jti_store:
@@ -314,6 +319,10 @@ if 'plan-refinement' in task_str:
   import time as _ts
   gd['_sealed_agent_score']=merge_sealed_agent_score(
     gd.get('_sealed_agent_score') or {}, out, _batch_id, _ts.time())
+  # 2026-11-12（RED-SCOPE-02 真修）：落盘前给密封分盖**完整性戳**（单源 `gk_seal`）。
+  #   无此戳时任何写 state 的路径都能静默改盲评结论而消费侧不可判（adjudicate/appeal/mediation）。
+  import gk_seal as _gk_seal
+  _gk_seal.apply(gd['_sealed_agent_score'])
 if not dump_state(os.environ['GK_PY_STATE'], d):
   print(json.dumps({'ok':False,'error':'HISTORY_WRITE_FAILED','subagent_id':out.get('subagent_id','')}))
   sys.exit(3)
