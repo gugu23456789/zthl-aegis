@@ -99,7 +99,27 @@ benchmark 修正：
 ## 9. 验证
 
 - `test_gk_bench_compare.py`：15 passed（含 p99 嵌套 / amp_per_state 双侧回归 3 臂）
-- `test_gk_release_preflight.py`：23 passed（含新增 6 项门与三套 quick 回归臂）
+- `test_gk_release_preflight.py`：25 passed（含新增 6 项门、导出面判据、WARN 不判红）
+- `test_gk_public_bridge.py`：17 passed（含 askpass 净化臂）
 - `test_gk_bench_smoke.py`：4 passed（含 runtime 热点 smoke）
 - `gk_release_preflight.py --version v0.10.0`：**15/15 PASS**；
   跨环境时 ratio 自动降级 WARN（本机基线 Windows，WSL 侧只留硬失败）
+
+## 10. 发布面修正（重建 tag 前纳入）
+
+v0.10.0 首次推送公开仓后，`ci` 与 `release` 两个工作流转红。本版在重建 tag 前把根因修掉，
+因此 v0.10.0 的最终树已包含下列修正：
+
+- **预检把公开树当私仓审**：`doc_align` 的降级判据写成「有没有 `.git`」，而公开工作副本本身是
+  git 仓（有 `.git`、无 `docs/`）⟹ 4 项导出排除面被误判 FAIL。现按 **`docs/` 是否随包** 判定。
+- **依赖缺失被判违规**：CI 镜像无 PyYAML，`gk_ci_security_lint.py` 返回的 issues 只有
+  `{"error": ...}`、没有 `workflow` 键 ⟹ 预检把「环境能力不足」记 WARN 跳过，真实违规仍判 FAIL；
+  且 **WARN 不再让整条预检判红**（此前公开树全项 PASS、仅一项 WARN 仍 rc=1）。
+- **内联载荷棘轮**：`gatekeeper-cli.sh` 的内联 Python 载荷回到 88 条（上限 88）：`cmd_commit`
+  的 warnings 合并下沉为 `gk_json_utils.py merge-warnings`，`cmd_push` 两处 `time` 计算改用
+  shell 算术；受保护区五段 `lost_lines=0`（合并闸校验）。
+- **合并闸解释器解析**：Windows 上 `python3` 常是 Microsoft Store 的 0 字节「应用执行别名」桩，
+  `command -v` 命中但执行必失败 ⟹ 钩子 fail-closed 拒绝一切 ref 更新（打 tag 被拒）。现钩子
+  shim 与 `gk_accept_py` 都先验证解释器**真能执行**再采纳。
+- **发布桥不再弹 IDE 密码框**：Trae 把 `GIT_ASKPASS` 指向自己的弹窗脚本，桥的子进程继承它后
+  git 缺凭据就弹框挂住。现固定剔除 askpass 并置 `GIT_TERMINAL_PROMPT=0` ⟹ 缺凭据立即失败。

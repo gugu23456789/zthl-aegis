@@ -257,3 +257,23 @@ def test_push_branch_falls_back_on_gw_failure(tmp_path):
     rc, _out, _err, used = pb.push_branch("/tmp/repo", "HEAD:main", gw=good, runner=runner)
     assert rc == 0 and used == "git"
     assert calls[-1][:4] == ["git", "-C", "/tmp/repo", "push"]
+
+
+def test_clean_env_strips_ide_askpass(monkeypatch):
+    """子进程 env 必须剔除 IDE 的 askpass —— 否则 git 缺凭据时会弹 Trae 密码框并挂住。
+
+    2026-11-16 实测：`GIT_ASKPASS` 指向 Trae 的 `askpass.sh`，发布桥 push 反复弹
+    「Git: https://github.com 请输入 Password」。净化后缺凭据应立即失败。
+    """
+    for k in ("GIT_ASKPASS", "SSH_ASKPASS", "VSCODE_GIT_ASKPASS_NODE",
+              "VSCODE_GIT_ASKPASS_MAIN", "VSCODE_GIT_ASKPASS_SCRIPT", "VSCODE_GIT_IPC_HANDLE"):
+        monkeypatch.setenv(k, "x")
+    monkeypatch.setenv("STATE_FILE", "/tmp/s.json")
+    monkeypatch.setenv("GIT_TERMINAL_PROMPT", "1")
+    e = pb._clean_env()
+    for k in ("GIT_ASKPASS", "SSH_ASKPASS", "VSCODE_GIT_ASKPASS_NODE",
+              "VSCODE_GIT_ASKPASS_MAIN", "VSCODE_GIT_ASKPASS_SCRIPT", "VSCODE_GIT_IPC_HANDLE",
+              "STATE_FILE"):
+        assert k not in e, k
+    assert e["GIT_TERMINAL_PROMPT"] == "0"
+    assert pb._clean_env({"X": "1"})["X"] == "1"

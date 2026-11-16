@@ -260,6 +260,25 @@ def test_ci_security_lint_dependency_missing_is_warn(monkeypatch):
     assert PF.ci_security_lint_check()["status"] == "FAIL"
 
 
+def test_run_all_warn_does_not_fail(monkeypatch):
+    """WARN 不得让整条预检判红（否则依赖缺失会把 CI 钉死在红）。
+
+    2026-11-16 实测：公开树全项 PASS、仅 `ci_security_lint` 因无 PyYAML 记 WARN，
+    预检仍 rc=1 ⟹ CI preflight 恒红。
+    """
+    names = ("pack_contract", "pack_fixture", "docgen_check", "doc_features_check",
+             "doc_align_check", "list_registry_check", "package_integrity_check",
+             "ci_security_lint_check", "release_assets", "workflow_paths", "repo_index_check",
+             "vendor_artifact", "release_notes_check", "bench_baseline_check",
+             "bench_regression")
+    for n in names:
+        monkeypatch.setattr(PF, n, lambda *a, **k: {"id": "x", "status": "PASS"})
+    monkeypatch.setattr(PF, "ci_security_lint_check", lambda: {"id": "ci", "status": "WARN"})
+    assert PF.run_all("")["ok"] is True
+    monkeypatch.setattr(PF, "ci_security_lint_check", lambda: {"id": "ci", "status": "FAIL"})
+    assert PF.run_all("")["ok"] is False
+
+
 def test_release_notes_skip_without_version():
     assert PF.release_notes_check("")["status"] == "SKIP"
 

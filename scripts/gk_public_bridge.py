@@ -53,12 +53,32 @@ def _norm(p):
     return p
 
 
-def _run(cmd, cwd=None, env=None, timeout=900):
-    """跑子进程；返回 (rc, stdout, stderr)。env=None ⟹ 继承但剔除 STATE_FILE（防域 state 干扰）。"""
+_ASKPASS_VARS = ("GIT_ASKPASS", "SSH_ASKPASS", "VSCODE_GIT_ASKPASS_NODE",
+                 "VSCODE_GIT_ASKPASS_MAIN", "VSCODE_GIT_ASKPASS_SCRIPT",
+                 "VSCODE_GIT_IPC_HANDLE")
+
+
+def _clean_env(extra=None):
+    """子进程 env：剔除 STATE_FILE 与 **IDE 的 askpass**。
+
+    为什么必须剔 askpass：Trae / VS Code 把 `GIT_ASKPASS` 指向自己的弹窗脚本；自动化
+    管线继承它后，git 一旦缺凭据**不报错而是弹密码框**并挂住（2026-11-16 实测：发布桥
+    push 反复弹 "Git: https://github.com 请输入 Password"）。剔除 + `GIT_TERMINAL_PROMPT=0`
+    ⟹ 缺凭据立刻失败并给出可读错误，绝不阻塞或打扰人。
+    """
     e = dict(os.environ)
     e.pop("STATE_FILE", None)
-    if env:
-        e.update(env)
+    for k in _ASKPASS_VARS:
+        e.pop(k, None)
+    e["GIT_TERMINAL_PROMPT"] = "0"
+    if extra:
+        e.update(extra)
+    return e
+
+
+def _run(cmd, cwd=None, env=None, timeout=900):
+    """跑子进程；返回 (rc, stdout, stderr)。env ⟹ 在净化后的 env 上叠加。"""
+    e = _clean_env(env)
     try:
         p = subprocess.run(cmd, cwd=cwd, env=e, capture_output=True, text=True, timeout=timeout)
         return p.returncode, p.stdout, p.stderr
