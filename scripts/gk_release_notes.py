@@ -265,7 +265,10 @@ def main(argv=None):
                            "refs/tags/" + mtag.group(1)],
                           capture_output=True).returncode == 0:
             to_ref = mtag.group(1)
-    if ns.from_ref:
+    # C4 只在**私仓**生效：公开仓是过滤镜像（一次发布 = 一个 `release:` 提交），
+    # `v0.9.9..v0.10.0` 只有几条，拿私有口径的「N 个提交」去比必然误判（2026-11-16 实测 CI 红）。
+    # 判据与 `doc_align` 同源：`docs/` 是否随包 —— 公开树没有 `docs/`。
+    if ns.from_ref and os.path.isdir(os.path.join(repo, "docs")):
         c4 = verify_commit_count(text, ns.from_ref, to_ref, cwd=repo)
         if c4:
             rep["violations"].append(c4)

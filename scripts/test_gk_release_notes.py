@@ -111,6 +111,7 @@ def _repo_n_commits(tmp_path, n, tag="v1"):
         (repo / ("f%d.txt" % i)).write_text(str(i), encoding="utf-8")
         g("add", ".")
         g("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "feat: c%d" % i)
+    (repo / "docs").mkdir(exist_ok=True)      # 私仓判据：`docs/` 随包 ⟹ C4 生效
     return repo
 
 
@@ -137,3 +138,18 @@ def test_c4_cli_exit1_on_mismatch(tmp_path):
                        capture_output=True, text=True, timeout=60)
     assert p.returncode == 1, p.stdout + p.stderr
     assert "C4" in p.stdout
+
+
+def test_c4_skipped_in_export_tree(tmp_path):
+    """公开导出树（无 `docs/`）不跑 C4 —— 镜像仓的提交数不是私有口径。"""
+    import shutil
+    repo = _repo_n_commits(tmp_path, 3)
+    shutil.rmtree(repo / "docs")
+    notes = tmp_path / "RELEASE-NOTES-v9.9.9.md"
+    notes.write_text("# X\n\n> 覆盖 9 个提交\n", encoding="utf-8")
+    p = subprocess.run([sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                                     "gk_release_notes.py"),
+                        "check", "--notes", str(notes), "--from", "v1", "--repo", str(repo)],
+                       capture_output=True, text=True, timeout=60)
+    assert p.returncode == 0, p.stdout + p.stderr
+    assert "C4" not in p.stdout
