@@ -93,3 +93,47 @@ def test_generate_end_to_end_on_real_repo(tmp_path):
     text = out.read_text(encoding="utf-8")
     assert "首条" in text and "计划稿" in text
     assert "计划与内部文档" in text
+
+
+# ── 2026-11-16：C4 数字回环（说明声明的「N 个提交」必须与 git 实测一致）──────────
+def _repo_n_commits(tmp_path, n, tag="v1"):
+    """建仓：1 个基线提交 + 打 tag + n 个后续提交。"""
+    repo = tmp_path / "r"
+    repo.mkdir()
+    g = lambda *a: subprocess.run(["git", "-C", str(repo), *a], check=True,
+                                  capture_output=True, text=True)
+    g("init", "-q", "-b", "master")
+    (repo / "seed.txt").write_text("seed", encoding="utf-8")
+    g("add", "seed.txt")
+    g("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "chore: init")
+    g("tag", tag)
+    for i in range(n):
+        (repo / ("f%d.txt" % i)).write_text(str(i), encoding="utf-8")
+        g("add", ".")
+        g("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "feat: c%d" % i)
+    return repo
+
+
+def test_c4_count_matches_is_clean(tmp_path):
+    repo = _repo_n_commits(tmp_path, 3)
+    assert R.verify_commit_count("覆盖 3 个提交", "v1", "HEAD", cwd=str(repo)) is None
+
+
+def test_c4_count_mismatch_blocks(tmp_path):
+    """病象复刻：v0.10.0 说明写 171，实测 246 ⟹ 必须判 C4。"""
+    repo = _repo_n_commits(tmp_path, 3)
+    v = R.verify_commit_count("覆盖 5 个提交", "v1", "HEAD", cwd=str(repo))
+    assert v and v["rule"] == "C4" and "说明写 5" in v["detail"], v
+
+
+def test_c4_cli_exit1_on_mismatch(tmp_path):
+    """端到端：check --from <tag> 在数字不符时 rc=1 且打印 C4。"""
+    repo = _repo_n_commits(tmp_path, 3)
+    notes = tmp_path / "RELEASE-NOTES-v9.9.9.md"
+    notes.write_text("# X\n\n> 覆盖 9 个提交\n", encoding="utf-8")
+    p = subprocess.run([sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                                     "gk_release_notes.py"),
+                        "check", "--notes", str(notes), "--from", "v1", "--repo", str(repo)],
+                       capture_output=True, text=True, timeout=60)
+    assert p.returncode == 1, p.stdout + p.stderr
+    assert "C4" in p.stdout

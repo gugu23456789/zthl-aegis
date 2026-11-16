@@ -45,6 +45,9 @@ FORBIDDEN_TOKENS = (
     "C:/Users/",
 )
 
+# C4 数字回环：说明里唯一可机检的数量口径（「N 个提交」）
+_COMMIT_COUNT_RE = re.compile(r"(\d+)\s*个提交")
+
 # 计划 vs 已落地（C2）：同一行同时出现 ⟹ 语义混淆，必须人工改成「计划推进」或「已落地」。
 DONE_WORDS = ("已完成", "已落地", "已实现", "已上线", "已交付", "fully implemented", "shipped")
 PLAN_WORDS = ("计划", "草案", "DRAFT", "proposal", "RFC")
@@ -189,6 +192,34 @@ def check_notes(text, commits=()):
             "coverage_missing": missing}
 
 
+def verify_commit_count(text, from_ref, to_ref, cwd=ROOT):
+    """C4 数字回环校准：说明里声明的「N 个提交」必须等于 `git rev-list --count from..to`。
+
+    病象（2026-11-16 实证）：v0.10.0 说明写「171 个提交」，实际 `v0.9.9..v0.10.0` = 246。
+    C1/C2 只看措辞、C3 只看覆盖，**没有一条校验数字** ⟹ 手写口径漂移可以一路绿灯到发布。
+    本函数把这句话变成可机检：声明值 ≠ 实测值即违规（阻断）。
+
+    返回违规 dict 或 None（无声明 / git 不可用 / 数值相等）。
+    """
+    m = _COMMIT_COUNT_RE.search(text or "")
+    if not m:
+        return None
+    claimed = int(m.group(1))
+    try:
+        p = subprocess.run(["git", "-C", str(cwd), "rev-list", "--count",
+                            "%s..%s" % (from_ref, to_ref)],
+                           capture_output=True, text=True, timeout=60)
+        actual = int((p.stdout or "").strip())
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+    if claimed == actual:
+        return None
+    return {"rule": "C4",
+            "line": (text[:m.start()].count("\n") + 1),
+            "detail": "提交数声明与实际不符：说明写 %d，实测 %s..%s = %d"
+                      % (claimed, from_ref, to_ref, actual)}
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description="发布说明自动生成 + 两轮机检")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -225,6 +256,20 @@ def main(argv=None):
         text = fh.read()
     commits = collect(ns.from_ref, ns.to_ref, cwd=repo, since=ns.since) if (ns.from_ref or ns.since) else []
     rep = check_notes(text, commits)
+    # C4 数字回环：`to` 优先取与说明同名的 tag（发布口径 = tag 所指提交），
+    # 否则说明写完后主树再有提交就会把「N 个提交」算成 N+1 ⟹ 假红。
+    to_ref = ns.to_ref
+    mtag = re.search(r"RELEASE-NOTES-(v[\d.]+)\.md$", os.path.basename(ns.notes))
+    if mtag and to_ref == "HEAD":
+        if subprocess.run(["git", "-C", str(repo), "rev-parse", "--verify",
+                           "refs/tags/" + mtag.group(1)],
+                          capture_output=True).returncode == 0:
+            to_ref = mtag.group(1)
+    if ns.from_ref:
+        c4 = verify_commit_count(text, ns.from_ref, to_ref, cwd=repo)
+        if c4:
+            rep["violations"].append(c4)
+            rep["ok"] = False
     if ns.json:
         print(json.dumps(rep, ensure_ascii=False, indent=2))
     else:
