@@ -219,6 +219,47 @@ def test_doc_align_fail_level_only(monkeypatch):
     assert PF.doc_align_check()["status"] == "PASS"
 
 
+def test_doc_align_release_mode_judged_by_docs_presence(tmp_path, monkeypatch):
+    """导出树判据 = **`docs/` 是否随包**，不是有没有 `.git`。
+
+    公开工作副本是 git 仓（有 `.git`、无 `docs/`）：按 `.git` 判会退回全量模式
+    ⟹ 恒红 4 项（2026-11-16 CI 实测）。本臂锁死新判据。
+    """
+    seen = {}
+
+    class P:
+        returncode = 0
+        stdout = "doc-align: issues=0 checks=38\n"
+        stderr = ""
+
+    def _run(args, timeout=300):
+        seen["args"] = list(args)
+        return P()
+
+    (tmp_path / ".git").mkdir()
+    monkeypatch.setattr(PF, "ROOT", tmp_path)
+    monkeypatch.setattr(PF, "_run_text", _run)
+    assert PF.doc_align_check()["status"] == "PASS"
+    assert "--release" in seen["args"], "公开树（有 .git 无 docs）必须走 release 模式"
+
+    (tmp_path / "docs").mkdir()
+    PF.doc_align_check()
+    assert "--release" not in seen["args"], "私仓（docs 随包）不得降级"
+
+
+def test_ci_security_lint_dependency_missing_is_warn(monkeypatch):
+    """依赖缺失（issues 只有 error、无 workflow 键）⟹ WARN；真实违规仍 FAIL。"""
+    monkeypatch.setattr(PF, "_run_json", lambda args: {
+        "ok": False, "checks": 0,
+        "issues": [{"error": "PyYAML 不可用（CI 请 pip install pyyaml==6.0.2）"}]})
+    assert PF.ci_security_lint_check()["status"] == "WARN"
+
+    monkeypatch.setattr(PF, "_run_json", lambda args: {
+        "ok": False, "checks": 3,
+        "issues": [{"workflow": "ci.yml", "error": "缺 permissions"}]})
+    assert PF.ci_security_lint_check()["status"] == "FAIL"
+
+
 def test_release_notes_skip_without_version():
     assert PF.release_notes_check("")["status"] == "SKIP"
 

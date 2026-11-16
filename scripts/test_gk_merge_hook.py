@@ -73,6 +73,19 @@ def test_main_ref_deletion_blocked(tmp_path):
     assert rc == 1 and "主分支引用删除被拒" in err, err
 
 
+def test_shim_validates_interpreter_is_runnable():
+    """钩子 shim 必须先验证解释器**真能执行**，不能按 PATH 存在性直接采纳。
+
+    Windows 的 `python3` 常是 Microsoft Store 的 0 字节「应用执行别名」桩：旧式
+    `PY=$(command -v python3)` 会把它钉死成解释器 ⟹ 钩子执行失败 ⟹ fail-closed 拒绝
+    一切 ref 更新（2026-11-16 实测：发布桥打 tag 被拒）。
+    """
+    s = HI._shim()
+    assert "_runs()" in s and '-c "import sys"' in s, "缺可执行性探针"
+    assert 'PY=$(command -v python3 2>/dev/null)' not in s, "禁按存在性即采纳（Store 桩）"
+    assert "for _c in python3 python py" in s, "候选顺序须保留 python3 → python → py"
+
+
 def test_bootstrap_zero_old_allowed(tmp_path):
     """引导（old = ZERO：init / 首提交）⟹ 放行 —— 此时无既存主树可写。"""
     repo = _repo(tmp_path)

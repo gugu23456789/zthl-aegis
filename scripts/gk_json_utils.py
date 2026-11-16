@@ -1291,10 +1291,41 @@ def _cli_escape(argv: list) -> int:
     return 0
 
 
+def _cli_merge_warnings(argv: list) -> int:
+    """`merge-warnings`：stdin 两行 JSON（base / guard）→ 把 guard.warnings 并入 base。
+
+    2026-11-16 下沉自 `gatekeeper-cli.sh::cmd_commit` 的内联 `python3 -c` 载荷：
+    原逻辑仅「guard 有 warnings 就挂到 base 上」，判据本属 JSON 工具职责。
+    guard.warnings 为空 ⟹ 原样输出 base（不新增空键，保持与原内联一致）。
+    """
+    if argv:
+        print("usage: gk_json_utils.py merge-warnings", file=sys.stderr)
+        return 2
+    base_line = sys.stdin.readline()
+    guard_line = sys.stdin.readline()
+    try:
+        base = json.loads(base_line)
+    except ValueError:
+        print("merge-warnings: base 不是合法 JSON", file=sys.stderr)
+        return 1
+    try:
+        guard = json.loads(guard_line)
+    except ValueError:
+        guard = {}
+    warns = (guard or {}).get("warnings") or []
+    if warns:
+        base["warnings"] = warns
+    print(json.dumps(base, ensure_ascii=False))
+    return 0
+
+
 def main(argv: list) -> int:
     if not argv:
-        print("usage: gk_json_utils.py {field|test|valid|escape} ...", file=sys.stderr)
+        print("usage: gk_json_utils.py {field|test|valid|escape|merge-warnings} ...",
+              file=sys.stderr)
         return 2
+    if argv[0] == "merge-warnings":
+        return _cli_merge_warnings(argv[1:])
     if argv[0] == "field":
         return _cli_field(argv[1:])
     if argv[0] == "test":

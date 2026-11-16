@@ -105,6 +105,18 @@ def _env_candidate(v: str) -> str:
     return shutil.which(v) or ""
 
 
+def _store_stub(path: str) -> bool:
+    """Windows「应用执行别名」桩（Microsoft Store 的 `python3.exe`）：0 字节，执行必失败。
+
+    `shutil.which` 能找到它，但 `subprocess` 一跑就报错 ⟹ PATH 兜底必须跳过，
+    否则解析结果会把调用方（合并闸钩子等）钉死在一个不可执行的文件上。
+    """
+    try:
+        return os.path.getsize(path) == 0
+    except OSError:
+        return True
+
+
 def resolve() -> str:
     """验收解释器解析（**顺序契约与 `scripts/py_resolve.sh` 一致**，禁各自发明优先级）。
 
@@ -137,7 +149,7 @@ def resolve() -> str:
             return c
     for name in ("python3", "python"):
         w = shutil.which(name)
-        if w:
+        if w and not (win and _store_stub(w)):
             return w
     return DEFAULT
 

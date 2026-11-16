@@ -629,3 +629,30 @@ def test_lock_fd_cache_is_bounded(tmp_path):
         with u.state_lock(str(tmp_path / ("s%d.json" % i))):
             pass
     assert len(u._LOCK_FDS) <= u._LOCK_FD_CACHE_MAX
+
+
+# ── 2026-11-16：`merge-warnings`（`cmd_commit` 内联载荷下沉）────────────────────
+def _merge_warnings(stdin_text):
+    import subprocess
+    return subprocess.run([sys.executable, str(Path(__file__).parent / "gk_json_utils.py"),
+                           "merge-warnings"], input=stdin_text, capture_output=True,
+                          text=True, timeout=30)
+
+
+def test_merge_warnings_attaches_guard_warnings():
+    r = _merge_warnings('{"ok": true}\n{"warnings": ["w1"]}\n')
+    assert r.returncode == 0, r.stderr
+    import json
+    assert json.loads(r.stdout) == {"ok": True, "warnings": ["w1"]}
+
+
+def test_merge_warnings_keeps_base_when_guard_empty():
+    """guard 无 warnings ⟹ base 原样输出（不新增空键，与下沉前内联一致）。"""
+    r = _merge_warnings('{"ok": true}\n{"warnings": []}\n')
+    import json
+    assert json.loads(r.stdout) == {"ok": True}
+
+
+def test_merge_warnings_bad_base_exits_1():
+    r = _merge_warnings("not-json\n{}\n")
+    assert r.returncode == 1 and "base" in r.stderr

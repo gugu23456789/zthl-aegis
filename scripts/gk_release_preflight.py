@@ -325,11 +325,14 @@ def _run_text(args, timeout=300):
 def doc_align_check() -> dict:
     """`gk_doc_align.py --summary`：只把 FAIL 级（issues>0）判红；WARN 放行。
 
-    导出树（无 `.git`）追加 `--release`：导出排除面文档缺席属预期，检查器降级 SKIP；
+    导出树（无 `docs/`）追加 `--release`：导出排除面文档缺席属预期，检查器降级 SKIP；
     否则公开树预检会因 `docs/` 不在包内而恒红。
+
+    ⚠ 判据是 **`docs/` 是否随包**，不是有没有 `.git`：公开工作副本本身是 git 仓
+    （有 `.git`、无 `docs/`），按 `.git` 判会退回全量模式 ⟹ 恒红 4 项（2026-11-16 实测 CI）。
     """
     args = [str(ROOT / "scripts" / "gk_doc_align.py"), "--summary"]
-    if not (ROOT / ".git").exists():
+    if not (ROOT / "docs").is_dir():
         args.append("--release")
     try:
         p = _run_text(args, timeout=300)
@@ -364,12 +367,23 @@ def package_integrity_check() -> dict:
 
 
 def ci_security_lint_check() -> dict:
-    """CI 最小权限 / SHA pin / run 注入（release.yml verify 已跑，这里前移）。"""
+    """CI 最小权限 / SHA pin / run 注入（release.yml verify 已跑，这里前移）。
+
+    **依赖缺失 ≠ 契约违规**：`gk_ci_security_lint.py` 无 PyYAML 时返回的 issues 只有
+    `{"error": ...}`、没有 `workflow` 键（见该脚本 172 行），属环境能力不足 ⟹ 记 WARN
+    跳过；真实违规一定带 `workflow` 键，仍判 FAIL（不掩盖）。
+    """
     r = _run_json([str(ROOT / "scripts" / "gk_ci_security_lint.py"), "--json"])
     ok = bool(r.get("ok"))
+    issues = r.get("issues") or []
+    dep_only = bool(issues) and all(
+        isinstance(i, dict) and "error" in i and "workflow" not in i for i in issues)
+    if not ok and dep_only:
+        return {"id": "ci_security_lint", "status": "WARN",
+                "detail": "依赖缺失，跳过：" + json.dumps(issues, ensure_ascii=False)[:240]}
     return {"id": "ci_security_lint", "status": "PASS" if ok else "FAIL",
             "detail": ("checks=%s workflows=%s" % (r.get("checks"), len(r.get("workflows") or [])))
-                      if ok else json.dumps(r.get("issues") or r, ensure_ascii=False)[:300]}
+                      if ok else json.dumps(issues or r, ensure_ascii=False)[:300]}
 
 
 def _prev_tag(version: str = "") -> str:

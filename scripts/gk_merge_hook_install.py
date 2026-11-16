@@ -56,14 +56,21 @@ def _shim() -> str:
         "# 判据实现 = 同目录 %s（安装时从 skills 拷贝）；解释器单源 = ACCEPT_PY → gk_accept_py.py → python3。\n"
         "H=$(CDPATH= cd -- \"$(dirname -- \"$0\")\" && pwd)\n"
         "REPO=$(git rev-parse --show-toplevel 2>/dev/null)\n"
+        # 可用性判据 = **真能执行**（`import sys`），不是「PATH 上找得到」。Windows 上
+        # `python3` 常是 Microsoft Store 的「应用执行别名」桩（0 字节，执行必失败）：
+        # `command -v` 命中它 ⟹ 旧式按存在性选解释器会把钩子钉死在桩上，钩子 fail-closed
+        # 退出非 0，git 随即拒绝**一切** ref 更新（2026-11-16 实测：发布桥打 tag 被拒）。
         "PY=\"\"\n"
-        "if [ -n \"$REPO\" ] && [ -f \"$REPO/scripts/gk_accept_py.py\" ]; then\n"
-        "  PY=$(python3 \"$REPO/scripts/gk_accept_py.py\" 2>/dev/null)\n"
-        "fi\n"
-        "[ -n \"$PY\" ] || PY=$(command -v python3 2>/dev/null)\n"
-        # Windows Git-Bash 常只有 `python`/`py`（无 python3）⟹ 逐个回退，仍 fail-closed
-        "[ -n \"$PY\" ] || PY=$(command -v python 2>/dev/null)\n"
-        "[ -n \"$PY\" ] || PY=$(command -v py 2>/dev/null)\n"
+        "_runs() { [ -n \"$1\" ] && \"$1\" -c \"import sys\" >/dev/null 2>&1; }\n"
+        "for _c in python3 python py; do\n"
+        "  _w=$(command -v \"$_c\" 2>/dev/null) || continue\n"
+        "  _runs \"$_w\" || continue\n"
+        "  if [ -n \"$REPO\" ] && [ -f \"$REPO/scripts/gk_accept_py.py\" ]; then\n"
+        "    _r=$(\"$_w\" \"$REPO/scripts/gk_accept_py.py\" 2>/dev/null)\n"
+        "    if _runs \"$_r\"; then PY=\"$_r\"; break; fi\n"
+        "  fi\n"
+        "  PY=\"$_w\"; break\n"
+        "done\n"
         "[ -n \"$PY\" ] || { echo 'BLOCK[merge-hook]: 无可用 python（fail-closed）' >&2; exit 1; }\n"
         "exec \"$PY\" \"$H/%s\" \"$@\"\n" % (_MARK, _MOD)
     )

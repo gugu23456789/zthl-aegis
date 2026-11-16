@@ -8170,7 +8170,7 @@ cmd_push() {
   # ─── Phase -1: auth-main → 临时授权直接推送 main (非必要不得使用) ───
   if [ "$action" = "auth-main" ]; then
     local auth_file="${STATE_FILE%/*}/.push-main-auth.json"
-    local expires; expires=$(date -d '+10 minutes' +%s 2>/dev/null || python3 -c "import time;print(int(time.time())+600)" 2>/dev/null)
+    local expires; expires=$(date -d '+10 minutes' +%s 2>/dev/null || echo $(( $(date +%s) + 600 )))
     echo "{\"expires\":$expires,\"reason\":\"manual_override\",\"created\":\"$(date -Iseconds 2>/dev/null)\"}" > "$auth_file"
     echo "{\"ok\":true,\"phase\":\"auth-main\",\"expires_at\":$expires,\"ttl_minutes\":10,\"warning\":\"Direct push to main authorized for 10 minutes. Use only when PR workflow is unavailable.\"}"
     return 0
@@ -8270,7 +8270,7 @@ ENDJSON
   if [ "$branch" = "main" ] || [ "$branch" = "master" ]; then
     local auth_file="${STATE_FILE%/*}/.push-main-auth.json" auth_valid=false
     if [ -f "$auth_file" ]; then
-      local now; now=$(date +%s 2>/dev/null || python3 -c "import time;print(int(time.time()))" 2>/dev/null || echo "0")
+      local now; now=$(date +%s 2>/dev/null || echo "0")
       local expires; expires=$(python3 "$SKILL_DIR/scripts/gk_json_utils.py" field expires --file "$auth_file" --default 0 2>/dev/null || echo "0")
       [ "$now" -lt "$expires" ] && auth_valid=true
     fi
@@ -9086,15 +9086,9 @@ cmd_commit() {
   local _base_json
   _base_json="{\"ok\":true,\"commit\":\"$sha\",\"verified\":$_vn,\"message\":$(echo "$out" | python3 "$SKILL_DIR/scripts/gk_json_utils.py" escape --strip 2>/dev/null || echo '\"\"')}"
   if [ -n "$_cg_json" ]; then
-    _base_json=$(printf '%s\n%s\n' "$_base_json" "$_cg_json" | python3 -c '
-import json, sys
-base = json.loads(sys.stdin.readline())
-guard = json.loads(sys.stdin.readline())
-w = guard.get("warnings") or []
-if w:
-    base["warnings"] = w
-print(json.dumps(base, ensure_ascii=False))
-' 2>/dev/null || printf '%s' "$_base_json")
+    _base_json=$(printf '%s\n%s\n' "$_base_json" "$_cg_json" \
+      | python3 "$SKILL_DIR/scripts/gk_json_utils.py" merge-warnings 2>/dev/null \
+      || printf '%s' "$_base_json")
   fi
   echo "$_base_json"
   return 0

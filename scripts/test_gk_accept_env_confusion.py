@@ -81,6 +81,25 @@ def test_relative_pin_is_ignored(sandbox, monkeypatch):
     assert got != decoy and "evil" not in got
 
 
+def test_windows_store_alias_stub_skipped(sandbox, monkeypatch):
+    """Windows 的 `python3` 常是 0 字节「应用执行别名」桩（Microsoft Store）。
+
+    `shutil.which` 找得到、执行必失败 ⟹ PATH 兜底必须跳过它，否则解析结果会把
+    调用方（合并闸钩子等）钉死在一个不可执行的文件上（2026-11-16 实测：打 tag 被拒）。
+    """
+    stub = sandbox / "stub" / "python3.exe"
+    stub.parent.mkdir(parents=True)
+    stub.write_text("", encoding="utf-8")                     # 0 字节 = Store 桩
+    real = sandbox / "real" / "python.exe"
+    real.parent.mkdir(parents=True)
+    real.write_text("MZ-fake-binary", encoding="utf-8")       # 非空 = 真解释器
+    monkeypatch.setattr(A, "_plat_of_this_process", lambda: "win")
+    monkeypatch.setattr(A.shutil, "which",
+                        lambda n: str(stub) if n == "python3"
+                        else (str(real) if n == "python" else ""))
+    assert A.resolve() == str(real)
+
+
 def test_malformed_pin_lines_are_ignored(sandbox, monkeypatch):
     repo_py = _exe(sandbox / "repo" / ".venv-x" / "Scripts" / "python.exe")
     (sandbox / "pin.local").write_text(
