@@ -270,7 +270,7 @@ def test_run_all_warn_does_not_fail(monkeypatch):
              "doc_align_check", "list_registry_check", "package_integrity_check",
              "ci_security_lint_check", "release_assets", "workflow_paths", "repo_index_check",
              "vendor_artifact", "release_notes_check", "bench_baseline_check",
-             "bench_regression")
+             "bench_regression", "mechanism_docs_check")
     for n in names:
         monkeypatch.setattr(PF, n, lambda *a, **k: {"id": "x", "status": "PASS"})
     monkeypatch.setattr(PF, "ci_security_lint_check", lambda: {"id": "ci", "status": "WARN"})

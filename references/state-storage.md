@@ -1,5 +1,8 @@
 # State 存储与回收（ZTHL Aegis）
 
+> **机制正本**：工作目录池、租约、归属与路由回落见 [`worktree-pool.md`](worktree-pool.md)；
+> 本文只讲状态文件的落点、容量与回收存储。
+
 <!-- DOC-META
 title: State 存储与回收（ZTHL Aegis）
 type: reference

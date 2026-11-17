@@ -9,7 +9,7 @@ Citation discipline:
 - Historical line numbers are not kept in the public tree.
 
 <!-- GK-REFS:START（由 scripts/gk_docgen_facts.py 生成，勿手改） -->
-> 公开面共 **25** 份文档（本索引自动生成；出包范围 = `oss-export-whitelist.json`）。
+> 公开面共 **29** 份文档（本索引自动生成；出包范围 = `oss-export-whitelist.json`）。
 
 ### 1. Architecture and routing
 
@@ -20,20 +20,24 @@ Citation discipline:
 | [meta-routing-protocol.md](meta-routing-protocol.md) | META 路由协议 — 工作发现 + 仓库路由 + 阶段推进 |
 | [state-storage.md](state-storage.md) | State 存储与回收（ZTHL Aegis） |
 | [superagent-comparison.md](superagent-comparison.md) | 与 DeepSeek Harness Super-agent 的架构对照（2026-11-05 重写） |
+| [worktree-pool.md](worktree-pool.md) | 工作目录池与路由（Worktree Pool & Routing）—— 机制正本 |
 
 ### 2. Execution and CLI
 
 | Document | Purpose |
 |:--|:--|
+| [audit-lifecycle.md](audit-lifecycle.md) | 审计生命周期（Audit Lifecycle）—— 机制正本 |
 | [cli-protocol.md](cli-protocol.md) | CLI Protocol — Gatekeeper Command Reference & PRM Monitor |
 | [convergence-evaluator.md](convergence-evaluator.md) | 收敛评估器（Convergence Evaluator）—— 机制正本 |
 | [plan-writing-safety-net.md](plan-writing-safety-net.md) | 计划写入安全网（Plan-Writing Safety Net，简称 **PW-SN**） |
+| [release-pipeline.md](release-pipeline.md) | 发布管线（Release Pipeline）—— 机制正本 |
 | [stages.md](stages.md) | Stage Guide (0–5) |
 
 ### 3. Safety and security
 
 | Document | Purpose |
 |:--|:--|
+| [merge-gate.md](merge-gate.md) | 合并前置闸（Merge Gate）—— 机制正本 |
 | [plugin-loading-test-framework.md](plugin-loading-test-framework.md) | 插件加载安全网协议 + 插件导入测试安全网框架 |
 | [security-incident-response.md](security-incident-response.md) | 密钥泄露应急处置流程（BP.08.05 对照） |
 | [xspi-defense.md](xspi-defense.md) | XSPI 污染攻防机制正本（跨站/间接提示注入） |

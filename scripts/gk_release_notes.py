@@ -10,12 +10,16 @@
    · 触碰文件**全部**落在 `docs/`（计划/评审/备份面）的 commit ⟹ 归入「计划与内部文档」
      段落，并在标题标注「未随公开包发布」——**不**混进「变更」。
    · 触碰文件含 `docs/plans/` 的 commit ⟹ 在条目后缀 `[计划]`（提醒：计划 ≠ 已实施）。
+   · **三节自动填充**（2026-11-16 owner 裁定）：性能红利（基线口径 + 本版是否动机制脚本）、
+     架构进化（机制登记表命中 + 新增文档/脚本面）、安全哲学（登记表不变式 + 代码锚点逐条验证）。
 2. `check --notes <file>`：两道机检（第一轮）——
    · **C1 发布面**：公开包里不可出现的内部 token（论文仓路径、本机绝对路径、真实邮箱/用户名）。
    · **C2 计划误写**：`已完成|已落地|已实现|已上线` 与 `计划|草案|DRAFT` 同行 ⟹ 违规
      （防止把未实施计划写成已交付）。
    · **C3 覆盖度**：`<from>..<to>` 内触碰**公开面**文件的 commit，其主题词须在 notes 中出现
      至少一次（防整批漏报）。缺失 ⟹ 列出，供人工补写（不自动编造）。
+   · **C4 数字回环**：声明的「N 个提交」必须等于 `上一版..本版` 实际数（仅私仓）。
+   · **C5 安全锚点**：说明里的安全主张必须能在活代码里找到锚点（锚点失效即拦）。
 3. 第二轮（润色/事实）不可机检：脚本只出 `--advice` 检查清单（句式、时态、夸大词）。
 
 用法
@@ -107,8 +111,180 @@ def collect(from_ref: str, to_ref: str = "HEAD", cwd=None, since: str = ""):
     return out
 
 
-def generate(commits, version="", title_suffix=""):
-    """从 commit 列表产出 Markdown 草稿（确定性：按类型分组 + 原顺序）。"""
+# ── 自动填充三节（owner 2026-11-16）：性能红利 / 架构进化 / 安全哲学 ──────────────
+# 纪律：三节只写**能从仓内文件复算**的事实；读不到就明说「不给数字」，禁编造。
+_MECH_REG = os.path.join("references", "mechanism-registry.json")
+_BENCH = os.path.join("references", "bench-baseline.json")
+
+
+def _load_json(repo, rel):
+    try:
+        with open(os.path.join(repo, rel), encoding="utf-8") as fh:
+            return json.load(fh)
+    except (OSError, ValueError):
+        return {}
+
+
+def _changed(commits, prefix=""):
+    out = set()
+    for c in commits:
+        for f in c.get("files") or []:
+            if f.startswith(prefix):
+                out.add(f)
+    return out
+
+
+def _perf_modules(repo):
+    """性能面模块集（单源 = `gk_bench_compare._MECH_MODULES`；不可用时退到机制入口）。
+
+    必须校验模块**来自本仓**：测试/同进程里已缓存另一份 `gk_bench_compare` 时，
+    直接 `import` 会拿到外来单源 ⟹ 口径串仓（本臂 2026-11-17 实测踩中）。
+    """
+    try:
+        import importlib
+        sys.path.insert(0, os.path.join(repo, "scripts"))
+        bc = importlib.import_module("gk_bench_compare")
+        if not os.path.abspath(bc.__file__).startswith(os.path.abspath(repo) + os.sep):
+            raise ImportError("foreign gk_bench_compare")
+        return set(bc._MECH_MODULES)
+    except Exception:  # noqa: BLE001 — 导出树/夹具无该模块 ⟹ 退到登记表入口
+        reg = _load_json(repo, _MECH_REG)
+        return {str(e) for m in reg.get("mechanisms") or []
+                for e in (m.get("entrypoints") or [])}
+
+
+def section_perf(commits, repo=ROOT):
+    """性能红利：基线口径 + 本版是否动过**性能面机制模块**。没有改动就不吹「提升」。"""
+    b = _load_json(repo, _BENCH)
+    out = ["## 性能红利（自动生成）", ""]
+    if not b:
+        out += ["> 未读到 `references/bench-baseline.json` ⟹ 本节不给数字（须先采基线）。", ""]
+        return out
+    scen = {k: len((((b.get("benchmarks") or {}).get(k) or {}).get("scenarios") or []))
+            for k in ("state", "gate", "satellite")}
+    head = str(b.get("git_head") or "—")[:8]
+    out += ["| 项 | 值 | 来源（可复算） |", "|:--|:--|:--|",
+            "| 基线提交 | `%s` | `bench-baseline.json:git_head` |" % head,
+            "| 场景数 | state %d / gate %d / satellite %d | 同上 `benchmarks.*.scenarios` |"
+            % (scen["state"], scen["gate"], scen["satellite"]),
+            "| 过期阈值 | %s（提交） | 同上 `stale_after_commits` |"
+            % b.get("stale_after_commits", "—")]
+    mods = _perf_modules(repo)
+    hits = sorted(_changed(commits) & mods)
+    out.append("")
+    if not hits:
+        out += ["本版未触碰**性能面机制模块**（`scripts/gk_json_utils.py` / `gk_state.py` / "
+                "`gk_satellite.py` / `gk_state_patch.py` / `gk_state_wal.py` / "
+                "`gk_write_claims.py` / `gatekeeper-cli.sh`）⟹ 性能红利 = **无变化**"
+                "（既无提升也无退化）；基线可沿用，发布门只查「未退化」。", ""]
+    else:
+        out += ["本版触碰 **%d** 个性能面机制模块 ⟹ 发布前须按 "
+                "`scripts/gk_bench_{state,gate,satellite}.py --full` 重采基线，"
+                "并确认差异属有意变更而非退化。" % len(hits), ""]
+        out += ["- `%s`" % f for f in hits]
+        out.append("")
+    return out
+
+
+def _git_added_files(repo, from_ref, prefixes=("references/", "scripts/")):
+    """`from_ref..HEAD` 新增文件（无 git / 无区间 ⟹ 空；不猜）。"""
+    if not from_ref:
+        return []
+    try:
+        p = subprocess.run(["git", "-C", str(repo), "diff", "--name-only",
+                            "--diff-filter=A", "%s..HEAD" % from_ref, "--", *prefixes],
+                           capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.SubprocessError):
+        return []
+    return [x.strip() for x in (p.stdout or "").splitlines() if x.strip()] if p.returncode == 0 else []
+
+
+def section_arch(commits, repo=ROOT, from_ref=""):
+    """架构进化：哪些机制被触碰（登记表口径）+ 新增的文档与脚本面。"""
+    reg = _load_json(repo, _MECH_REG)
+    changed = _changed(commits)
+    out = ["## 架构进化（自动生成）", ""]
+    mechs = reg.get("mechanisms") or []
+    if not mechs:
+        out += ["> 未读到机制登记表 ⟹ 本节只列文件面，不给机制结论。", ""]
+    hits = []
+    for m in mechs:
+        eps = [str(x) for x in (m.get("entrypoints") or [])]
+        touched = [f for f in eps if f in changed]
+        if touched:
+            hits.append((str(m.get("id")), str(m.get("doc")), touched))
+    if mechs and not hits:
+        out += ["登记机制的入口脚本**均未改动**（%d 个机制）⟹ 本版无机制面演进。" % len(mechs), ""]
+    elif hits:
+        out += ["| 机制 | 正本文档 | 触碰入口 |", "|:--|:--|:--|"]
+        out += ["| `%s` | `%s` | %s |" % (i, d, " · ".join("`%s`" % os.path.basename(x) for x in t))
+                for i, d, t in hits]
+        out.append("")
+    added = _git_added_files(repo, from_ref)
+    docs = [f for f in added if f.startswith("references/")]
+    codes = [f for f in added if f.startswith("scripts/") and not os.path.basename(f).startswith("test_")]
+    if docs or codes:
+        out += ["新增面（`%s..HEAD`：`references/` %d 份、`scripts/` %d 个）："
+                % (from_ref, len(docs), len(codes)), ""]
+        out += ["- `%s`" % f for f in (docs + codes)[:16]]
+        out.append("")
+    return out
+
+
+def _anchor_ok(repo, rel, symbol):
+    try:
+        with open(os.path.join(repo, rel), encoding="utf-8", errors="replace") as fh:
+            return bool(symbol) and symbol in fh.read()
+    except OSError:
+        return False
+
+
+def section_security(repo=ROOT):
+    """安全哲学：登记表里的不变式 + 逐条验证代码锚点（锚点失效必须显式暴露）。"""
+    reg = _load_json(repo, _MECH_REG)
+    invs = reg.get("security_invariants") or []
+    out = ["## 安全哲学（自动生成）", ""]
+    if not invs:
+        out += ["> 未登记安全不变式 ⟹ 本节无内容（须在 `%s` 补 `security_invariants`）。"
+                % _MECH_REG.replace(os.sep, "/"), ""]
+        return out
+    out += ["| 不变式 | 主张 | 代码锚点（逐条验证） |", "|:--|:--|:--|"]
+    for it in invs:
+        proof = it.get("proof") or {}
+        rel, sym = str(proof.get("file") or ""), str(proof.get("symbol") or "")
+        ok = _anchor_ok(repo, rel, sym)
+        out.append("| `%s` | %s | %s `%s` |"
+                   % (it.get("id"), it.get("claim"),
+                      ("✅" if ok else "❌ 锚点缺失"), rel))
+    out.append("")
+    return out
+
+
+def check_invariant_anchors(text, repo=ROOT):
+    """C5：说明里出现某条安全主张时，它的代码锚点必须仍然存在（防「口号化」）。"""
+    reg = _load_json(repo, _MECH_REG)
+    bad = []
+    for it in reg.get("security_invariants") or []:
+        claim = str(it.get("claim") or "")
+        if not claim or claim not in text:
+            continue
+        proof = it.get("proof") or {}
+        if not _anchor_ok(repo, str(proof.get("file") or ""), str(proof.get("symbol") or "")):
+            bad.append({"rule": "C5",
+                        "line": text[:text.index(claim)].count("\n") + 1,
+                        "detail": "安全主张缺代码锚点（%s: %s）：%s"
+                                  % (proof.get("file"), proof.get("symbol"), claim[:40])})
+    return bad
+
+
+def generate(commits, version="", title_suffix="", repo="", from_ref="",
+             sections=True):
+    """从 commit 列表产出 Markdown 草稿（确定性：按类型分组 + 原顺序）。
+
+    `sections=True` 时另出三节**自动填充**内容（owner 2026-11-16 裁定）：
+    性能红利（取基线口径）/ 架构进化（取机制登记表 + 新增文件面）/ 安全哲学
+    （取登记表的不变式，并逐个验证代码锚点）。
+    """
     lines = []
     if version:
         lines.append("# ZTHL Aegis %s — 发布说明%s" % (version, title_suffix))
@@ -116,6 +292,11 @@ def generate(commits, version="", title_suffix=""):
         lines.append("> 本文件由 `scripts/gk_release_notes.py generate` 从 git 历史生成；"
                      "两轮检测见 `check`。生成后仍须人工润色与事实核对。")
         lines.append("")
+    if sections:
+        repo = repo or ROOT
+        lines += section_perf(commits, repo)
+        lines += section_arch(commits, repo, from_ref)
+        lines += section_security(repo)
     groups = {k: [] for k, _ in TYPE_ORDER}
     groups["other"] = []
     internal = []
@@ -231,6 +412,8 @@ def main(argv=None):
     g.add_argument("--version", default="")
     g.add_argument("--out", default="-", help="输出文件（缺省 stdout）")
     g.add_argument("--repo", default="")
+    g.add_argument("--no-sections", action="store_true",
+                   help="不自动填充 性能红利/架构进化/安全哲学 三节")
 
     c = sub.add_parser("check", help="第一轮机检")
     c.add_argument("--notes", required=True)
@@ -244,7 +427,8 @@ def main(argv=None):
     repo = ns.repo or ROOT
     if ns.cmd == "generate":
         commits = collect(ns.from_ref, ns.to_ref, cwd=repo, since=ns.since)
-        text = generate(commits, version=ns.version)
+        text = generate(commits, version=ns.version, repo=repo,
+                        from_ref=ns.from_ref, sections=not ns.no_sections)
         if ns.out == "-":
             sys.stdout.write(text)
         else:
@@ -273,6 +457,10 @@ def main(argv=None):
         if c4:
             rep["violations"].append(c4)
             rep["ok"] = False
+    # C5（2026-11-16）：安全哲学一节的主张必须有**活代码锚点**；锚点随代码改动失效即拦。
+    for v in check_invariant_anchors(text, repo):
+        rep["violations"].append(v)
+        rep["ok"] = False
     if ns.json:
         print(json.dumps(rep, ensure_ascii=False, indent=2))
     else:

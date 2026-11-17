@@ -1,0 +1,124 @@
+{
+  "schema": "gk-mechanism-registry/1",
+  "what": "机制 → 正本文档 → 入口脚本 → 校验面 的单一事实源。消费方：scripts/gk_mechanism_docs.py（生成/闸）、gk_release_notes.py（架构进化与安全哲学两节的取数面）、gk_release_preflight.py 第 16 项 mechanism_docs。",
+  "discipline": "新增机制 = 新增正本 + 在本文登记；正本里的事实块由脚本生成，禁手改。豁免必须写 reason；无 reason 的豁免本身判红。",
+  "coverage": {
+    "glob": "scripts/gk_*.py",
+    "waivers": [
+      {
+        "pattern": "scripts/gk_mechanism_docs.py",
+        "reason": "本闸自身（文档生成器）：它校验别的机制有没有正本，自己不是运行期机制，无对外机制面可写"
+      }
+    ]
+  },
+  "mechanisms": [
+    {
+      "id": "merge-gate",
+      "title": "合并前置闸",
+      "doc": "references/merge-gate.md",
+      "entrypoints": [
+        "scripts/gk_merge_cli.py",
+        "scripts/gk_merge_guard.py",
+        "scripts/gk_merge_hook.py",
+        "scripts/gk_merge_hook_install.py"
+      ],
+      "cli": ["merge", "premerge", "merge-hook"],
+      "tests": [
+        "scripts/test_gk_merge_cli.py",
+        "scripts/test_gk_merge_guard.py",
+        "scripts/test_gk_merge_hook.py",
+        "scripts/test_gk_merge_cleanup_remote.py"
+      ]
+    },
+    {
+      "id": "worktree-pool",
+      "title": "工作目录池与路由",
+      "doc": "references/worktree-pool.md",
+      "entrypoints": [
+        "scripts/gk_worktree_pool.py",
+        "scripts/gk_worktree_owner.py",
+        "scripts/gk_route_center.py",
+        "scripts/gk_apply_worktree_cli.py"
+      ],
+      "cli": ["apply-worktree", "route-check"],
+      "tests": [
+        "scripts/test_gk_worktree_pool.py",
+        "scripts/test_gk_worktree_owner.py",
+        "scripts/test_gk_apply_worktree_cli.py",
+        "scripts/test_gk_worktree_route_visibility.py"
+      ]
+    },
+    {
+      "id": "audit-lifecycle",
+      "title": "审计生命周期",
+      "doc": "references/audit-lifecycle.md",
+      "entrypoints": [
+        "scripts/gk_audit_lifecycle.py",
+        "scripts/gk_audit_state.py",
+        "scripts/gk_node_guard.py"
+      ],
+      "cli": ["audit", "node-guard"],
+      "tests": [
+        "scripts/test_gk_audit_lifecycle.py",
+        "scripts/test_gk_audit_state.py",
+        "scripts/test_gk_audit_lifecycle_wiring.py"
+      ]
+    },
+    {
+      "id": "release-pipeline",
+      "title": "发布管线",
+      "doc": "references/release-pipeline.md",
+      "entrypoints": [
+        "scripts/gk_release_preflight.py",
+        "scripts/gk_public_bridge.py",
+        "scripts/gk_release_notes.py",
+        "scripts/gk_repo_index.py",
+        "scripts/gk_list_registry.py"
+      ],
+      "cli": [],
+      "tests": [
+        "scripts/test_gk_release_preflight.py",
+        "scripts/test_gk_public_bridge.py",
+        "scripts/test_gk_release_notes.py",
+        "scripts/test_pack_release.py"
+      ]
+    }
+  ],
+  "security_invariants": [
+    {
+      "id": "single-entry",
+      "claim": "主干的任何前进都必须经过唯一合并入口，git 侧由 reference-transaction 钩子复判",
+      "proof": {"file": "scripts/gk_merge_hook.py", "symbol": "reference-transaction"}
+    },
+    {
+      "id": "ticket-ttl",
+      "claim": "通行票据一次性、带签名、900 秒过期，绑定目标引用与旧值",
+      "proof": {"file": "scripts/gk_merge_hook.py", "symbol": "TICKET_TTL"}
+    },
+    {
+      "id": "protected-region",
+      "claim": "门禁自身的受保护区不允许被任何合并削弱，缩水即拒绝",
+      "proof": {"file": "scripts/gk_merge_guard.py", "symbol": "PROTECTED_REGION_SHRINK"}
+    },
+    {
+      "id": "export-allowlist",
+      "claim": "导出白名单制：默认全拒、显式放行，每条排除与豁免都必须写理由",
+      "proof": {"file": "references/oss-export-whitelist.json", "symbol": "白名单制"}
+    },
+    {
+      "id": "no-force-push",
+      "claim": "发布桥没有 force push 路径，远端必须在允许清单内",
+      "proof": {"file": "scripts/gk_public_bridge.py", "symbol": "永不 force"}
+    },
+    {
+      "id": "warn-not-red",
+      "claim": "预检只在 FAIL 时判红；WARN 表示环境能力不足或已确认可接受",
+      "proof": {"file": "scripts/gk_release_preflight.py", "symbol": "\"PASS\", \"SKIP\", \"WARN\""}
+    },
+    {
+      "id": "c4-private-only",
+      "claim": "提交数回环只在私仓生效，公开镜像的单提交历史不参与计数",
+      "proof": {"file": "scripts/gk_release_notes.py", "symbol": "os.path.isdir(os.path.join(repo, \"docs\"))"}
+    }
+  ]
+}

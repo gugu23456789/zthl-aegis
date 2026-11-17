@@ -3,7 +3,7 @@
 > 生成器：`scripts/gk_repo_index.py --write`；漂移由 `gk_release_preflight.py` 的 `repo_index` 项守。
 > 用途：**移动端**（GitHub App 没有 “Go to file”）与抓取工具一次拿到全量路径；点路径直达文件。
 
-**共 960 个文件。**
+**共 968 个文件。**
 
 ## 索引生成物
 
@@ -43,6 +43,7 @@
 ## RELEASE-NOTES/
 
 - [RELEASE-NOTES/RELEASE-NOTES-v0.10.0.md](RELEASE-NOTES/RELEASE-NOTES-v0.10.0.md) — ZTHL Aegis v0.10.0 — 发布说明
+- [RELEASE-NOTES/RELEASE-NOTES-v0.11.1.md](RELEASE-NOTES/RELEASE-NOTES-v0.11.1.md) — ZTHL Aegis v0.11.1 — 发布说明
 - [RELEASE-NOTES/RELEASE-NOTES-v0.9.4.1.md](RELEASE-NOTES/RELEASE-NOTES-v0.9.4.1.md) — ZTHL Aegis v0.9.4.1 — 发布说明
 - [RELEASE-NOTES/RELEASE-NOTES-v0.9.4.2.md](RELEASE-NOTES/RELEASE-NOTES-v0.9.4.2.md) — ZTHL Aegis v0.9.4.2 — 发布说明
 - [RELEASE-NOTES/RELEASE-NOTES-v0.9.4.3.md](RELEASE-NOTES/RELEASE-NOTES-v0.9.4.3.md) — ZTHL Aegis v0.9.4.3 — 发布说明
@@ -157,6 +158,7 @@
 - [references/agent-families/XENV-FORM.json](references/agent-families/XENV-FORM.json) — JSON 数据
 - [references/architecture-overview.md](references/architecture-overview.md) — 架构自述：数据流 / 门禁分层 / 真实形态
 - [references/archive.json](references/archive.json) — JSON 数据
+- [references/audit-lifecycle.md](references/audit-lifecycle.md) — 审计生命周期（Audit Lifecycle）—— 机制正本
 - [references/bench-baseline.json](references/bench-baseline.json) — JSON 数据
 - [references/ci-checklist.json](references/ci-checklist.json) — JSON 数据
 - [references/ci-external-paths.json](references/ci-external-paths.json) — JSON 数据
@@ -171,6 +173,8 @@
 - [references/extension-registry.md](references/extension-registry.md) — Extension Registry — 扩展注册表
 - [references/governance-contract.json](references/governance-contract.json) — JSON 数据
 - [references/list-registry.json](references/list-registry.json) — JSON 数据
+- [references/mechanism-registry.json](references/mechanism-registry.json) — JSON 数据
+- [references/merge-gate.md](references/merge-gate.md) — 合并前置闸（Merge Gate）—— 机制正本
 - [references/meta-routing-protocol.md](references/meta-routing-protocol.md) — META 路由协议 — 工作发现 + 仓库路由 + 阶段推进
 - [references/moa-kappa-ledger.json](references/moa-kappa-ledger.json) — JSON 数据
 - [references/oss-export-whitelist.json](references/oss-export-whitelist.json) — JSON 数据
@@ -184,6 +188,7 @@
 - [references/red-intel-sources.json](references/red-intel-sources.json) — JSON 数据
 - [references/red-scope.example.json](references/red-scope.example.json) — JSON 数据
 - [references/red-vectors.json](references/red-vectors.json) — JSON 数据
+- [references/release-pipeline.md](references/release-pipeline.md) — 发布管线（Release Pipeline）—— 机制正本
 - [references/repo-index-annotations.json](references/repo-index-annotations.json) — JSON 数据
 - [references/research-408.md](references/research-408.md) — Research 408 — 计算机 408 四轴优化分析
 - [references/resident-features.json](references/resident-features.json) — JSON 数据
@@ -198,6 +203,7 @@
 - [references/violation-charter.md](references/violation-charter.md) — 违约定义与处置条例（v1，2026-11-11 定稿）
 - [references/wasm-checklist.json](references/wasm-checklist.json) — JSON 数据
 - [references/wasm-engineering-template.md](references/wasm-engineering-template.md) — WASM 工程标准模板（通用）
+- [references/worktree-pool.md](references/worktree-pool.md) — 工作目录池与路由（Worktree Pool & Routing）—— 机制正本
 - [references/xspi-defense.md](references/xspi-defense.md) — XSPI 污染攻防机制正本（跨站/间接提示注入）
 
 ## schema/
@@ -374,6 +380,7 @@
 - [scripts/gk_main_repo.py](scripts/gk_main_repo.py) — Python 模块
 - [scripts/gk_main_repo.sh](scripts/gk_main_repo.sh) — Shell 脚本
 - [scripts/gk_mcp_loader.py](scripts/gk_mcp_loader.py) — MCP 加载安全网（声明 / 接线 / 决策 + 跨 SDK 版本）
+- [scripts/gk_mechanism_docs.py](scripts/gk_mechanism_docs.py) — Python 模块
 - [scripts/gk_mediation.py](scripts/gk_mediation.py) — Python 模块
 - [scripts/gk_merge_cli.py](scripts/gk_merge_cli.py) — Python 模块
 - [scripts/gk_merge_guard.py](scripts/gk_merge_guard.py) — Python 模块
@@ -736,6 +743,7 @@
 - [scripts/test_gk_machine_check.py](scripts/test_gk_machine_check.py) — Python 模块
 - [scripts/test_gk_main_repo.py](scripts/test_gk_main_repo.py) — Python 模块
 - [scripts/test_gk_mcp_loader.py](scripts/test_gk_mcp_loader.py) — test_gk_mcp_loader.py — MCP 加载安全网（声明 / 接线 / 决策 / SDK 版本适配）。
+- [scripts/test_gk_mechanism_docs.py](scripts/test_gk_mechanism_docs.py) — test_gk_mechanism_docs.py — 机制正本闸的红先臂（2026-11-16）。
 - [scripts/test_gk_mediation.py](scripts/test_gk_mediation.py) — test_gk_mediation.py — P2-Mediation #4 上下文构造测试（2026-08-26 批次 2 剩余）。
 - [scripts/test_gk_merge_cleanup_remote.py](scripts/test_gk_merge_cleanup_remote.py) — `gk_merge_cli.py --cleanup-source-remote`：合并前置闸的**对偶闸**（方案 A，2026-11-14）。
 - [scripts/test_gk_merge_cli.py](scripts/test_gk_merge_cli.py) — R0.24 唯一合并入口（gk_merge_cli）：闸①→merge→闸②→提交/回滚 闭环（2026-11-13）。

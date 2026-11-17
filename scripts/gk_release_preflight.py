@@ -8,7 +8,7 @@ v0.9.6.8–v0.9.6.10 连续三版在 `pack` 步 argparse 退出 2（workflow 传
 `pack_release.py` 不认），且 publish 步要求的 `dist/PROVENANCE.json` 从未产出。
 本脚本把这些契约在**打包前**变成可执行判据（fail-loud），而不是等 CI 红。
 
-十五项检查（全部确定性、零网络）
+十六项检查（全部确定性、零网络）
 ================================
 1. `pack_contract`   workflow 中 `pack_release.py` 用到的 flag ⊆ 脚本 parser 支持的 flag；
 2. `pack_fixture`    用最小夹具真跑一次 `pack(... --source-*)`，断言 zip / manifest /
@@ -29,6 +29,8 @@ v0.9.6.8–v0.9.6.10 连续三版在 `pack` 步 argparse 退出 2（workflow 传
 14. `bench_baseline`  基线不得过期（`stale_after_commits`）且必须含 `amp_per_state` 口径；
 15. `bench_regression` 发布前性能门：state / gate / satellite 三套 quick 与基线比对，
                      **仅真回归判红**；口径不匹配 / 机制变化只提示。`GK_PREFLIGHT_BENCH=0` 可跳过。
+16. `mechanism_docs`  机制正本闸（2026-11-16）：登记机制的 GK-MECH 事实块必须与活代码一致；
+                     `上一版..HEAD` 新增的机制脚本必须登记（或带 reason 豁免）。
 
 用法：`python scripts/gk_release_preflight.py [--json] [--version vX.Y.Z]`；
 退出码 0 = 全绿，1 = 有失败。
@@ -560,6 +562,26 @@ def bench_regression() -> dict:
             "detail": base + (("；" + "；".join(notes)) if notes else "")}
 
 
+def mechanism_docs_check(version: str = "") -> dict:
+    """机制正本闸（2026-11-16）：登记机制的 GK-MECH 块必须与活代码一致；新增机制脚本必须登记。
+
+    覆盖度区间取**上一版 tag..HEAD**，且只在私仓生效（判据 = `docs/` 是否随包）——
+    公开镜像是单提交快照，`prev..HEAD` 会把整棵树都当新增 ⟹ 恒红（与 C4 同源教训）。
+    """
+    args = [str(ROOT / "scripts" / "gk_mechanism_docs.py"), "--check", "--json"]
+    prev = _prev_tag(version)
+    if prev and (ROOT / "docs").is_dir():
+        args += ["--from", prev]
+    r = _run_json(args)
+    ok = bool(r.get("ok"))
+    if ok:
+        return {"id": "mechanism_docs", "status": "PASS",
+                "detail": "机制 %d 个；%s" % (len(r.get("checks") or []),
+                                             ("覆盖区间 %s..HEAD" % prev) if prev else "未给区间")}
+    return {"id": "mechanism_docs", "status": "FAIL",
+            "detail": "；".join(r.get("issues") or ["check 失败"])[:300]}
+
+
 def run_all(version: str = "") -> dict:
     try:
         wf = WORKFLOW.read_text(encoding="utf-8")
@@ -571,7 +593,7 @@ def run_all(version: str = "") -> dict:
               package_integrity_check(), ci_security_lint_check(),
               release_assets(wf), workflow_paths(), repo_index_check(),
               vendor_artifact(), release_notes_check(version),
-              bench_baseline_check(), bench_regression()]
+              bench_baseline_check(), bench_regression(), mechanism_docs_check(version)]
     # 2026-11-08：允许 SKIP（性能门在导出树/显式关闭时跳过）。FAIL 仍判红（fail-closed 不变）。
     # 2026-11-16：WARN 也放行 —— WARN 的语义就是「已确认可接受/环境能力不足」，若判红
     #   则依赖缺失（如 CI 无 PyYAML）会让整条预检恒红，WARN 与 PASS 的区分失去意义。

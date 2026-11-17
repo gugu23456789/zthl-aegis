@@ -9,6 +9,7 @@
   C. C2：「已完成/已落地」与「计划/草案」同行 ⟹ 违规（计划 ≠ 已实施）。
   D. C3：覆盖缺口只作提示（不阻断），且真跑 git 端到端可用。
 """
+import json
 import os
 import subprocess
 import sys
@@ -153,3 +154,90 @@ def test_c4_skipped_in_export_tree(tmp_path):
                        capture_output=True, text=True, timeout=60)
     assert p.returncode == 0, p.stdout + p.stderr
     assert "C4" not in p.stdout
+
+
+# ── 2026-11-16：三节自动填充（性能红利 / 架构进化 / 安全哲学）+ C5 锚点 ──────────
+def _fixture_repo(tmp_path, invariants=None, entrypoint="scripts/gk_demo.py"):
+    """登记表 + 基线 + 一个入口脚本（锚点符号写在脚本里）。"""
+    repo = tmp_path
+    (repo / "references").mkdir(exist_ok=True)
+    (repo / "scripts").mkdir(exist_ok=True)
+    (repo / "scripts" / "gk_demo.py").write_text("ANCHOR = 1\n", encoding="utf-8")
+    (repo / "references" / "bench-baseline.json").write_text(json.dumps({
+        "git_head": "deadbeefcafe", "stale_after_commits": 150,
+        "benchmarks": {"state": {"scenarios": [{"scenario": "s"}]},
+                       "gate": {"scenarios": [{"scenario": "g"}]},
+                       "satellite": {"scenarios": []}}}), encoding="utf-8")
+    (repo / "references" / "mechanism-registry.json").write_text(json.dumps({
+        "schema": "gk-mechanism-registry/1",
+        "mechanisms": [{"id": "demo", "title": "演示", "doc": "references/demo.md",
+                        "entrypoints": [entrypoint], "cli": [], "tests": []}],
+        "security_invariants": invariants if invariants is not None else [{
+            "id": "single-entry", "claim": "锚点必须在活代码里",
+            "proof": {"file": "scripts/gk_demo.py", "symbol": "ANCHOR"}}],
+    }, ensure_ascii=False), encoding="utf-8")
+    return repo
+
+
+def _doc_commit(files):
+    return _commit("eeee5555", "docs(ref): 正本补写", files)
+
+
+def test_perf_section_says_no_change_when_perf_modules_untouched(tmp_path):
+    repo = _fixture_repo(tmp_path)
+    out = "\n".join(R.section_perf([_doc_commit(["references/demo.md"])], str(repo)))
+    assert "无变化" in out and "性能面机制模块" in out, out
+    assert "deadbeef" in out, out
+
+
+def test_perf_section_ignores_non_perf_scripts(tmp_path):
+    """文档工具脚本（非性能面）改动不得触发「重采基线」——口径单源 = bench 机制模块表。"""
+    repo = _fixture_repo(tmp_path)
+    (repo / "scripts" / "gk_demo_other.py").write_text("X = 1\n", encoding="utf-8")
+    out = "\n".join(R.section_perf([_doc_commit(["scripts/gk_demo_other.py"])], str(repo)))
+    assert "无变化" in out and "重采基线" not in out, out
+
+
+def test_perf_section_demands_rebaseline_when_scripts_touched(tmp_path):
+    repo = _fixture_repo(tmp_path)
+    out = "\n".join(R.section_perf([_doc_commit(["scripts/gk_demo.py"])], str(repo)))
+    assert "重采基线" in out and "`scripts/gk_demo.py`" in out, out
+
+
+def test_perf_section_refuses_numbers_without_baseline(tmp_path):
+    repo = _fixture_repo(tmp_path)
+    (repo / "references" / "bench-baseline.json").unlink()
+    out = "\n".join(R.section_perf([], str(repo)))
+    assert "不给数字" in out, out
+
+
+def test_arch_section_names_touched_mechanism(tmp_path):
+    repo = _fixture_repo(tmp_path)
+    out = "\n".join(R.section_arch([_doc_commit(["scripts/gk_demo.py"])], str(repo)))
+    assert "`demo`" in out and "references/demo.md" in out, out
+
+
+def test_arch_section_says_no_mechanism_change(tmp_path):
+    repo = _fixture_repo(tmp_path)
+    out = "\n".join(R.section_arch([_doc_commit(["references/demo.md"])], str(repo)))
+    assert "无机制面演进" in out, out
+
+
+def test_security_section_marks_missing_anchor_and_c5_blocks(tmp_path):
+    repo = _fixture_repo(tmp_path)
+    (repo / "scripts" / "gk_demo.py").write_text("OTHER = 2\n", encoding="utf-8")
+    out = "\n".join(R.section_security(str(repo)))
+    assert "锚点缺失" in out, out
+    bad = R.check_invariant_anchors(out, str(repo))
+    assert bad and bad[0]["rule"] == "C5", bad
+    # 修复锚点后 C5 放行
+    (repo / "scripts" / "gk_demo.py").write_text("ANCHOR = 1\n", encoding="utf-8")
+    assert R.check_invariant_anchors(out, str(repo)) == []
+
+
+def test_c5_real_registry_anchors_all_valid():
+    """仓内登记表的不变式锚点必须真实存在（否则本版说明无法自动填充）。"""
+    sd = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    text = "\n".join(R.section_security(sd))
+    assert "锚点缺失" not in text, text
+    assert R.check_invariant_anchors(text, sd) == []

@@ -21,7 +21,7 @@ updated: 2026-11-02
 | CLI 命令数 | 52 | `^_CMD_REG[` 计数 |
 | 红队站点 | 16 | `gk_chain.py` 的 `Step("RED-*")` |
 | 自检检查函数 | 39 | `gk_self_check.py` 的 `def check_*` |
-| references 公开 md | 25 | `git ls-files references/*.md`（顶层，扣除导出排除面） |
+| references 公开 md | 29 | `git ls-files references/*.md`（顶层，扣除导出排除面） |
 | 子代理角色 | 9 | `subagent_runner.ROLE_TOOLS` |
 | hook R0 门禁 | Gate R0.1–R0.25（25 个） | `pre_tool_hook.py` 的 `Gate R0.N` |
 | 红队向量 | 188 | `references/red-vectors.json` |
@@ -62,6 +62,7 @@ spz-gatekeeper-r-sequence/
 │   ├── cli-protocol.md
 │   ├── stages.md
 │   ├── state-storage.md
+│   ├── worktree-pool.md              # 工作目录池 / 租约 / 归属 / 路由回落（机制正本）
 │   ├── meta-routing-protocol.md
 │   ├── plan-writing-safety-net.md
 │   ├── comment-template.md
@@ -77,6 +78,7 @@ spz-gatekeeper-r-sequence/
 │   ├── stage-2-ci.md
 │   ├── stage-3-review.md
 │   ├── stage-4-merge.md
+│   ├── merge-gate.md                 # 合并前置闸：票据 / 受保护区 / 闸①闸②（机制正本）
 │   ├── stage-5-retire.md
 │   ├── stage-5b-retrospective.md
 │   ├── stage-6-r6-flow.md
@@ -95,6 +97,7 @@ spz-gatekeeper-r-sequence/
 │   ├── standard-maintenance-module.md
 │   ├── wasm-engineering-template.md
 │   ├── ci-pipeline-template.md
+│   ├── release-pipeline.md           # 发布管线：预检 16 项 / 单向桥 / C1-C5（机制正本）
 │   ├── comment-template.md
 │   ├── game-path-audit.md            # 私仓留存（不导出）
 │   ├── trae-cross-user-leakage-report.md
@@ -104,6 +107,7 @@ spz-gatekeeper-r-sequence/
 │   ├── flywheel-implementation-plan.md
 │   ├── superagent-comparison.md
 │   ├── credit-economy.md
+│   ├── audit-lifecycle.md            # 审计启停 / 租约 / tick / 证据签发判据（机制正本）
 │   ├── oss-hooks.md
 │   ├── oss-moa-phase-provenance.md
 │   ├── research-408.md
